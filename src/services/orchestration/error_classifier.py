@@ -76,6 +76,7 @@ class ErrorClassifier:
         "content_policy_violation",  # 内容违规
         "invalid_api_key",  # 无效的 API Key（不同于认证失败）
         "context_length_exceeded",  # 上下文长度超限
+        "content_length_limit",  # 请求内容长度超限 (Claude API)
         "max_tokens",  # token 数超限
         "invalid_prompt",  # 无效的提示词
         "content too long",  # 内容过长

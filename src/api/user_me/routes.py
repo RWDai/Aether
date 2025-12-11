@@ -672,7 +672,7 @@ class GetActiveRequestsAdapter(AuthenticatedApiAdapter):
             if not id_list:
                 return {"requests": []}
 
-        requests = UsageService.get_active_requests(db=db, ids=id_list, user_id=user.id)
+        requests = UsageService.get_active_requests_status(db=db, ids=id_list, user_id=user.id)
         return {"requests": requests}
 
 

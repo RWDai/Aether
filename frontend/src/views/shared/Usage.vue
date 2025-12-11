@@ -171,7 +171,14 @@ const filteredRecords = computed(() => {
       } else if (filterStatus.value === 'completed') {
         records = records.filter(record => record.status === 'completed')
       } else if (filterStatus.value === 'failed') {
-        records = records.filter(record => record.status === 'failed')
+        // 失败请求需要同时考虑新旧两种判断方式：
+        // 1. 新方式：status = "failed"
+        // 2. 旧方式：status_code >= 400 或 error_message 不为空
+        records = records.filter(record =>
+          record.status === 'failed' ||
+          (record.status_code && record.status_code >= 400) ||
+          record.error_message
+        )
       }
     }
 

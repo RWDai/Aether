@@ -530,9 +530,18 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
                 query = query.filter(
                     (Usage.status_code >= 400) | (Usage.error_message.isnot(None))
                 )
-            elif self.status in ("pending", "streaming", "completed", "failed"):
+            elif self.status in ("pending", "streaming", "completed"):
                 # 新的状态筛选：直接按 status 字段过滤
                 query = query.filter(Usage.status == self.status)
+            elif self.status == "failed":
+                # 失败请求需要同时考虑新旧两种判断方式：
+                # 1. 新方式：status = "failed"
+                # 2. 旧方式：status_code >= 400 或 error_message 不为空
+                query = query.filter(
+                    (Usage.status == "failed") |
+                    (Usage.status_code >= 400) |
+                    (Usage.error_message.isnot(None))
+                )
             elif self.status == "active":
                 # 活跃请求：pending 或 streaming 状态
                 query = query.filter(Usage.status.in_(["pending", "streaming"]))

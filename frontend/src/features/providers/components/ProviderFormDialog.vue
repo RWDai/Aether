@@ -209,8 +209,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
-  'provider-created': []
-  'provider-updated': []
+  'providerCreated': []
+  'providerUpdated': []
 }>()
 
 const { success, error: showError } = useToast()
@@ -319,12 +319,12 @@ const handleSubmit = async () => {
       // 更新提供商
       await updateProvider(props.provider.id, payload)
       success('提供商更新成功')
-      emit('provider-updated')
+      emit('providerUpdated')
     } else {
       // 创建提供商
       await createProvider(payload)
       success('提供商已创建，请继续添加端点和密钥，或在优先级管理中调整顺序', '创建成功')
-      emit('provider-created')
+      emit('providerCreated')
     }
 
     emit('update:modelValue', false)

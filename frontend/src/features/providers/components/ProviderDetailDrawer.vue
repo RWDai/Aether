@@ -68,7 +68,7 @@
                     variant="ghost"
                     size="icon"
                     :title="provider.is_active ? '点击停用' : '点击启用'"
-                    @click="$emit('toggle-status', provider)"
+                    @click="$emit('toggleStatus', provider)"
                   >
                     <Power class="w-4 h-4" />
                   </Button>
@@ -699,7 +699,7 @@ const props = defineProps<Props>()
 const emit = defineEmits<{
   (e: 'update:open', value: boolean): void
   (e: 'edit', provider: any): void
-  (e: 'toggle-status', provider: any): void
+  (e: 'toggleStatus', provider: any): void
   (e: 'refresh'): void
 }>()
 
@@ -1107,9 +1107,6 @@ async function handleDrop(event: DragEvent, targetKey: EndpointAPIKey, endpoint:
     return
   }
 
-  const draggedKey = keys[draggedIndex]
-  const draggedKeyOriginalPriority = draggedKey.internal_priority ?? draggedIndex
-
   // 记录原始优先级分组（排除被拖动的密钥）
   // key: 原始优先级值, value: 密钥ID数组
   const originalGroups = new Map<number, string[]>()
@@ -1251,7 +1248,7 @@ async function copyToClipboard(text: string) {
   try {
     await navigator.clipboard.writeText(text)
     showSuccess('已复制到剪贴板')
-  } catch (err) {
+  } catch {
     showError('复制失败', '错误')
   }
 }
@@ -1287,7 +1284,7 @@ async function loadEndpoints() {
         try {
           const keys = await getEndpointKeys(endpoint.id)
           return { ...endpoint, keys }
-        } catch (err) {
+        } catch {
           // 如果获取密钥失败，返回空数组
           return { ...endpoint, keys: [] }
         }

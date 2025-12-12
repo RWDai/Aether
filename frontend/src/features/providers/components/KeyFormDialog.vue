@@ -248,15 +248,13 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { Dialog } from '@/components/ui'
-import Button from '@/components/ui/button.vue'
-import Input from '@/components/ui/input.vue'
-import Label from '@/components/ui/label.vue'
+import { Dialog, Button, Input, Label } from '@/components/ui'
 import { Key, SquarePen } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
 import { useFormDialog } from '@/composables/useFormDialog'
 import { parseApiError } from '@/utils/errorParser'
 import { parseNumberInput } from '@/utils/form'
+import { log } from '@/utils/logger'
 import {
   addEndpointKey,
   updateEndpointKey,
@@ -316,7 +314,7 @@ async function loadCapabilities() {
   try {
     availableCapabilities.value = await getAllCapabilities()
   } catch (err) {
-    console.error('Failed to load capabilities:', err)
+    log.error('Failed to load capabilities:', err)
   }
 }
 

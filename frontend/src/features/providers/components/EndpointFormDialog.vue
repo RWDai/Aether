@@ -155,19 +155,22 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { Dialog } from '@/components/ui'
-import Button from '@/components/ui/button.vue'
-import Input from '@/components/ui/input.vue'
-import Label from '@/components/ui/label.vue'
-import Select from '@/components/ui/select.vue'
-import SelectTrigger from '@/components/ui/select-trigger.vue'
-import SelectValue from '@/components/ui/select-value.vue'
-import SelectContent from '@/components/ui/select-content.vue'
-import SelectItem from '@/components/ui/select-item.vue'
+import {
+  Dialog,
+  Button,
+  Input,
+  Label,
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from '@/components/ui'
 import { Link, SquarePen } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
 import { useFormDialog } from '@/composables/useFormDialog'
 import { parseNumberInput } from '@/utils/form'
+import { log } from '@/utils/logger'
 import {
   createEndpoint,
   updateEndpoint,
@@ -184,8 +187,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
-  'endpoint-created': []
-  'endpoint-updated': []
+  'endpointCreated': []
+  'endpointUpdated': []
 }>()
 
 const { success, error: showError } = useToast()
@@ -216,7 +219,7 @@ const loadApiFormats = async () => {
     const response = await adminApi.getApiFormats()
     apiFormats.value = response.formats
   } catch (error) {
-    console.error('加载API格式失败:', error)
+    log.error('加载API格式失败:', error)
     if (!isEditMode.value) {
       showError('加载API格式失败', '错误')
     }
@@ -298,7 +301,7 @@ const handleSubmit = async () => {
       })
 
       success('端点已更新', '保存成功')
-      emit('endpoint-updated')
+      emit('endpointUpdated')
     } else if (props.provider) {
       // 创建端点
       await createEndpoint(props.provider.id, {
@@ -314,7 +317,7 @@ const handleSubmit = async () => {
       })
 
       success('端点创建成功', '成功')
-      emit('endpoint-created')
+      emit('endpointCreated')
       resetForm()
     }
 

@@ -492,6 +492,7 @@ import SelectItem from '@/components/ui/select-item.vue'
 import { AlertDialog } from '@/components/common'
 import { Bell, AlertCircle, AlertTriangle, Info, Pin, Wrench, Loader2, Plus, SquarePen, Trash2 } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
+import { log } from '@/utils/logger'
 import { marked } from 'marked'
 import { sanitizeMarkdown } from '@/utils/sanitize'
 
@@ -544,22 +545,10 @@ async function loadAnnouncements(page = 1) {
     total.value = response.total
     unreadCount.value = response.unread_count || 0
   } catch (error) {
-    console.error('加载公告失败:', error)
+    log.error('加载公告失败:', error)
     showError('加载公告失败')
   } finally {
     loading.value = false
-  }
-}
-
-async function markAsRead(announcement: Announcement) {
-  try {
-    await announcementApi.markAsRead(announcement.id)
-    announcement.is_read = true
-    unreadCount.value = Math.max(0, unreadCount.value - 1)
-    success('已标记为已读')
-  } catch (error) {
-    console.error('标记失败:', error)
-    showError('标记失败')
   }
 }
 
@@ -571,7 +560,7 @@ async function viewAnnouncementDetail(announcement: Announcement) {
       announcement.is_read = true
       unreadCount.value = Math.max(0, unreadCount.value - 1)
     } catch (error) {
-      console.error('标记已读失败:', error)
+      log.error('标记已读失败:', error)
     }
   }
 
@@ -614,7 +603,7 @@ async function toggleAnnouncementPin(announcement: Announcement, newStatus: bool
     announcement.is_pinned = newStatus
     success(newStatus ? '已置顶' : '已取消置顶')
   } catch (error) {
-    console.error('更新置顶状态失败:', error)
+    log.error('更新置顶状态失败:', error)
     showError('更新置顶状态失败')
   }
 }
@@ -627,7 +616,7 @@ async function toggleAnnouncementActive(announcement: Announcement, newStatus: b
     announcement.is_active = newStatus
     success(newStatus ? '已启用' : '已禁用')
   } catch (error) {
-    console.error('更新启用状态失败:', error)
+    log.error('更新启用状态失败:', error)
     showError('更新启用状态失败')
   }
 }
@@ -652,7 +641,7 @@ async function saveAnnouncement() {
     dialogOpen.value = false
     loadAnnouncements(currentPage.value)
   } catch (error) {
-    console.error('保存失败:', error)
+    log.error('保存失败:', error)
     showError('保存失败')
   } finally {
     saving.value = false
@@ -674,7 +663,7 @@ async function deleteAnnouncement() {
     deleteDialogOpen.value = false
     loadAnnouncements(currentPage.value)
   } catch (error) {
-    console.error('删除失败:', error)
+    log.error('删除失败:', error)
     showError('删除失败')
   } finally {
     deleting.value = false
@@ -707,19 +696,6 @@ function getIconColor(type: string) {
   }
 }
 
-function getIconBgClass(type: string) {
-  switch (type) {
-    case 'important':
-      return 'bg-red-50 dark:bg-red-900/20'
-    case 'warning':
-      return 'bg-yellow-50 dark:bg-yellow-900/20'
-    case 'maintenance':
-      return 'bg-orange-50 dark:bg-orange-900/20'
-    default:
-      return 'bg-primary/10'
-  }
-}
-
 function getTypeTextColor(type: string): string {
   switch (type) {
     case 'important':
@@ -730,19 +706,6 @@ function getTypeTextColor(type: string): string {
       return 'text-orange-600 dark:text-orange-400'
     default:
       return 'text-primary'
-  }
-}
-
-function getTypeBadgeVariant(type: string): 'default' | 'success' | 'destructive' | 'warning' | 'secondary' {
-  switch (type) {
-    case 'important':
-      return 'destructive'
-    case 'warning':
-      return 'warning'
-    case 'maintenance':
-      return 'secondary'
-    default:
-      return 'default'
   }
 }
 
@@ -791,7 +754,7 @@ function renderMarkdown(content: string): string {
 function getPlainText(content: string): string {
   // 简单地移除 Markdown 标记，用于预览
   return content
-    .replace(/[#*_`~\[\]()]/g, '')
+    .replace(/[#*_`~[\]()]/g, '')
     .replace(/\n+/g, ' ')
     .trim()
     .substring(0, 200)

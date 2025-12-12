@@ -282,6 +282,7 @@ import {
 } from '@/api/endpoints'
 import UserModelDetailDrawer from './components/UserModelDetailDrawer.vue'
 import { useRowClick } from '@/composables/useRowClick'
+import { log } from '@/utils/logger'
 
 const { success, error: showError } = useToast()
 
@@ -377,7 +378,7 @@ async function toggleCapability(modelName: string, capName: string) {
     // 更新本地状态
     modelCapabilitySettings.value = newSettings
   } catch (err) {
-    console.error('保存能力配置失败:', err)
+    log.error('保存能力配置失败:', err)
     showError('保存失败，请重试')
   } finally {
     savingCapability.value = null
@@ -429,7 +430,7 @@ async function loadModels() {
     const response = await getPublicGlobalModels({ limit: 1000 })
     models.value = response.models || []
   } catch (err: any) {
-    console.error('加载模型失败:', err)
+    log.error('加载模型失败:', err)
     showError(err.response?.data?.detail || err.message, '加载模型失败')
   } finally {
     loading.value = false
@@ -445,7 +446,7 @@ async function loadCapabilities() {
     availableCapabilities.value = userCaps
     allCapabilities.value = allCaps
   } catch (err) {
-    console.error('Failed to load capabilities:', err)
+    log.error('Failed to load capabilities:', err)
   }
 }
 
@@ -454,7 +455,7 @@ async function loadModelCapabilitySettings() {
     const response = await meApi.getModelCapabilitySettings()
     modelCapabilitySettings.value = response.model_capability_settings || {}
   } catch (err) {
-    console.error('Failed to load model capability settings:', err)
+    log.error('Failed to load model capability settings:', err)
   }
 }
 
@@ -484,7 +485,7 @@ async function copyToClipboard(text: string) {
     await navigator.clipboard.writeText(text)
     success('已复制')
   } catch (err) {
-    console.error('复制失败:', err)
+    log.error('复制失败:', err)
     showError('复制失败')
   }
 }

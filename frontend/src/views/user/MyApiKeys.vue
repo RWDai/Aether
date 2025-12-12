@@ -474,6 +474,7 @@ import {
 import RefreshButton from '@/components/ui/refresh-button.vue'
 import { Plus, Key, Copy, Trash2, Loader2, Activity, CheckCircle, Power, Check } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
+import { log } from '@/utils/logger'
 import { computed } from 'vue'
 
 const { success, error: showError } = useToast()
@@ -516,7 +517,7 @@ async function loadCapabilities() {
   try {
     availableCapabilities.value = await getAllCapabilities()
   } catch (error) {
-    console.error('Failed to load capabilities:', error)
+    log.error('Failed to load capabilities:', error)
   }
 }
 
@@ -525,7 +526,7 @@ async function loadApiKeys() {
   try {
     apiKeys.value = await meApi.getApiKeys()
   } catch (error: any) {
-    console.error('加载 API 密钥失败:', error)
+    log.error('加载 API 密钥失败:', error)
     if (!error.response) {
       showError('无法连接到服务器，请检查后端服务是否运行')
     } else if (error.response.status === 401) {
@@ -554,7 +555,7 @@ async function createApiKey() {
     await loadApiKeys()
     success('API 密钥创建成功')
   } catch (error) {
-    console.error('创建 API 密钥失败:', error)
+    log.error('创建 API 密钥失败:', error)
     showError('创建 API 密钥失败')
   } finally {
     creating.value = false
@@ -576,7 +577,7 @@ async function deleteApiKey() {
     showDeleteDialog.value = false
     success('API 密钥已删除')
   } catch (error) {
-    console.error('删除 API 密钥失败:', error)
+    log.error('删除 API 密钥失败:', error)
     showError('删除 API 密钥失败')
   } finally {
     deleting.value = false
@@ -593,7 +594,7 @@ async function toggleApiKey(apiKey: ApiKey) {
     }
     success(updated.is_active ? '密钥已启用' : '密钥已禁用')
   } catch (error) {
-    console.error('切换密钥状态失败:', error)
+    log.error('切换密钥状态失败:', error)
     showError('操作失败')
   }
 }
@@ -635,7 +636,7 @@ async function toggleCapability(apiKey: ApiKey, capName: string) {
       apiKeys.value[index].force_capabilities = capabilitiesData
     }
   } catch (err) {
-    console.error('保存能力配置失败:', err)
+    log.error('保存能力配置失败:', err)
     showError('保存失败，请重试')
   } finally {
     savingCapability.value = null
@@ -649,7 +650,7 @@ async function copyApiKey(apiKey: ApiKey) {
     await copyTextToClipboard(response.key, false) // 不显示内部提示
     success('完整密钥已复制到剪贴板')
   } catch (error) {
-    console.error('复制密钥失败:', error)
+    log.error('复制密钥失败:', error)
     showError('复制失败，请重试')
   }
 }
@@ -681,7 +682,7 @@ async function copyTextToClipboard(text: string, showToast: boolean = true) {
       }
     }
   } catch (error) {
-    console.error('复制失败:', error)
+    log.error('复制失败:', error)
     showError('复制失败，请手动选择文本进行复制')
   }
 }

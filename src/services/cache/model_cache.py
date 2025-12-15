@@ -6,6 +6,7 @@ import json
 import time
 from typing import Optional
 
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session
 
 from src.config.constants import CacheTTL
@@ -170,7 +171,11 @@ class ModelCacheService:
 
     @staticmethod
     async def invalidate_model_cache(
-        model_id: str, provider_id: Optional[str] = None, global_model_id: Optional[str] = None
+        model_id: str,
+        provider_id: Optional[str] = None,
+        global_model_id: Optional[str] = None,
+        provider_model_name: Optional[str] = None,
+        provider_model_aliases: Optional[list] = None,
     ) -> None:
         """清除 Model 缓存
 
@@ -178,6 +183,8 @@ class ModelCacheService:
             model_id: Model ID
             provider_id: Provider ID（用于清除 provider_global 缓存）
             global_model_id: GlobalModel ID（用于清除 provider_global 缓存）
+            provider_model_name: provider_model_name（用于清除 resolve 缓存）
+            provider_model_aliases: 别名列表（用于清除 resolve 缓存）
         """
         # 清除 model:id 缓存
         await CacheService.delete(f"model:id:{model_id}")
@@ -191,12 +198,31 @@ class ModelCacheService:
         else:
             logger.debug(f"Model 缓存已清除: {model_id}")
 
+        # 清除 resolve 缓存（provider_model_name 和 aliases 可能都被用作解析 key）
+        resolve_keys_to_clear = []
+        if provider_model_name:
+            resolve_keys_to_clear.append(provider_model_name)
+        if provider_model_aliases:
+            for alias_entry in provider_model_aliases:
+                if isinstance(alias_entry, dict):
+                    alias_name = alias_entry.get("name", "").strip()
+                    if alias_name:
+                        resolve_keys_to_clear.append(alias_name)
+
+        for key in resolve_keys_to_clear:
+            await CacheService.delete(f"global_model:resolve:{key}")
+
+        if resolve_keys_to_clear:
+            logger.debug(f"Model resolve 缓存已清除: {resolve_keys_to_clear}")
+
     @staticmethod
     async def invalidate_global_model_cache(global_model_id: str, name: Optional[str] = None) -> None:
         """清除 GlobalModel 缓存"""
         await CacheService.delete(f"global_model:id:{global_model_id}")
         if name:
             await CacheService.delete(f"global_model:name:{name}")
+            # 同时清除 resolve 缓存，因为 GlobalModel.name 也是一个 resolve key
+            await CacheService.delete(f"global_model:resolve:{name}")
         logger.debug(f"GlobalModel 缓存已清除: {global_model_id}")
 
     @staticmethod
@@ -292,11 +318,13 @@ class ModelCacheService:
                     )
                     .all()
                 )
-            except Exception as e:
-                # 如果 JSONB 查询失败（如使用 SQLite），回退到加载所有活跃 Model 并在 Python 层过滤
+            except (OperationalError, ProgrammingError) as e:
+                # JSONB 操作符不支持（如 SQLite），回退到加载匹配 provider_model_name 的 Model
+                # 并在 Python 层过滤 aliases
                 logger.debug(
                     f"JSONB 查询失败，回退到 Python 过滤: {e}",
                 )
+                # 优化：先用 provider_model_name 缩小范围，再加载其他可能匹配的记录
                 models_with_global = (
                     db.query(Model, GlobalModel)
                     .join(Provider, Model.provider_id == Provider.id)

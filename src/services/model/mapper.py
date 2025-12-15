@@ -84,11 +84,11 @@ class ModelMapperMiddleware:
         获取模型映射
 
         简化后的逻辑:
-        1. 通过 GlobalModel.name 直接查找
+        1. 通过 GlobalModel.name 或别名解析 GlobalModel
         2. 找到 GlobalModel 后，查找该 Provider 的 Model 实现
 
         Args:
-            source_model: 用户请求的模型名（必须是 GlobalModel.name）
+            source_model: 用户请求的模型名（可以是 GlobalModel.name 或别名）
             provider_id: 提供商ID (UUID)
 
         Returns:
@@ -101,11 +101,9 @@ class ModelMapperMiddleware:
 
         mapping = None
 
-        # 步骤 1: 直接通过名称查找 GlobalModel
-        global_model = (
-            self.db.query(GlobalModel)
-            .filter(GlobalModel.name == source_model, GlobalModel.is_active == True)
-            .first()
+        # 步骤 1: 解析 GlobalModel（支持别名）
+        global_model = await ModelCacheService.resolve_global_model_by_name_or_alias(
+            self.db, source_model
         )
 
         if not global_model:

@@ -8,6 +8,7 @@ Claude Chat Handler - 基于通用 Chat Handler 基类的简化实现
 from typing import Any, Dict, Optional
 
 from src.api.handlers.base.chat_handler_base import ChatHandlerBase
+from src.api.handlers.base.utils import extract_cache_creation_tokens
 
 
 class ClaudeChatHandler(ChatHandlerBase):
@@ -63,7 +64,7 @@ class ClaudeChatHandler(ChatHandlerBase):
         result["model"] = mapped_model
         return result
 
-    async def _convert_request(self, request):
+    async def _convert_request(self, request: Any) -> Any:
         """
         将请求转换为 Claude 格式
 
@@ -109,30 +110,18 @@ class ClaudeChatHandler(ChatHandlerBase):
         Claude 格式使用：
         - input_tokens / output_tokens
         - cache_creation_input_tokens / cache_read_input_tokens
+        - 新格式：claude_cache_creation_5_m_tokens / claude_cache_creation_1_h_tokens
         """
         usage = response.get("usage", {})
 
-        input_tokens = usage.get("input_tokens", 0)
-        output_tokens = usage.get("output_tokens", 0)
-        cache_creation_input_tokens = usage.get("cache_creation_input_tokens", 0)
-        cache_read_input_tokens = usage.get("cache_read_input_tokens", 0)
-
-        # 处理新的 cache_creation 格式
-        if "cache_creation" in usage:
-            cache_creation_data = usage.get("cache_creation", {})
-            if not cache_creation_input_tokens:
-                cache_creation_input_tokens = cache_creation_data.get(
-                    "ephemeral_5m_input_tokens", 0
-                ) + cache_creation_data.get("ephemeral_1h_input_tokens", 0)
-
         return {
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "cache_creation_input_tokens": cache_creation_input_tokens,
-            "cache_read_input_tokens": cache_read_input_tokens,
+            "input_tokens": usage.get("input_tokens", 0),
+            "output_tokens": usage.get("output_tokens", 0),
+            "cache_creation_input_tokens": extract_cache_creation_tokens(usage),
+            "cache_read_input_tokens": usage.get("cache_read_input_tokens", 0),
         }
 
-    def _normalize_response(self, response: Dict) -> Dict:
+    def _normalize_response(self, response: Dict[str, Any]) -> Dict[str, Any]:
         """
         规范化 Claude 响应
 
@@ -143,8 +132,9 @@ class ClaudeChatHandler(ChatHandlerBase):
             规范化后的响应
         """
         if self.response_normalizer and self.response_normalizer.should_normalize(response):
-            return self.response_normalizer.normalize_claude_response(
+            result: Dict[str, Any] = self.response_normalizer.normalize_claude_response(
                 response_data=response,
                 request_id=self.request_id,
             )
+            return result
         return response

@@ -13,6 +13,7 @@ from src.api.handlers.base.response_parser import (
     ResponseParser,
     StreamStats,
 )
+from src.api.handlers.base.utils import extract_cache_creation_tokens
 
 
 def _check_nested_error(response: Dict[str, Any]) -> Tuple[bool, Optional[Dict[str, Any]]]:
@@ -252,7 +253,7 @@ class ClaudeResponseParser(ResponseParser):
         usage = response.get("usage", {})
         result.input_tokens = usage.get("input_tokens", 0)
         result.output_tokens = usage.get("output_tokens", 0)
-        result.cache_creation_tokens = usage.get("cache_creation_input_tokens", 0)
+        result.cache_creation_tokens = extract_cache_creation_tokens(usage)
         result.cache_read_tokens = usage.get("cache_read_input_tokens", 0)
 
         # 检查错误（支持嵌套错误格式）
@@ -265,11 +266,16 @@ class ClaudeResponseParser(ResponseParser):
         return result
 
     def extract_usage_from_response(self, response: Dict[str, Any]) -> Dict[str, int]:
+        # 对于 message_start 事件，usage 在 message.usage 路径下
+        # 对于其他响应，usage 在顶层
         usage = response.get("usage", {})
+        if not usage and "message" in response:
+            usage = response.get("message", {}).get("usage", {})
+
         return {
             "input_tokens": usage.get("input_tokens", 0),
             "output_tokens": usage.get("output_tokens", 0),
-            "cache_creation_tokens": usage.get("cache_creation_input_tokens", 0),
+            "cache_creation_tokens": extract_cache_creation_tokens(usage),
             "cache_read_tokens": usage.get("cache_read_input_tokens", 0),
         }
 

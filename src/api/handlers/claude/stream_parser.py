@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
+from src.api.handlers.base.utils import extract_cache_creation_tokens
+
 
 class ClaudeStreamParser:
     """
@@ -193,7 +195,7 @@ class ClaudeStreamParser:
                 return {
                     "input_tokens": usage.get("input_tokens", 0),
                     "output_tokens": usage.get("output_tokens", 0),
-                    "cache_creation_tokens": usage.get("cache_creation_input_tokens", 0),
+                    "cache_creation_tokens": extract_cache_creation_tokens(usage),
                     "cache_read_tokens": usage.get("cache_read_input_tokens", 0),
                 }
 
@@ -204,7 +206,7 @@ class ClaudeStreamParser:
                 return {
                     "input_tokens": usage.get("input_tokens", 0),
                     "output_tokens": usage.get("output_tokens", 0),
-                    "cache_creation_tokens": usage.get("cache_creation_input_tokens", 0),
+                    "cache_creation_tokens": extract_cache_creation_tokens(usage),
                     "cache_read_tokens": usage.get("cache_read_input_tokens", 0),
                 }
 

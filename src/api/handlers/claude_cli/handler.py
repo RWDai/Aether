@@ -11,6 +11,7 @@ from src.api.handlers.base.cli_handler_base import (
     CliMessageHandlerBase,
     StreamContext,
 )
+from src.api.handlers.base.utils import extract_cache_creation_tokens
 
 
 class ClaudeCliMessageHandler(CliMessageHandlerBase):
@@ -95,11 +96,12 @@ class ClaudeCliMessageHandler(CliMessageHandlerBase):
             usage = message.get("usage", {})
             if usage:
                 ctx.input_tokens = usage.get("input_tokens", 0)
-                # Claude 的缓存 tokens 使用不同的字段名
+
                 cache_read = usage.get("cache_read_input_tokens", 0)
                 if cache_read:
                     ctx.cached_tokens = cache_read
-                cache_creation = usage.get("cache_creation_input_tokens", 0)
+
+                cache_creation = extract_cache_creation_tokens(usage)
                 if cache_creation:
                     ctx.cache_creation_tokens = cache_creation
 
@@ -119,11 +121,15 @@ class ClaudeCliMessageHandler(CliMessageHandlerBase):
                     ctx.input_tokens = usage["input_tokens"]
                 if "output_tokens" in usage:
                     ctx.output_tokens = usage["output_tokens"]
-                # 更新缓存 tokens
+
+                # 更新缓存读取 tokens
                 if "cache_read_input_tokens" in usage:
                     ctx.cached_tokens = usage["cache_read_input_tokens"]
-                if "cache_creation_input_tokens" in usage:
-                    ctx.cache_creation_tokens = usage["cache_creation_input_tokens"]
+
+                # 更新缓存创建 tokens
+                cache_creation = extract_cache_creation_tokens(usage)
+                if cache_creation > 0:
+                    ctx.cache_creation_tokens = cache_creation
 
             # 检查是否结束
             delta = data.get("delta", {})

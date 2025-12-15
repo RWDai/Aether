@@ -104,14 +104,40 @@ class StreamContext:
         cached_tokens: Optional[int] = None,
         cache_creation_tokens: Optional[int] = None,
     ) -> None:
-        """更新 Token 使用统计"""
-        if input_tokens is not None:
+        """
+        更新 Token 使用统计
+
+        采用防御性更新策略：只有当新值 > 0 或当前值为 0 时才更新，避免用 0 覆盖已有的正确值。
+
+        设计原理：
+        - 在流式响应中，某些事件可能不包含完整的 usage 信息（字段为 0 或不存在）
+        - 后续事件可能会提供完整的统计数据
+        - 通过这种策略，确保一旦获得非零值就保留它，不会被后续的 0 值覆盖
+
+        示例场景：
+        - message_start 事件：input_tokens=100, output_tokens=0
+        - message_delta 事件：input_tokens=0, output_tokens=50
+        - 最终结果：input_tokens=100, output_tokens=50
+
+        注意事项：
+        - 此策略假设初始值为 0 是正确的默认状态
+        - 如果需要将已有值重置为 0，请直接修改实例属性（不使用此方法）
+
+        Args:
+            input_tokens: 输入 tokens 数量
+            output_tokens: 输出 tokens 数量
+            cached_tokens: 缓存命中 tokens 数量
+            cache_creation_tokens: 缓存创建 tokens 数量
+        """
+        if input_tokens is not None and (input_tokens > 0 or self.input_tokens == 0):
             self.input_tokens = input_tokens
-        if output_tokens is not None:
+        if output_tokens is not None and (output_tokens > 0 or self.output_tokens == 0):
             self.output_tokens = output_tokens
-        if cached_tokens is not None:
+        if cached_tokens is not None and (cached_tokens > 0 or self.cached_tokens == 0):
             self.cached_tokens = cached_tokens
-        if cache_creation_tokens is not None:
+        if cache_creation_tokens is not None and (
+            cache_creation_tokens > 0 or self.cache_creation_tokens == 0
+        ):
             self.cache_creation_tokens = cache_creation_tokens
 
     def mark_failed(self, status_code: int, error_message: str) -> None:

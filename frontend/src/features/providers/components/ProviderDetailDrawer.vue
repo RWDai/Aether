@@ -1030,7 +1030,7 @@ async function handleBatchAssignChanged() {
   emit('refresh')
 }
 
-// 处理管理别名 - 打开别名对话框
+// 处理管理映射 - 打开别名对话框
 function handleManageAlias(model: Model) {
   aliasEditingModel.value = model
   aliasDialogOpen.value = true

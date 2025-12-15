@@ -1,10 +1,10 @@
 <template>
   <Dialog
     :model-value="open"
-    title="管理模型名称别名"
+    title="管理模型名称映射"
     description="配置 Provider 对此模型使用的名称变体，系统会按优先级顺序选择"
     :icon="Tag"
-    size="md"
+    size="lg"
     @update:model-value="handleClose"
   >
     <div class="space-y-4">
@@ -21,7 +21,7 @@
       <!-- 别名列表 -->
       <div class="space-y-3">
         <div class="flex items-center justify-between">
-          <Label class="text-sm font-medium">名称别名</Label>
+          <Label class="text-sm font-medium">名称映射</Label>
           <Button
             type="button"
             variant="outline"
@@ -95,7 +95,7 @@
             <!-- 别名输入框 -->
             <Input
               v-model="alias.name"
-              placeholder="别名，如 Claude-Sonnet-4.5"
+              placeholder="映射名称，如 Claude-Sonnet-4.5"
               class="flex-1"
             />
 
@@ -117,7 +117,7 @@
           class="text-center py-6 text-muted-foreground border rounded-lg border-dashed"
         >
           <Tag class="w-8 h-8 mx-auto mb-2 opacity-50" />
-          <p class="text-sm">未配置别名</p>
+          <p class="text-sm">未配置映射</p>
           <p class="text-xs mt-1">将只使用主模型名称</p>
         </div>
       </div>
@@ -321,7 +321,7 @@ async function handleSubmit() {
       provider_model_aliases: validAliases.length > 0 ? validAliases : null
     })
 
-    showSuccess('别名配置已保存')
+    showSuccess('映射配置已保存')
     emit('update:open', false)
     emit('saved')
   } catch (err: any) {

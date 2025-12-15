@@ -169,7 +169,7 @@
                   variant="ghost"
                   size="icon"
                   class="h-8 w-8"
-                  title="管理别名"
+                  title="管理映射"
                   @click="openAliasDialog(model)"
                 >
                   <Tag class="w-3.5 h-3.5" />

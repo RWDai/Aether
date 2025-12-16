@@ -604,6 +604,11 @@ function resetForm() {
 // 加载模型数据（编辑模式）
 function loadModelData() {
   if (!props.model) return
+  // 先重置创建模式的残留状态
+  selectedModel.value = null
+  searchQuery.value = ''
+  expandedProvider.value = null
+
   form.value = {
     name: props.model.name,
     display_name: props.model.display_name,
@@ -612,9 +617,10 @@ function loadModelData() {
     config: props.model.config ? { ...props.model.config } : { streaming: true },
     is_active: props.model.is_active,
   }
-  if (props.model.default_tiered_pricing) {
-    tieredPricing.value = JSON.parse(JSON.stringify(props.model.default_tiered_pricing))
-  }
+  // 确保 tieredPricing 也被正确设置或重置
+  tieredPricing.value = props.model.default_tiered_pricing
+    ? JSON.parse(JSON.stringify(props.model.default_tiered_pricing))
+    : null
 }
 
 // 使用 useFormDialog 统一处理对话框逻辑

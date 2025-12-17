@@ -41,7 +41,7 @@ async def get_current_user(
     try:
         # 验证Token格式和签名
         try:
-            payload = await AuthService.verify_token(token)
+            payload = await AuthService.verify_token(token, token_type="access")
         except HTTPException as token_error:
             # 保持原始的HTTP状态码（如401 Unauthorized），不要转换为403
             logger.error(f"Token验证失败: {token_error.status_code}: {token_error.detail}, Token前10位: {token[:10]}...")
@@ -144,7 +144,7 @@ async def get_current_user_from_header(
     token = authorization.replace("Bearer ", "")
 
     try:
-        payload = await AuthService.verify_token(token)
+        payload = await AuthService.verify_token(token, token_type="access")
         user_id = payload.get("user_id")
 
         if not user_id:

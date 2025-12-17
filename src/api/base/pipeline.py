@@ -11,7 +11,6 @@ from src.core.exceptions import QuotaExceededException
 from src.core.logger import logger
 from src.models.database import ApiKey, AuditEventType, User, UserRole
 from src.services.auth.service import AuthService
-from src.services.cache.user_cache import UserCacheService
 from src.services.system.audit import AuditService
 from src.services.usage.service import UsageService
 
@@ -180,7 +179,7 @@ class ApiRequestPipeline:
 
         token = authorization.replace("Bearer ", "").strip()
         try:
-            payload = await self.auth_service.verify_token(token)
+            payload = await self.auth_service.verify_token(token, token_type="access")
         except HTTPException:
             raise
         except Exception as exc:
@@ -191,8 +190,8 @@ class ApiRequestPipeline:
         if not user_id:
             raise HTTPException(status_code=401, detail="无效的管理员令牌")
 
-        # 使用缓存查询用户
-        user = await UserCacheService.get_user_by_id(db, user_id)
+        # 直接查询数据库，确保返回的是当前 Session 绑定的对象
+        user = db.query(User).filter(User.id == user_id).first()
         if not user or not user.is_active:
             raise HTTPException(status_code=403, detail="用户不存在或已禁用")
 
@@ -207,7 +206,7 @@ class ApiRequestPipeline:
 
         token = authorization.replace("Bearer ", "").strip()
         try:
-            payload = await self.auth_service.verify_token(token)
+            payload = await self.auth_service.verify_token(token, token_type="access")
         except HTTPException:
             raise
         except Exception as exc:
@@ -218,8 +217,8 @@ class ApiRequestPipeline:
         if not user_id:
             raise HTTPException(status_code=401, detail="无效的用户令牌")
 
-        # 使用缓存查询用户
-        user = await UserCacheService.get_user_by_id(db, user_id)
+        # 直接查询数据库，确保返回的是当前 Session 绑定的对象
+        user = db.query(User).filter(User.id == user_id).first()
         if not user or not user.is_active:
             raise HTTPException(status_code=403, detail="用户不存在或已禁用")
 

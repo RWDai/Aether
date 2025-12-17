@@ -3,7 +3,6 @@
 采用模块化架构设计
 """
 
-import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -39,14 +38,12 @@ async def initialize_providers():
     """从数据库初始化提供商（仅用于日志记录）"""
     from sqlalchemy.orm import Session
 
-    from src.core.enums import APIFormat
-    from src.database import get_db
+    from src.database.database import create_session
     from src.models.database import Provider
 
     try:
         # 创建数据库会话
-        db_gen = get_db()
-        db: Session = next(db_gen)
+        db: Session = create_session()
 
         try:
             # 从数据库加载所有活跃的提供商
@@ -75,7 +72,7 @@ async def initialize_providers():
         finally:
             db.close()
 
-    except Exception as e:
+    except Exception:
         logger.exception("从数据库初始化提供商失败")
 
 

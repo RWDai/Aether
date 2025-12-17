@@ -142,7 +142,7 @@ class AnnouncementOptionalAuthAdapter(ApiAdapter):
 
         token = authorization.replace("Bearer ", "").strip()
         try:
-            payload = await AuthService.verify_token(token)
+            payload = await AuthService.verify_token(token, token_type="access")
             user_id = payload.get("user_id")
             if not user_id:
                 return None

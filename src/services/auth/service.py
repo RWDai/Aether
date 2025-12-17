@@ -93,8 +93,8 @@ class AuthService:
     @staticmethod
     async def authenticate_user(db: Session, email: str, password: str) -> Optional[User]:
         """用户登录认证"""
-        # 使用缓存查询用户
-        user = await UserCacheService.get_user_by_email(db, email)
+        # 登录校验必须读取密码哈希，不能使用不包含 password_hash 的缓存对象
+        user = db.query(User).filter(User.email == email).first()
 
         if not user:
             logger.warning(f"登录失败 - 用户不存在: {email}")
@@ -109,13 +109,10 @@ class AuthService:
             return None
 
         # 更新最后登录时间
-        # 需要重新从数据库获取以便更新（缓存的对象是分离的）
-        db_user = db.query(User).filter(User.id == user.id).first()
-        if db_user:
-            db_user.last_login_at = datetime.now(timezone.utc)
-            db.commit()  # 立即提交事务,释放数据库锁
-            # 清除缓存，因为用户信息已更新
-            await UserCacheService.invalidate_user_cache(user.id, user.email)
+        user.last_login_at = datetime.now(timezone.utc)
+        db.commit()  # 立即提交事务,释放数据库锁
+        # 清除缓存，因为用户信息已更新
+        await UserCacheService.invalidate_user_cache(user.id, user.email)
 
         logger.info(f"用户登录成功: {email} (ID: {user.id})")
         return user
@@ -198,7 +195,10 @@ class AuthService:
         if user.role == UserRole.ADMIN:
             return True
 
-        if user.role.value >= required_role.value:
+        # 避免使用字符串比较导致权限判断错误（例如 'user' >= 'admin'）
+        role_rank = {UserRole.USER: 0, UserRole.ADMIN: 1}
+        # 未知用户角色默认 -1（拒绝），未知要求角色默认 999（拒绝）
+        if role_rank.get(user.role, -1) >= role_rank.get(required_role, 999):
             return True
 
         logger.warning(f"权限不足: 用户 {user.email} 角色 {user.role.value} < 需要 {required_role.value}")
@@ -230,7 +230,7 @@ class AuthService:
             )
 
             if success:
-                user_id = payload.get("sub")
+                user_id = payload.get("user_id")
                 logger.info(f"用户登出成功: user_id={user_id}")
 
             return success

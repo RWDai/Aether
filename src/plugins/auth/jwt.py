@@ -51,7 +51,7 @@ class JwtAuthPlugin(AuthPlugin):
 
         try:
             # 验证JWT token
-            payload = AuthService.verify_token(token)
+            payload = await AuthService.verify_token(token, token_type="access")
             logger.debug(f"JWT token验证成功, payload: {payload}")
 
             # 从payload中提取用户信息

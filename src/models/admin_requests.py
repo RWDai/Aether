@@ -13,6 +13,23 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from src.core.enums import APIFormat, ProviderBillingType
 
 
+class ProxyConfig(BaseModel):
+    """代理配置"""
+
+    url: str = Field(..., description="代理 URL (http://, https://, socks5://)")
+    username: Optional[str] = Field(None, max_length=255, description="代理用户名")
+    password: Optional[str] = Field(None, max_length=500, description="代理密码")
+
+    @field_validator("url")
+    @classmethod
+    def validate_proxy_url(cls, v: str) -> str:
+        """验证代理 URL 格式"""
+        v = v.strip()
+        if not re.match(r"^(http|https|socks5|socks4)://", v, re.IGNORECASE):
+            raise ValueError("代理 URL 必须以 http://, https://, socks5:// 或 socks4:// 开头")
+        return v
+
+
 class CreateProviderRequest(BaseModel):
     """创建 Provider 请求"""
 
@@ -165,6 +182,7 @@ class CreateEndpointRequest(BaseModel):
     rpm_limit: Optional[int] = Field(None, ge=0, description="RPM 限制")
     concurrent_limit: Optional[int] = Field(None, ge=0, description="并发限制")
     config: Optional[Dict[str, Any]] = Field(None, description="其他配置")
+    proxy: Optional[ProxyConfig] = Field(None, description="代理配置")
 
     @field_validator("name")
     @classmethod
@@ -220,6 +238,7 @@ class UpdateEndpointRequest(BaseModel):
     rpm_limit: Optional[int] = Field(None, ge=0)
     concurrent_limit: Optional[int] = Field(None, ge=0)
     config: Optional[Dict[str, Any]] = None
+    proxy: Optional[ProxyConfig] = Field(None, description="代理配置")
 
     # 复用验证器
     _validate_name = field_validator("name")(CreateEndpointRequest.validate_name.__func__)

@@ -5,11 +5,42 @@
 
 from contextlib import asynccontextmanager
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 import httpx
 
 from src.core.logger import logger
 
+
+def build_proxy_url(proxy_config: Dict[str, Any]) -> Optional[str]:
+    """
+    根据代理配置构建完整的代理 URL
+
+    Args:
+        proxy_config: 代理配置字典，包含 url, username, password
+
+    Returns:
+        完整的代理 URL，如 socks5://user:pass@host:port
+    """
+    if not proxy_config:
+        return None
+
+    proxy_url = proxy_config.get("url")
+    if not proxy_url:
+        return None
+
+    username = proxy_config.get("username")
+    password = proxy_config.get("password")
+
+    if username and password:
+        parsed = urlparse(proxy_url)
+        # 重新构建带认证的代理 URL
+        auth_proxy = f"{parsed.scheme}://{username}:{password}@{parsed.netloc}"
+        if parsed.path:
+            auth_proxy += parsed.path
+        return auth_proxy
+
+    return proxy_url
 
 
 class HTTPClientPool:
@@ -120,6 +151,44 @@ class HTTPClientPool:
             yield client
         finally:
             await client.aclose()
+
+    @classmethod
+    def create_client_with_proxy(
+        cls,
+        proxy_config: Optional[Dict[str, Any]] = None,
+        timeout: Optional[httpx.Timeout] = None,
+        **kwargs: Any,
+    ) -> httpx.AsyncClient:
+        """
+        创建带代理配置的HTTP客户端
+
+        Args:
+            proxy_config: 代理配置字典，包含 url, username, password
+            timeout: 超时配置
+            **kwargs: 其他 httpx.AsyncClient 配置参数
+
+        Returns:
+            配置好的 httpx.AsyncClient 实例
+        """
+        config: Dict[str, Any] = {
+            "http2": False,
+            "verify": True,
+            "follow_redirects": True,
+        }
+
+        if timeout:
+            config["timeout"] = timeout
+        else:
+            config["timeout"] = httpx.Timeout(10.0, read=300.0)
+
+        # 添加代理配置
+        proxy_url = build_proxy_url(proxy_config) if proxy_config else None
+        if proxy_url:
+            config["proxy"] = proxy_url
+            logger.debug(f"创建带代理的HTTP客户端: {proxy_config.get('url', 'unknown')}")
+
+        config.update(kwargs)
+        return httpx.AsyncClient(**config)
 
 
 # 便捷访问函数

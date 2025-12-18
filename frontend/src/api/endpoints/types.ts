@@ -41,6 +41,11 @@ export interface ProviderEndpoint {
   last_failure_at?: string
   is_active: boolean
   config?: Record<string, any>
+  proxy?: {
+    url: string
+    username?: string
+    password?: string
+  }
   total_keys: number
   active_keys: number
   created_at: string

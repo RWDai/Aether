@@ -132,6 +132,61 @@
           </div>
         </div>
       </div>
+
+      <!-- 代理配置 -->
+      <div class="space-y-4">
+        <div class="flex items-center justify-between">
+          <h3 class="text-sm font-medium">
+            代理配置
+          </h3>
+          <label class="flex items-center gap-2 text-sm">
+            <input
+              v-model="proxyEnabled"
+              type="checkbox"
+              class="h-4 w-4 rounded border-gray-300"
+            >
+            启用代理
+          </label>
+        </div>
+
+        <div
+          v-if="proxyEnabled"
+          class="space-y-4 rounded-lg border p-4"
+        >
+          <div class="space-y-2">
+            <Label for="proxy_url">代理 URL *</Label>
+            <Input
+              id="proxy_url"
+              v-model="form.proxy_url"
+              placeholder="http://host:port 或 socks5://host:port"
+            />
+            <p class="text-xs text-muted-foreground">
+              支持 HTTP、HTTPS、SOCKS4、SOCKS5 代理
+            </p>
+          </div>
+
+          <div class="grid grid-cols-2 gap-4">
+            <div class="space-y-2">
+              <Label for="proxy_username">用户名（可选）</Label>
+              <Input
+                id="proxy_username"
+                v-model="form.proxy_username"
+                placeholder="代理认证用户名"
+              />
+            </div>
+
+            <div class="space-y-2">
+              <Label for="proxy_password">密码（可选）</Label>
+              <Input
+                id="proxy_password"
+                v-model="form.proxy_password"
+                type="password"
+                placeholder="代理认证密码"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
     </form>
 
     <template #footer>
@@ -194,6 +249,7 @@ const emit = defineEmits<{
 const { success, error: showError } = useToast()
 const loading = ref(false)
 const selectOpen = ref(false)
+const proxyEnabled = ref(false)
 
 // 内部状态
 const internalOpen = computed(() => props.modelValue)
@@ -207,7 +263,11 @@ const form = ref({
   max_retries: 3,
   max_concurrent: undefined as number | undefined,
   rate_limit: undefined as number | undefined,
-  is_active: true
+  is_active: true,
+  // 代理配置
+  proxy_url: '',
+  proxy_username: '',
+  proxy_password: '',
 })
 
 // API 格式列表
@@ -252,13 +312,19 @@ function resetForm() {
     max_retries: 3,
     max_concurrent: undefined,
     rate_limit: undefined,
-    is_active: true
+    is_active: true,
+    proxy_url: '',
+    proxy_username: '',
+    proxy_password: '',
   }
+  proxyEnabled.value = false
 }
 
 // 加载端点数据（编辑模式）
 function loadEndpointData() {
   if (!props.endpoint) return
+
+  const proxy = props.endpoint.proxy as { url?: string; username?: string; password?: string } | null
 
   form.value = {
     api_format: props.endpoint.api_format,
@@ -268,8 +334,14 @@ function loadEndpointData() {
     max_retries: props.endpoint.max_retries,
     max_concurrent: props.endpoint.max_concurrent || undefined,
     rate_limit: props.endpoint.rate_limit || undefined,
-    is_active: props.endpoint.is_active
+    is_active: props.endpoint.is_active,
+    proxy_url: proxy?.url || '',
+    proxy_username: proxy?.username || '',
+    proxy_password: proxy?.password || '',
   }
+
+  // 如果有代理配置，启用代理开关
+  proxyEnabled.value = !!proxy?.url
 }
 
 // 使用 useFormDialog 统一处理对话框逻辑
@@ -282,12 +354,26 @@ const { isEditMode, handleDialogUpdate, handleCancel } = useFormDialog({
   resetForm,
 })
 
+// 构建代理配置
+function buildProxyConfig() {
+  if (!proxyEnabled.value || !form.value.proxy_url) {
+    return undefined
+  }
+  return {
+    url: form.value.proxy_url,
+    username: form.value.proxy_username || undefined,
+    password: form.value.proxy_password || undefined,
+  }
+}
+
 // 提交表单
 const handleSubmit = async () => {
   if (!props.provider && !props.endpoint) return
 
   loading.value = true
   try {
+    const proxyConfig = buildProxyConfig()
+
     if (isEditMode.value && props.endpoint) {
       // 更新端点
       await updateEndpoint(props.endpoint.id, {
@@ -297,7 +383,8 @@ const handleSubmit = async () => {
         max_retries: form.value.max_retries,
         max_concurrent: form.value.max_concurrent,
         rate_limit: form.value.rate_limit,
-        is_active: form.value.is_active
+        is_active: form.value.is_active,
+        proxy: proxyConfig,
       })
 
       success('端点已更新', '保存成功')
@@ -313,7 +400,8 @@ const handleSubmit = async () => {
         max_retries: form.value.max_retries,
         max_concurrent: form.value.max_concurrent,
         rate_limit: form.value.rate_limit,
-        is_active: form.value.is_active
+        is_active: form.value.is_active,
+        proxy: proxyConfig,
       })
 
       success('端点创建成功', '成功')

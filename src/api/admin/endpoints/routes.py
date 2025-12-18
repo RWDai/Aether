@@ -202,6 +202,7 @@ class AdminCreateProviderEndpointAdapter(AdminApiAdapter):
             rate_limit=self.endpoint_data.rate_limit,
             is_active=True,
             config=self.endpoint_data.config,
+            proxy=self.endpoint_data.proxy.model_dump() if self.endpoint_data.proxy else None,
             created_at=now,
             updated_at=now,
         )
@@ -284,6 +285,9 @@ class AdminUpdateProviderEndpointAdapter(AdminApiAdapter):
             raise NotFoundException(f"Endpoint {self.endpoint_id} 不存在")
 
         update_data = self.endpoint_data.model_dump(exclude_unset=True)
+        # 把 proxy 转换为 dict 存储
+        if "proxy" in update_data and update_data["proxy"] is not None:
+            update_data["proxy"] = dict(update_data["proxy"])
         for field, value in update_data.items():
             setattr(endpoint, field, value)
         endpoint.updated_at = datetime.now(timezone.utc)

@@ -8,6 +8,8 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from src.models.admin_requests import ProxyConfig
+
 # ========== ProviderEndpoint CRUD ==========
 
 
@@ -29,6 +31,9 @@ class ProviderEndpointCreate(BaseModel):
 
     # 额外配置
     config: Optional[Dict[str, Any]] = Field(default=None, description="额外配置（JSON）")
+
+    # 代理配置
+    proxy: Optional[ProxyConfig] = Field(default=None, description="代理配置")
 
     @field_validator("api_format")
     @classmethod
@@ -64,6 +69,7 @@ class ProviderEndpointUpdate(BaseModel):
     rate_limit: Optional[int] = Field(default=None, ge=1, description="速率限制")
     is_active: Optional[bool] = Field(default=None, description="是否启用")
     config: Optional[Dict[str, Any]] = Field(default=None, description="额外配置")
+    proxy: Optional[ProxyConfig] = Field(default=None, description="代理配置")
 
     @field_validator("base_url")
     @classmethod
@@ -103,6 +109,9 @@ class ProviderEndpointResponse(BaseModel):
 
     # 额外配置
     config: Optional[Dict[str, Any]] = None
+
+    # 代理配置
+    proxy: Optional[Dict[str, Any]] = Field(default=None, description="代理配置")
 
     # 统计（从 Keys 聚合）
     total_keys: int = Field(default=0, description="总 Key 数量")

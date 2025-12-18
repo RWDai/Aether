@@ -454,7 +454,13 @@ class CliMessageHandlerBase(BaseMessageHandler):
             f"Key=***{key.api_key[-4:]}, "
             f"原始模型={ctx.model}, 映射后={mapped_model or '无映射'}, URL模型={url_model}")
 
-        http_client = httpx.AsyncClient(timeout=timeout_config, follow_redirects=True)
+        # 创建 HTTP 客户端（支持代理配置）
+        from src.clients.http_client import HTTPClientPool
+
+        http_client = HTTPClientPool.create_client_with_proxy(
+            proxy_config=endpoint.proxy,
+            timeout=timeout_config,
+        )
         try:
             response_ctx = http_client.stream(
                 "POST", url, json=provider_payload, headers=provider_headers
@@ -1419,10 +1425,14 @@ class CliMessageHandlerBase(BaseMessageHandler):
                 f"Key=***{key.api_key[-4:]}, "
                 f"原始模型={model}, 映射后={mapped_model or '无映射'}, URL模型={url_model}")
 
-            async with httpx.AsyncClient(
-                timeout=float(endpoint.timeout),
-                follow_redirects=True,
-            ) as http_client:
+            # 创建 HTTP 客户端（支持代理配置）
+            from src.clients.http_client import HTTPClientPool
+
+            http_client = HTTPClientPool.create_client_with_proxy(
+                proxy_config=endpoint.proxy,
+                timeout=httpx.Timeout(float(endpoint.timeout)),
+            )
+            async with http_client:
                 resp = await http_client.post(url, json=provider_payload, headers=provider_headers)
 
                 status_code = resp.status_code

@@ -538,6 +538,9 @@ class ProviderEndpoint(Base):
     # 额外配置
     config = Column(JSON, nullable=True)  # 端点特定配置（不推荐使用，优先使用专用字段）
 
+    # 代理配置
+    proxy = Column(JSONB, nullable=True)  # 代理配置: {url, username, password}
+
     # 时间戳
     created_at = Column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False

@@ -5,7 +5,7 @@ ProviderEndpoint CRUD 管理 API
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import and_, func
@@ -25,6 +25,16 @@ from src.models.endpoint_models import (
 
 router = APIRouter(tags=["Endpoint Management"])
 pipeline = ApiRequestPipeline()
+
+
+def mask_proxy_password(proxy_config: Optional[dict]) -> Optional[dict]:
+    """对代理配置中的密码进行脱敏处理"""
+    if not proxy_config:
+        return None
+    masked = dict(proxy_config)
+    if masked.get("password"):
+        masked["password"] = "***"
+    return masked
 
 
 @router.get("/providers/{provider_id}/endpoints", response_model=List[ProviderEndpointResponse])
@@ -153,6 +163,7 @@ class AdminListProviderEndpointsAdapter(AdminApiAdapter):
                 "api_format": endpoint.api_format,
                 "total_keys": total_keys_map.get(endpoint.id, 0),
                 "active_keys": active_keys_map.get(endpoint.id, 0),
+                "proxy": mask_proxy_password(endpoint.proxy),
             }
             endpoint_dict.pop("_sa_instance_state", None)
             result.append(ProviderEndpointResponse(**endpoint_dict))
@@ -202,6 +213,7 @@ class AdminCreateProviderEndpointAdapter(AdminApiAdapter):
             rate_limit=self.endpoint_data.rate_limit,
             is_active=True,
             config=self.endpoint_data.config,
+            proxy=self.endpoint_data.proxy.model_dump() if self.endpoint_data.proxy else None,
             created_at=now,
             updated_at=now,
         )
@@ -215,12 +227,13 @@ class AdminCreateProviderEndpointAdapter(AdminApiAdapter):
         endpoint_dict = {
             k: v
             for k, v in new_endpoint.__dict__.items()
-            if k not in {"api_format", "_sa_instance_state"}
+            if k not in {"api_format", "_sa_instance_state", "proxy"}
         }
         return ProviderEndpointResponse(
             **endpoint_dict,
             provider_name=provider.name,
             api_format=new_endpoint.api_format,
+            proxy=mask_proxy_password(new_endpoint.proxy),
             total_keys=0,
             active_keys=0,
         )
@@ -259,12 +272,13 @@ class AdminGetProviderEndpointAdapter(AdminApiAdapter):
         endpoint_dict = {
             k: v
             for k, v in endpoint_obj.__dict__.items()
-            if k not in {"api_format", "_sa_instance_state"}
+            if k not in {"api_format", "_sa_instance_state", "proxy"}
         }
         return ProviderEndpointResponse(
             **endpoint_dict,
             provider_name=provider.name,
             api_format=endpoint_obj.api_format,
+            proxy=mask_proxy_password(endpoint_obj.proxy),
             total_keys=total_keys,
             active_keys=active_keys,
         )
@@ -284,6 +298,17 @@ class AdminUpdateProviderEndpointAdapter(AdminApiAdapter):
             raise NotFoundException(f"Endpoint {self.endpoint_id} 不存在")
 
         update_data = self.endpoint_data.model_dump(exclude_unset=True)
+        # 把 proxy 转换为 dict 存储，支持显式设置为 None 清除代理
+        if "proxy" in update_data:
+            if update_data["proxy"] is not None:
+                new_proxy = dict(update_data["proxy"])
+                # 只有当密码字段未提供时才保留原密码（空字符串视为显式清除）
+                if "password" not in new_proxy and endpoint.proxy:
+                    old_password = endpoint.proxy.get("password")
+                    if old_password:
+                        new_proxy["password"] = old_password
+                update_data["proxy"] = new_proxy
+            # proxy 为 None 时保留，用于清除代理配置
         for field, value in update_data.items():
             setattr(endpoint, field, value)
         endpoint.updated_at = datetime.now(timezone.utc)
@@ -311,12 +336,13 @@ class AdminUpdateProviderEndpointAdapter(AdminApiAdapter):
         endpoint_dict = {
             k: v
             for k, v in endpoint.__dict__.items()
-            if k not in {"api_format", "_sa_instance_state"}
+            if k not in {"api_format", "_sa_instance_state", "proxy"}
         }
         return ProviderEndpointResponse(
             **endpoint_dict,
             provider_name=provider.name if provider else "Unknown",
             api_format=endpoint.api_format,
+            proxy=mask_proxy_password(endpoint.proxy),
             total_keys=total_keys,
             active_keys=active_keys,
         )

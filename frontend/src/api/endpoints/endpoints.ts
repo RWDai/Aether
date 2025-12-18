@@ -1,5 +1,5 @@
 import client from '../client'
-import type { ProviderEndpoint } from './types'
+import type { ProviderEndpoint, ProxyConfig } from './types'
 
 /**
  * 获取指定 Provider 的所有 Endpoints
@@ -38,6 +38,7 @@ export async function createEndpoint(
     rate_limit?: number
     is_active?: boolean
     config?: Record<string, any>
+    proxy?: ProxyConfig | null
   }
 ): Promise<ProviderEndpoint> {
   const response = await client.post(`/api/admin/endpoints/providers/${providerId}/endpoints`, data)
@@ -63,6 +64,7 @@ export async function updateEndpoint(
     rate_limit: number
     is_active: boolean
     config: Record<string, any>
+    proxy: ProxyConfig | null
   }>
 ): Promise<ProviderEndpoint> {
   const response = await client.put(`/api/admin/endpoints/${endpointId}`, data)

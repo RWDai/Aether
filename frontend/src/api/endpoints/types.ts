@@ -20,6 +20,16 @@ export const API_FORMAT_LABELS: Record<string, string> = {
   [API_FORMATS.GEMINI_CLI]: 'Gemini CLI',
 }
 
+/**
+ * 代理配置类型
+ */
+export interface ProxyConfig {
+  url: string
+  username?: string
+  password?: string
+  enabled?: boolean  // 是否启用代理（false 时保留配置但不使用）
+}
+
 export interface ProviderEndpoint {
   id: string
   provider_id: string
@@ -41,6 +51,7 @@ export interface ProviderEndpoint {
   last_failure_at?: string
   is_active: boolean
   config?: Record<string, any>
+  proxy?: ProxyConfig | null
   total_keys: number
   active_keys: number
   created_at: string

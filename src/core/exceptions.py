@@ -442,6 +442,36 @@ class EmbeddedErrorException(ProviderException):
         self.error_status = error_status
 
 
+class ProviderCompatibilityException(ProviderException):
+    """Provider 兼容性错误异常 - 应该触发故障转移
+
+    用于处理因 Provider 不支持某些参数或功能导致的错误。
+    这类错误不是用户请求本身的问题，换一个 Provider 可能就能成功，应该触发故障转移。
+
+    常见场景：
+    - Unsupported parameter（不支持的参数）
+    - Unsupported model（不支持的模型）
+    - Unsupported feature（不支持的功能）
+    """
+
+    def __init__(
+        self,
+        message: str,
+        provider_name: Optional[str] = None,
+        status_code: int = 400,
+        upstream_error: Optional[str] = None,
+        request_metadata: Optional[Any] = None,
+    ):
+        self.upstream_error = upstream_error
+        super().__init__(
+            message=message,
+            provider_name=provider_name,
+            request_metadata=request_metadata,
+        )
+        # 覆盖状态码为 400（保持与上游一致）
+        self.status_code = status_code
+
+
 class UpstreamClientException(ProxyException):
     """上游返回的客户端错误异常 - HTTP 4xx 错误，不应该重试
 

@@ -15,6 +15,7 @@ from src.core.enums import APIFormat
 from src.core.exceptions import (
     ConcurrencyLimitError,
     ProviderAuthException,
+    ProviderCompatibilityException,
     ProviderException,
     ProviderNotAvailableException,
     ProviderRateLimitException,
@@ -81,7 +82,9 @@ class ErrorClassifier:
         "context_length_exceeded",  # 上下文长度超限
         "content_length_limit",  # 请求内容长度超限 (Claude API)
         "content_length_exceeds",  # 内容长度超限变体 (AWS CodeWhisperer)
-        "max_tokens",  # token 数超限
+        # 注意：移除了 "max_tokens"，因为 max_tokens 相关错误可能是 Provider 兼容性问题
+        # 如 "Unsupported parameter: 'max_tokens' is not supported with this model"
+        # 这类错误应由 COMPATIBILITY_ERROR_PATTERNS 处理
         "invalid_prompt",  # 无效的提示词
         "content too long",  # 内容过长
         "input is too long",  # 输入过长 (AWS)
@@ -134,6 +137,19 @@ class ErrorClassifier:
         "MAX_TOKENS_EXCEEDED",
         "INVALID_CONTENT",
         "CONTENT_POLICY_VIOLATION",
+    )
+
+    # Provider 兼容性错误模式 - 这类错误应该触发故障转移
+    # 因为换一个 Provider 可能就能成功
+    COMPATIBILITY_ERROR_PATTERNS: Tuple[str, ...] = (
+        "unsupported parameter",  # 不支持的参数
+        "unsupported model",  # 不支持的模型
+        "unsupported feature",  # 不支持的功能
+        "not supported with this model",  # 此模型不支持
+        "model does not support",  # 模型不支持
+        "parameter is not supported",  # 参数不支持
+        "feature is not supported",  # 功能不支持
+        "not available for this model",  # 此模型不可用
     )
 
     def _parse_error_response(self, error_text: Optional[str]) -> Dict[str, Any]:
@@ -260,6 +276,25 @@ class ErrorClassifier:
         # 3. 回退到关键词匹配（合并 message 和 raw）
         search_text = f"{parsed['message']} {parsed['raw']}".lower()
         return any(pattern.lower() in search_text for pattern in self.CLIENT_ERROR_PATTERNS)
+
+    def _is_compatibility_error(self, error_text: Optional[str]) -> bool:
+        """
+        检测错误响应是否为 Provider 兼容性错误（应触发故障转移）
+
+        这类错误是因为 Provider 不支持某些参数或功能导致的，
+        换一个 Provider 可能就能成功。
+
+        Args:
+            error_text: 错误响应文本
+
+        Returns:
+            是否为兼容性错误
+        """
+        if not error_text:
+            return False
+
+        search_text = error_text.lower()
+        return any(pattern.lower() in search_text for pattern in self.COMPATIBILITY_ERROR_PATTERNS)
 
     def _extract_error_message(self, error_text: Optional[str]) -> Optional[str]:
         """
@@ -423,6 +458,16 @@ class ErrorClassifier:
                     if error.response and error.response.headers.get("retry-after")
                     else None
                 ),
+            )
+
+        # 400 错误：先检查是否为 Provider 兼容性错误（应触发故障转移）
+        if status == 400 and self._is_compatibility_error(error_response_text):
+            logger.info(f"检测到 Provider 兼容性错误，将触发故障转移: {extracted_message}")
+            return ProviderCompatibilityException(
+                message=extracted_message or "Provider 不支持此请求",
+                provider_name=provider_name,
+                status_code=400,
+                upstream_error=error_response_text,
             )
 
         # 400 错误：检查是否为客户端请求错误（不应重试）

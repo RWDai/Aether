@@ -148,7 +148,7 @@ jobs:
 
       - name: Update Dockerfile.app to use registry base image
         run: |
-          sed -i "s|FROM aether-base:latest|FROM ${{ env.REGISTRY }}/${{ env.BASE_IMAGE_NAME }}:latest|g" Dockerfile.app
+          sed -i "s|FROM aether-base:latest AS builder|FROM ${{ env.REGISTRY }}/${{ env.BASE_IMAGE_NAME }}:latest AS builder|g" Dockerfile.app
 
       - name: Build and push app image
         uses: docker/build-push-action@v5

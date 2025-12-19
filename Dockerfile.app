@@ -1,16 +1,127 @@
-# 应用镜像：基于基础镜像，只复制代码（秒级构建）
+# 运行镜像：从 base 提取产物到精简运行时
 # 构建命令: docker build -f Dockerfile.app -t aether-app:latest .
-FROM aether-base:latest
+FROM aether-base:latest AS builder
+
+# ==================== 运行时镜像 ====================
+FROM python:3.12-slim
 
 WORKDIR /app
+
+# 运行时依赖（无 gcc/nodejs/npm）
+RUN apt-get update && apt-get install -y \
+    nginx \
+    supervisor \
+    libpq5 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# 从 base 镜像复制 Python 包
+COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+
+# 只复制需要的 Python 可执行文件
+COPY --from=builder /usr/local/bin/gunicorn /usr/local/bin/
+COPY --from=builder /usr/local/bin/uvicorn /usr/local/bin/
+COPY --from=builder /usr/local/bin/alembic /usr/local/bin/
+
+# 从 base 镜像复制前端产物
+COPY --from=builder /app/frontend/dist /usr/share/nginx/html
 
 # 复制后端代码
 COPY src/ ./src/
 COPY alembic.ini ./
 COPY alembic/ ./alembic/
 
-# 构建前端（使用基础镜像中已安装的 node_modules）
-COPY frontend/ /tmp/frontend/
-RUN cd /tmp/frontend && npm run build && \
-    cp -r dist/* /usr/share/nginx/html/ && \
-    rm -rf /tmp/frontend
+# Nginx 配置模板
+RUN printf '%s\n' \
+'server {' \
+'    listen 80;' \
+'    server_name _;' \
+'    root /usr/share/nginx/html;' \
+'    index index.html;' \
+'    client_max_body_size 100M;' \
+'' \
+'    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {' \
+'        expires 1y;' \
+'        add_header Cache-Control "public, no-transform";' \
+'        try_files $uri =404;' \
+'    }' \
+'' \
+'    location ~ ^/(src|node_modules)/ {' \
+'        deny all;' \
+'        return 404;' \
+'    }' \
+'' \
+'    location ~ ^/(dashboard|admin|login)(/|$) {' \
+'        try_files $uri $uri/ /index.html;' \
+'    }' \
+'' \
+'    location / {' \
+'        try_files $uri $uri/ @backend;' \
+'    }' \
+'' \
+'    location @backend {' \
+'        proxy_pass http://127.0.0.1:PORT_PLACEHOLDER;' \
+'        proxy_http_version 1.1;' \
+'        proxy_set_header Host $host;' \
+'        proxy_set_header X-Real-IP $remote_addr;' \
+'        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;' \
+'        proxy_set_header X-Forwarded-Proto $scheme;' \
+'        proxy_set_header Connection "";' \
+'        proxy_set_header Accept $http_accept;' \
+'        proxy_set_header Content-Type $content_type;' \
+'        proxy_set_header Authorization $http_authorization;' \
+'        proxy_set_header X-Api-Key $http_x_api_key;' \
+'        proxy_buffering off;' \
+'        proxy_cache off;' \
+'        proxy_request_buffering off;' \
+'        chunked_transfer_encoding on;' \
+'        gzip off;' \
+'        add_header X-Accel-Buffering no;' \
+'        proxy_connect_timeout 600s;' \
+'        proxy_send_timeout 600s;' \
+'        proxy_read_timeout 600s;' \
+'    }' \
+'}' > /etc/nginx/sites-available/default.template
+
+# Supervisor 配置
+RUN printf '%s\n' \
+'[supervisord]' \
+'nodaemon=true' \
+'logfile=/var/log/supervisor/supervisord.log' \
+'pidfile=/var/run/supervisord.pid' \
+'' \
+'[program:nginx]' \
+'command=/bin/bash -c "sed \"s/PORT_PLACEHOLDER/${PORT:-8084}/g\" /etc/nginx/sites-available/default.template > /etc/nginx/sites-available/default && /usr/sbin/nginx -g \"daemon off;\""' \
+'autostart=true' \
+'autorestart=true' \
+'stdout_logfile=/var/log/nginx/access.log' \
+'stderr_logfile=/var/log/nginx/error.log' \
+'' \
+'[program:app]' \
+'command=gunicorn src.main:app -w %(ENV_GUNICORN_WORKERS)s -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:%(ENV_PORT)s --timeout 120 --access-logfile - --error-logfile - --log-level info' \
+'directory=/app' \
+'autostart=true' \
+'autorestart=true' \
+'stdout_logfile=/dev/stdout' \
+'stdout_logfile_maxbytes=0' \
+'stderr_logfile=/dev/stderr' \
+'stderr_logfile_maxbytes=0' \
+'environment=PYTHONUNBUFFERED=1,PYTHONIOENCODING=utf-8,LANG=C.UTF-8,LC_ALL=C.UTF-8,DOCKER_CONTAINER=true' > /etc/supervisor/conf.d/supervisord.conf
+
+# 创建目录
+RUN mkdir -p /var/log/supervisor /app/logs /app/data
+
+# 环境变量
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONIOENCODING=utf-8 \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    PORT=8084
+
+EXPOSE 80
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost/health || exit 1
+
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]

@@ -1,124 +1,29 @@
-# 基础镜像：包含所有依赖，只在依赖变化时需要重建
+# 构建镜像：编译环境 + 预编译的依赖
 # 用于 GitHub Actions CI 构建（不使用国内镜像源）
+# 构建命令: docker build -f Dockerfile.base -t aether-base:latest .
 FROM python:3.12-slim
 
 WORKDIR /app
 
-# 系统依赖
+# 构建工具
 RUN apt-get update && apt-get install -y \
-    nginx \
-    supervisor \
     libpq-dev \
     gcc \
-    curl \
-    gettext-base \
     nodejs \
     npm \
     && rm -rf /var/lib/apt/lists/*
 
-# Python 依赖（安装到系统，不用 -e 模式）
+# Python 依赖
 COPY pyproject.toml README.md ./
 RUN mkdir -p src && touch src/__init__.py && \
-    SETUPTOOLS_SCM_PRETEND_VERSION=0.1.0 pip install --no-cache-dir .
+    SETUPTOOLS_SCM_PRETEND_VERSION=0.1.0 pip install --no-cache-dir . && \
+    pip cache purge
 
-# 前端依赖
-COPY frontend/package*.json /tmp/frontend/
-WORKDIR /tmp/frontend
-RUN npm ci
+# 前端构建
+COPY frontend/ ./frontend/
+RUN cd frontend && npm ci && npm run build && rm -rf node_modules && npm cache clean --force
 
-# Nginx 配置模板
-RUN printf '%s\n' \
-'server {' \
-'    listen 80;' \
-'    server_name _;' \
-'    root /usr/share/nginx/html;' \
-'    index index.html;' \
-'    client_max_body_size 100M;' \
-'' \
-'    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {' \
-'        expires 1y;' \
-'        add_header Cache-Control "public, no-transform";' \
-'        try_files $uri =404;' \
-'    }' \
-'' \
-'    location ~ ^/(src|node_modules)/ {' \
-'        deny all;' \
-'        return 404;' \
-'    }' \
-'' \
-'    location ~ ^/(dashboard|admin|login)(/|$) {' \
-'        try_files $uri $uri/ /index.html;' \
-'    }' \
-'' \
-'    location / {' \
-'        try_files $uri $uri/ @backend;' \
-'    }' \
-'' \
-'    location @backend {' \
-'        proxy_pass http://127.0.0.1:PORT_PLACEHOLDER;' \
-'        proxy_http_version 1.1;' \
-'        proxy_set_header Host $host;' \
-'        proxy_set_header X-Real-IP $remote_addr;' \
-'        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;' \
-'        proxy_set_header X-Forwarded-Proto $scheme;' \
-'        proxy_set_header Connection "";' \
-'        proxy_set_header Accept $http_accept;' \
-'        proxy_set_header Content-Type $content_type;' \
-'        proxy_set_header Authorization $http_authorization;' \
-'        proxy_set_header X-Api-Key $http_x_api_key;' \
-'        proxy_buffering off;' \
-'        proxy_cache off;' \
-'        proxy_request_buffering off;' \
-'        chunked_transfer_encoding on;' \
-'        gzip off;' \
-'        add_header X-Accel-Buffering no;' \
-'        proxy_connect_timeout 600s;' \
-'        proxy_send_timeout 600s;' \
-'        proxy_read_timeout 600s;' \
-'    }' \
-'}' > /etc/nginx/sites-available/default.template
-
-# Supervisor 配置
-RUN printf '%s\n' \
-'[supervisord]' \
-'nodaemon=true' \
-'logfile=/var/log/supervisor/supervisord.log' \
-'pidfile=/var/run/supervisord.pid' \
-'' \
-'[program:nginx]' \
-'command=/bin/bash -c "sed \"s/PORT_PLACEHOLDER/${PORT:-8084}/g\" /etc/nginx/sites-available/default.template > /etc/nginx/sites-available/default && /usr/sbin/nginx -g \"daemon off;\""' \
-'autostart=true' \
-'autorestart=true' \
-'stdout_logfile=/var/log/nginx/access.log' \
-'stderr_logfile=/var/log/nginx/error.log' \
-'' \
-'[program:app]' \
-'command=gunicorn src.main:app -w %(ENV_GUNICORN_WORKERS)s -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:%(ENV_PORT)s --timeout 120 --access-logfile - --error-logfile - --log-level info' \
-'directory=/app' \
-'autostart=true' \
-'autorestart=true' \
-'stdout_logfile=/dev/stdout' \
-'stdout_logfile_maxbytes=0' \
-'stderr_logfile=/dev/stderr' \
-'stderr_logfile_maxbytes=0' \
-'environment=PYTHONUNBUFFERED=1,PYTHONIOENCODING=utf-8,LANG=C.UTF-8,LC_ALL=C.UTF-8,DOCKER_CONTAINER=true' > /etc/supervisor/conf.d/supervisord.conf
-
-# 创建目录
-RUN mkdir -p /var/log/supervisor /app/logs /app/data /usr/share/nginx/html
-
-WORKDIR /app
-
-# 环境变量
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONIOENCODING=utf-8 \
-    LANG=C.UTF-8 \
-    LC_ALL=C.UTF-8 \
-    PORT=8084
-
-EXPOSE 80
-
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost/health || exit 1
-
-CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
+# 产物位置：
+# - Python 包: /usr/local/lib/python3.12/site-packages
+# - Python 可执行文件: /usr/local/bin
+# - 前端构建产物: /app/frontend/dist

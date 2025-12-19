@@ -13,7 +13,7 @@ from src.api.base.admin_adapter import AdminApiAdapter
 from src.api.base.pipeline import ApiRequestPipeline
 from src.core.enums import UserRole
 from src.database import get_db
-from src.models.database import ApiKey, Provider, RequestCandidate, StatsDaily, Usage
+from src.models.database import ApiKey, Provider, RequestCandidate, StatsDaily, StatsDailyModel, Usage
 from src.models.database import User as DBUser
 from src.services.system.stats_aggregator import StatsAggregatorService
 from src.utils.cache_decorator import cache_result
@@ -893,69 +893,172 @@ class DashboardDailyStatsAdapter(DashboardAdapter):
                 })
             current_date += timedelta(days=1)
 
-        # ==================== 模型统计（仍需实时查询）====================
-        model_query = db.query(Usage)
-        if not is_admin:
-            model_query = model_query.filter(Usage.user_id == user.id)
-        model_query = model_query.filter(
-            and_(Usage.created_at >= start_date, Usage.created_at <= end_date)
-        )
-
-        model_stats = (
-            model_query.with_entities(
-                Usage.model,
-                func.count(Usage.id).label("requests"),
-                func.sum(Usage.total_tokens).label("tokens"),
-                func.sum(Usage.total_cost_usd).label("cost"),
-                func.avg(Usage.response_time_ms).label("avg_response_time"),
+        # ==================== 模型统计 ====================
+        if is_admin:
+            # 管理员：使用预聚合数据 + 今日实时数据
+            # 历史数据从 stats_daily_model 获取
+            historical_model_stats = (
+                db.query(StatsDailyModel)
+                .filter(and_(StatsDailyModel.date >= start_date, StatsDailyModel.date < today))
+                .all()
             )
-            .group_by(Usage.model)
-            .order_by(func.sum(Usage.total_cost_usd).desc())
-            .all()
-        )
 
-        model_summary = [
-            {
-                "model": stat.model,
-                "requests": stat.requests or 0,
-                "tokens": int(stat.tokens or 0),
-                "cost": float(stat.cost or 0),
-                "avg_response_time": (
-                    float(stat.avg_response_time or 0) / 1000.0 if stat.avg_response_time else 0
-                ),
-                "cost_per_request": float(stat.cost or 0) / max(stat.requests or 1, 1),
-                "tokens_per_request": int(stat.tokens or 0) / max(stat.requests or 1, 1),
-            }
-            for stat in model_stats
-        ]
+            # 按模型汇总历史数据
+            model_agg: dict = {}
+            daily_breakdown: dict = {}
 
-        daily_model_stats = (
-            model_query.with_entities(
-                func.date(Usage.created_at).label("date"),
-                Usage.model,
-                func.count(Usage.id).label("requests"),
-                func.sum(Usage.total_tokens).label("tokens"),
-                func.sum(Usage.total_cost_usd).label("cost"),
+            for stat in historical_model_stats:
+                model = stat.model
+                if model not in model_agg:
+                    model_agg[model] = {
+                        "requests": 0, "tokens": 0, "cost": 0.0,
+                        "total_response_time": 0.0, "response_count": 0
+                    }
+                model_agg[model]["requests"] += stat.total_requests
+                tokens = (stat.input_tokens + stat.output_tokens +
+                          stat.cache_creation_tokens + stat.cache_read_tokens)
+                model_agg[model]["tokens"] += tokens
+                model_agg[model]["cost"] += stat.total_cost
+                if stat.avg_response_time_ms is not None:
+                    model_agg[model]["total_response_time"] += stat.avg_response_time_ms * stat.total_requests
+                    model_agg[model]["response_count"] += stat.total_requests
+
+                # 按日期分组
+                if stat.date.tzinfo is None:
+                    date_utc = stat.date.replace(tzinfo=timezone.utc)
+                else:
+                    date_utc = stat.date.astimezone(timezone.utc)
+                date_str = date_utc.astimezone(app_tz).date().isoformat()
+
+                daily_breakdown.setdefault(date_str, []).append({
+                    "model": model,
+                    "requests": stat.total_requests,
+                    "tokens": tokens,
+                    "cost": stat.total_cost,
+                })
+
+            # 今日实时模型统计
+            today_model_stats = (
+                db.query(
+                    Usage.model,
+                    func.count(Usage.id).label("requests"),
+                    func.sum(Usage.total_tokens).label("tokens"),
+                    func.sum(Usage.total_cost_usd).label("cost"),
+                    func.avg(Usage.response_time_ms).label("avg_response_time"),
+                )
+                .filter(Usage.created_at >= today)
+                .group_by(Usage.model)
+                .all()
             )
-            .group_by(func.date(Usage.created_at), Usage.model)
-            .order_by(func.date(Usage.created_at).desc(), func.sum(Usage.total_cost_usd).desc())
-            .all()
-        )
 
-        breakdown = {}
-        for stat in daily_model_stats:
-            date_str = stat.date.isoformat()
-            breakdown.setdefault(date_str, []).append(
+            today_str = today_local.date().isoformat()
+            for stat in today_model_stats:
+                model = stat.model
+                if model not in model_agg:
+                    model_agg[model] = {
+                        "requests": 0, "tokens": 0, "cost": 0.0,
+                        "total_response_time": 0.0, "response_count": 0
+                    }
+                model_agg[model]["requests"] += stat.requests or 0
+                model_agg[model]["tokens"] += int(stat.tokens or 0)
+                model_agg[model]["cost"] += float(stat.cost or 0)
+                if stat.avg_response_time is not None:
+                    model_agg[model]["total_response_time"] += float(stat.avg_response_time) * (stat.requests or 0)
+                    model_agg[model]["response_count"] += stat.requests or 0
+
+                # 今日 breakdown
+                daily_breakdown.setdefault(today_str, []).append({
+                    "model": model,
+                    "requests": stat.requests or 0,
+                    "tokens": int(stat.tokens or 0),
+                    "cost": float(stat.cost or 0),
+                })
+
+            # 构建 model_summary
+            model_summary = []
+            for model, agg in model_agg.items():
+                avg_rt = (agg["total_response_time"] / agg["response_count"] / 1000.0
+                          if agg["response_count"] > 0 else 0)
+                model_summary.append({
+                    "model": model,
+                    "requests": agg["requests"],
+                    "tokens": agg["tokens"],
+                    "cost": agg["cost"],
+                    "avg_response_time": avg_rt,
+                    "cost_per_request": agg["cost"] / max(agg["requests"], 1),
+                    "tokens_per_request": agg["tokens"] / max(agg["requests"], 1),
+                })
+            model_summary.sort(key=lambda x: x["cost"], reverse=True)
+
+            # 填充 model_breakdown
+            for item in formatted:
+                item["model_breakdown"] = daily_breakdown.get(item["date"], [])
+
+        else:
+            # 普通用户：实时查询（数据量较小）
+            model_query = db.query(Usage).filter(
+                and_(
+                    Usage.user_id == user.id,
+                    Usage.created_at >= start_date,
+                    Usage.created_at <= end_date
+                )
+            )
+
+            model_stats = (
+                model_query.with_entities(
+                    Usage.model,
+                    func.count(Usage.id).label("requests"),
+                    func.sum(Usage.total_tokens).label("tokens"),
+                    func.sum(Usage.total_cost_usd).label("cost"),
+                    func.avg(Usage.response_time_ms).label("avg_response_time"),
+                )
+                .group_by(Usage.model)
+                .order_by(func.sum(Usage.total_cost_usd).desc())
+                .all()
+            )
+
+            model_summary = [
                 {
                     "model": stat.model,
                     "requests": stat.requests or 0,
                     "tokens": int(stat.tokens or 0),
                     "cost": float(stat.cost or 0),
+                    "avg_response_time": (
+                        float(stat.avg_response_time or 0) / 1000.0 if stat.avg_response_time else 0
+                    ),
+                    "cost_per_request": float(stat.cost or 0) / max(stat.requests or 1, 1),
+                    "tokens_per_request": int(stat.tokens or 0) / max(stat.requests or 1, 1),
                 }
+                for stat in model_stats
+            ]
+
+            daily_model_stats = (
+                model_query.with_entities(
+                    func.date(Usage.created_at).label("date"),
+                    Usage.model,
+                    func.count(Usage.id).label("requests"),
+                    func.sum(Usage.total_tokens).label("tokens"),
+                    func.sum(Usage.total_cost_usd).label("cost"),
+                )
+                .group_by(func.date(Usage.created_at), Usage.model)
+                .order_by(func.date(Usage.created_at).desc(), func.sum(Usage.total_cost_usd).desc())
+                .all()
             )
 
-        for item in formatted:
-            item["model_breakdown"] = breakdown.get(item["date"], [])
+            breakdown = {}
+            for stat in daily_model_stats:
+                date_str = stat.date.isoformat()
+                breakdown.setdefault(date_str, []).append(
+                    {
+                        "model": stat.model,
+                        "requests": stat.requests or 0,
+                        "tokens": int(stat.tokens or 0),
+                        "cost": float(stat.cost or 0),
+                    }
+                )
+
+            for item in formatted:
+                item["model_breakdown"] = breakdown.get(item["date"], [])
 
         return {
             "daily_stats": formatted,

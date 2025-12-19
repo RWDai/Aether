@@ -443,7 +443,7 @@ class ModelCostService:
 
         Args:
             provider: Provider 对象或提供商名称
-            model: 用户请求的模型名（可能是 GlobalModel.name 或别名）
+            model: 用户请求的模型名（可能是 GlobalModel.name 或映射名）
 
         Returns:
             按次计费价格，如果没有配置则返回 None

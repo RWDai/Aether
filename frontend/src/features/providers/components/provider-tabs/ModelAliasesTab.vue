@@ -101,24 +101,24 @@
           </div>
         </div>
 
-        <!-- 展开的别名列表 -->
+        <!-- 展开的映射列表 -->
         <div
           v-show="expandedAliasGroups.has(`${group.model.id}-${group.apiFormatsKey}`)"
           class="bg-muted/30 border-t border-border/30"
         >
           <div class="px-4 py-2 space-y-1">
             <div
-              v-for="alias in group.aliases"
-              :key="alias.name"
+              v-for="mapping in group.aliases"
+              :key="mapping.name"
               class="flex items-center gap-2 py-1"
             >
               <!-- 优先级标签 -->
               <span class="inline-flex items-center justify-center w-5 h-5 rounded bg-background border text-xs font-medium shrink-0">
-                {{ alias.priority }}
+                {{ mapping.priority }}
               </span>
-              <!-- 别名名称 -->
+              <!-- 映射名称 -->
               <span class="font-mono text-sm truncate">
-                {{ alias.name }}
+                {{ mapping.name }}
               </span>
             </div>
           </div>
@@ -222,9 +222,9 @@ const aliasGroups = computed<AliasGroup[]>(() => {
   const groupMap = new Map<string, AliasGroup>()
 
   for (const model of models.value) {
-    if (!model.provider_model_aliases || !Array.isArray(model.provider_model_aliases)) continue
+    if (!model.provider_model_mappings || !Array.isArray(model.provider_model_mappings)) continue
 
-    for (const alias of model.provider_model_aliases) {
+    for (const alias of model.provider_model_mappings) {
       const apiFormatsKey = getApiFormatsKey(alias.api_formats)
       const groupKey = `${model.id}|${apiFormatsKey}`
 
@@ -310,7 +310,7 @@ async function confirmDelete() {
   const { model, aliases, apiFormatsKey } = deletingGroup.value
 
   try {
-    const currentAliases = model.provider_model_aliases || []
+    const currentAliases = model.provider_model_mappings || []
     const aliasNamesToRemove = new Set(aliases.map(a => a.name))
     const newAliases = currentAliases.filter((a: ProviderModelAlias) => {
       const currentKey = getApiFormatsKey(a.api_formats)
@@ -318,7 +318,7 @@ async function confirmDelete() {
     })
 
     await updateModel(props.provider.id, model.id, {
-      provider_model_aliases: newAliases.length > 0 ? newAliases : null
+      provider_model_mappings: newAliases.length > 0 ? newAliases : null
     })
 
     showSuccess('映射组已删除')

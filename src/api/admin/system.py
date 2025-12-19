@@ -436,7 +436,7 @@ class AdminExportConfigAdapter(AdminApiAdapter):
                     {
                         "global_model_name": global_model.name if global_model else None,
                         "provider_model_name": model.provider_model_name,
-                        "provider_model_aliases": model.provider_model_aliases,
+                        "provider_model_mappings": model.provider_model_mappings,
                         "price_per_request": model.price_per_request,
                         "tiered_pricing": model.tiered_pricing,
                         "supports_vision": model.supports_vision,
@@ -790,8 +790,8 @@ class AdminImportConfigAdapter(AdminApiAdapter):
                             )
                         elif merge_mode == "overwrite":
                             existing_model.global_model_id = global_model_id
-                            existing_model.provider_model_aliases = model_data.get(
-                                "provider_model_aliases"
+                            existing_model.provider_model_mappings = model_data.get(
+                                "provider_model_mappings"
                             )
                             existing_model.price_per_request = model_data.get(
                                 "price_per_request"
@@ -824,8 +824,8 @@ class AdminImportConfigAdapter(AdminApiAdapter):
                             provider_id=provider_id,
                             global_model_id=global_model_id,
                             provider_model_name=model_data["provider_model_name"],
-                            provider_model_aliases=model_data.get(
-                                "provider_model_aliases"
+                            provider_model_mappings=model_data.get(
+                                "provider_model_mappings"
                             ),
                             price_per_request=model_data.get("price_per_request"),
                             tiered_pricing=model_data.get("tiered_pricing"),

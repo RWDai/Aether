@@ -198,7 +198,7 @@ class ModelCacheService:
         provider_id: Optional[str] = None,
         global_model_id: Optional[str] = None,
         provider_model_name: Optional[str] = None,
-        provider_model_aliases: Optional[list] = None,
+        provider_model_mappings: Optional[list] = None,
     ) -> None:
         """清除 Model 缓存
 
@@ -207,7 +207,7 @@ class ModelCacheService:
             provider_id: Provider ID（用于清除 provider_global 缓存）
             global_model_id: GlobalModel ID（用于清除 provider_global 缓存）
             provider_model_name: provider_model_name（用于清除 resolve 缓存）
-            provider_model_aliases: 映射名称列表（用于清除 resolve 缓存）
+            provider_model_mappings: 映射名称列表（用于清除 resolve 缓存）
         """
         # 清除 model:id 缓存
         await CacheService.delete(f"model:id:{model_id}")
@@ -222,16 +222,16 @@ class ModelCacheService:
         else:
             logger.debug(f"Model 缓存已清除: {model_id}")
 
-        # 清除 resolve 缓存（provider_model_name 和 aliases 可能都被用作解析 key）
+        # 清除 resolve 缓存（provider_model_name 和 mappings 可能都被用作解析 key）
         resolve_keys_to_clear = []
         if provider_model_name:
             resolve_keys_to_clear.append(provider_model_name)
-        if provider_model_aliases:
-            for alias_entry in provider_model_aliases:
-                if isinstance(alias_entry, dict):
-                    alias_name = alias_entry.get("name", "").strip()
-                    if alias_name:
-                        resolve_keys_to_clear.append(alias_name)
+        if provider_model_mappings:
+            for mapping_entry in provider_model_mappings:
+                if isinstance(mapping_entry, dict):
+                    mapping_name = mapping_entry.get("name", "").strip()
+                    if mapping_name:
+                        resolve_keys_to_clear.append(mapping_name)
 
         for key in resolve_keys_to_clear:
             await CacheService.delete(f"global_model:resolve:{key}")
@@ -261,8 +261,8 @@ class ModelCacheService:
         2. 通过 provider_model_name 匹配（查询 Model 表）
         3. 直接匹配 GlobalModel.name（兜底）
 
-        注意：此方法不使用 provider_model_aliases 进行全局解析。
-        provider_model_aliases 是 Provider 级别的别名配置，只在特定 Provider 上下文中生效，
+        注意：此方法不使用 provider_model_mappings 进行全局解析。
+        provider_model_mappings 是 Provider 级别的映射配置，只在特定 Provider 上下文中生效，
         由 resolve_provider_model() 处理。
 
         Args:
@@ -301,9 +301,9 @@ class ModelCacheService:
                     logger.debug(f"GlobalModel 缓存命中(映射解析): {normalized_name}")
                     return ModelCacheService._dict_to_global_model(cached_data)
 
-            # 2. 通过 provider_model_name 匹配（不考虑 provider_model_aliases）
-            # 重要：provider_model_aliases 是 Provider 级别的别名配置，只在特定 Provider 上下文中生效
-            # 全局解析不应该受到某个 Provider 别名配置的影响
+            # 2. 通过 provider_model_name 匹配（不考虑 provider_model_mappings）
+            # 重要：provider_model_mappings 是 Provider 级别的映射配置，只在特定 Provider 上下文中生效
+            # 全局解析不应该受到某个 Provider 映射配置的影响
             # 例如：Provider A 把 "haiku" 映射到 "sonnet"，不应该影响 Provider B 的 "haiku" 解析
             from src.models.database import Provider
 
@@ -401,7 +401,7 @@ class ModelCacheService:
             "provider_id": model.provider_id,
             "global_model_id": model.global_model_id,
             "provider_model_name": model.provider_model_name,
-            "provider_model_aliases": getattr(model, "provider_model_aliases", None),
+            "provider_model_mappings": getattr(model, "provider_model_mappings", None),
             "is_active": model.is_active,
             "is_available": model.is_available if hasattr(model, "is_available") else True,
             "price_per_request": (
@@ -424,7 +424,7 @@ class ModelCacheService:
             provider_id=model_dict["provider_id"],
             global_model_id=model_dict["global_model_id"],
             provider_model_name=model_dict["provider_model_name"],
-            provider_model_aliases=model_dict.get("provider_model_aliases"),
+            provider_model_mappings=model_dict.get("provider_model_mappings"),
             is_active=model_dict["is_active"],
             is_available=model_dict.get("is_available", True),
             price_per_request=model_dict.get("price_per_request"),

@@ -1167,14 +1167,14 @@ class AdminModelMappingCacheStatsAdapter(AdminApiAdapter):
                                                 provider.display_name or provider.name
                                             )
                                             continue
-                                        # 检查是否在别名列表中
-                                        if model.provider_model_aliases:
-                                            alias_names = [
+                                        # 检查是否在映射列表中
+                                        if model.provider_model_mappings:
+                                            mapping_list = [
                                                 a.get("name")
-                                                for a in model.provider_model_aliases
+                                                for a in model.provider_model_mappings
                                                 if isinstance(a, dict)
                                             ]
-                                            if mapping_name in alias_names:
+                                            if mapping_name in mapping_list:
                                                 provider_names.append(
                                                     provider.display_name or provider.name
                                                 )
@@ -1236,19 +1236,19 @@ class AdminModelMappingCacheStatsAdapter(AdminApiAdapter):
                         try:
                             cached_data = json.loads(cached_str)
                             provider_model_name = cached_data.get("provider_model_name")
-                            provider_model_aliases = cached_data.get("provider_model_aliases", [])
+                            provider_model_mappings = cached_data.get("provider_model_mappings", [])
 
                             # 获取 Provider 和 GlobalModel 信息
                             provider = provider_map.get(provider_id)
                             global_model = global_model_map.get(global_model_id)
 
                             if provider and global_model:
-                                # 提取别名名称
-                                alias_names = []
-                                if provider_model_aliases:
-                                    for alias_entry in provider_model_aliases:
-                                        if isinstance(alias_entry, dict) and alias_entry.get("name"):
-                                            alias_names.append(alias_entry["name"])
+                                # 提取映射名称
+                                mapping_names = []
+                                if provider_model_mappings:
+                                    for mapping_entry in provider_model_mappings:
+                                        if isinstance(mapping_entry, dict) and mapping_entry.get("name"):
+                                            mapping_names.append(mapping_entry["name"])
 
                                 # provider_model_name 为空时跳过
                                 if not provider_model_name:
@@ -1256,14 +1256,14 @@ class AdminModelMappingCacheStatsAdapter(AdminApiAdapter):
 
                                 # 只显示有实际映射的条目：
                                 # 1. 全局模型名 != Provider 模型名（模型名称映射）
-                                # 2. 或者有别名配置
+                                # 2. 或者有映射配置
                                 has_name_mapping = global_model.name != provider_model_name
-                                has_aliases = len(alias_names) > 0
+                                has_mappings = len(mapping_names) > 0
 
-                                if has_name_mapping or has_aliases:
-                                    # 构建用于展示的别名列表
-                                    # 如果只有名称映射没有别名，则用 global_model_name 作为"请求名称"
-                                    display_aliases = alias_names if alias_names else [global_model.name]
+                                if has_name_mapping or has_mappings:
+                                    # 构建用于展示的映射列表
+                                    # 如果只有名称映射没有额外映射，则用 global_model_name 作为"请求名称"
+                                    display_mappings = mapping_names if mapping_names else [global_model.name]
 
                                     provider_model_mappings.append({
                                         "provider_id": provider_id,
@@ -1272,7 +1272,7 @@ class AdminModelMappingCacheStatsAdapter(AdminApiAdapter):
                                         "global_model_name": global_model.name,
                                         "global_model_display_name": global_model.display_name,
                                         "provider_model_name": provider_model_name,
-                                        "aliases": display_aliases,
+                                        "aliases": display_mappings,
                                         "ttl": ttl if ttl > 0 else None,
                                         "hit_count": hit_count,
                                     })

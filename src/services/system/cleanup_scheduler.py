@@ -259,6 +259,9 @@ class CleanupScheduler:
                                     StatsAggregatorService.aggregate_daily_stats(
                                         db, current_date_local
                                     )
+                                    StatsAggregatorService.aggregate_daily_model_stats(
+                                        db, current_date_local
+                                    )
                                     for (user_id,) in users:
                                         try:
                                             StatsAggregatorService.aggregate_user_daily_stats(
@@ -291,6 +294,7 @@ class CleanupScheduler:
                 yesterday_local = today_local - timedelta(days=1)
 
                 StatsAggregatorService.aggregate_daily_stats(db, yesterday_local)
+                StatsAggregatorService.aggregate_daily_model_stats(db, yesterday_local)
 
                 users = db.query(DBUser.id).filter(DBUser.is_active.is_(True)).all()
                 for (user_id,) in users:

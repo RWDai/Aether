@@ -51,7 +51,7 @@ class ModelService:
                 provider_id=provider_id,
                 global_model_id=model_data.global_model_id,
                 provider_model_name=model_data.provider_model_name,
-                provider_model_aliases=model_data.provider_model_aliases,
+                provider_model_mappings=model_data.provider_model_mappings,
                 price_per_request=model_data.price_per_request,
                 tiered_pricing=model_data.tiered_pricing,
                 supports_vision=model_data.supports_vision,
@@ -153,9 +153,9 @@ class ModelService:
         if not model:
             raise NotFoundException(f"模型 {model_id} 不存在")
 
-        # 保存旧的别名，用于清除缓存
+        # 保存旧的映射，用于清除缓存
         old_provider_model_name = model.provider_model_name
-        old_provider_model_aliases = model.provider_model_aliases
+        old_provider_model_mappings = model.provider_model_mappings
 
         # 更新字段
         update_data = model_data.model_dump(exclude_unset=True)
@@ -174,26 +174,26 @@ class ModelService:
             db.refresh(model)
 
             # 清除 Redis 缓存（异步执行，不阻塞返回）
-            # 先清除旧的别名缓存
+            # 先清除旧的映射缓存
             asyncio.create_task(
                 ModelCacheService.invalidate_model_cache(
                     model_id=model.id,
                     provider_id=model.provider_id,
                     global_model_id=model.global_model_id,
                     provider_model_name=old_provider_model_name,
-                    provider_model_aliases=old_provider_model_aliases,
+                    provider_model_mappings=old_provider_model_mappings,
                 )
             )
-            # 再清除新的别名缓存（如果有变化）
+            # 再清除新的映射缓存（如果有变化）
             if (model.provider_model_name != old_provider_model_name or
-                model.provider_model_aliases != old_provider_model_aliases):
+                model.provider_model_mappings != old_provider_model_mappings):
                 asyncio.create_task(
                     ModelCacheService.invalidate_model_cache(
                         model_id=model.id,
                         provider_id=model.provider_id,
                         global_model_id=model.global_model_id,
                         provider_model_name=model.provider_model_name,
-                        provider_model_aliases=model.provider_model_aliases,
+                        provider_model_mappings=model.provider_model_mappings,
                     )
                 )
 
@@ -246,7 +246,7 @@ class ModelService:
             "provider_id": model.provider_id,
             "global_model_id": model.global_model_id,
             "provider_model_name": model.provider_model_name,
-            "provider_model_aliases": model.provider_model_aliases,
+            "provider_model_mappings": model.provider_model_mappings,
         }
 
         try:
@@ -260,7 +260,7 @@ class ModelService:
                     provider_id=cache_info["provider_id"],
                     global_model_id=cache_info["global_model_id"],
                     provider_model_name=cache_info["provider_model_name"],
-                    provider_model_aliases=cache_info["provider_model_aliases"],
+                    provider_model_mappings=cache_info["provider_model_mappings"],
                 )
             )
 
@@ -297,7 +297,7 @@ class ModelService:
                 provider_id=model.provider_id,
                 global_model_id=model.global_model_id,
                 provider_model_name=model.provider_model_name,
-                provider_model_aliases=model.provider_model_aliases,
+                provider_model_mappings=model.provider_model_mappings,
             )
         )
 
@@ -390,7 +390,7 @@ class ModelService:
             provider_id=model.provider_id,
             global_model_id=model.global_model_id,
             provider_model_name=model.provider_model_name,
-            provider_model_aliases=model.provider_model_aliases,
+            provider_model_mappings=model.provider_model_mappings,
             # 原始配置值（可能为空）
             price_per_request=model.price_per_request,
             tiered_pricing=model.tiered_pricing,

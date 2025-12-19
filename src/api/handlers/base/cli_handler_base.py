@@ -136,7 +136,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
         查找逻辑：
         1. 直接通过 GlobalModel.name 匹配
         2. 查找该 Provider 的 Model 实现
-        3. 使用 provider_model_name / provider_model_aliases 选择最终名称
+        3. 使用 provider_model_name / provider_model_mappings 选择最终名称
 
         Args:
             source_model: 用户请求的模型名（必须是 GlobalModel.name）
@@ -153,9 +153,9 @@ class CliMessageHandlerBase(BaseMessageHandler):
         logger.debug(f"[CLI] _get_mapped_model: source={source_model}, provider={provider_id[:8]}..., mapping={mapping}")
 
         if mapping and mapping.model:
-            # 使用 select_provider_model_name 支持别名功能
-            # 传入 api_key.id 作为 affinity_key，实现相同用户稳定选择同一别名
-            # 传入 api_format 用于过滤适用的别名作用域
+            # 使用 select_provider_model_name 支持模型映射功能
+            # 传入 api_key.id 作为 affinity_key，实现相同用户稳定选择同一映射
+            # 传入 api_format 用于过滤适用的映射作用域
             affinity_key = self.api_key.id if self.api_key else None
             mapped_name = mapping.model.select_provider_model_name(
                 affinity_key, api_format=self.FORMAT_ID
@@ -400,7 +400,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
         ctx.provider_api_format = str(endpoint.api_format) if endpoint.api_format else ""
         ctx.client_api_format = ctx.api_format  # 已在 process_stream 中设置
 
-        # 获取模型映射（别名/映射 → 实际模型名）
+        # 获取模型映射（映射名称 → 实际模型名）
         mapped_model = await self._get_mapped_model(
             source_model=ctx.model,
             provider_id=str(provider.id),
@@ -1382,7 +1382,7 @@ class CliMessageHandlerBase(BaseMessageHandler):
             provider_name = str(provider.name)
             provider_api_format = str(endpoint.api_format) if endpoint.api_format else ""
 
-            # 获取模型映射（别名/映射 → 实际模型名）
+            # 获取模型映射（映射名称 → 实际模型名）
             mapped_model = await self._get_mapped_model(
                 source_model=model,
                 provider_id=str(provider.id),

@@ -50,7 +50,7 @@ model_mapping_resolution_total = Counter(
     "model_mapping_resolution_total",
     "Total number of model mapping resolutions",
     ["method", "cache_hit"],
-    # method: direct_match, provider_model_name, alias, not_found
+    # method: direct_match, provider_model_name, mapping, not_found
     # cache_hit: true, false
 )
 

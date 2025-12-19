@@ -346,9 +346,9 @@ class ModelCreate(BaseModel):
     provider_model_name: str = Field(
         ..., min_length=1, max_length=200, description="Provider 侧的主模型名称"
     )
-    provider_model_aliases: Optional[List[dict]] = Field(
+    provider_model_mappings: Optional[List[dict]] = Field(
         None,
-        description="模型名称别名列表，格式: [{'name': 'alias1', 'priority': 1}, ...]",
+        description="模型名称映射列表，格式: [{'name': 'alias1', 'priority': 1}, ...]",
     )
     global_model_id: str = Field(..., description="关联的 GlobalModel ID（必填）")
     # 按次计费配置 - 可选，为空时使用 GlobalModel 默认值
@@ -376,9 +376,9 @@ class ModelUpdate(BaseModel):
     """更新模型请求"""
 
     provider_model_name: Optional[str] = Field(None, min_length=1, max_length=200)
-    provider_model_aliases: Optional[List[dict]] = Field(
+    provider_model_mappings: Optional[List[dict]] = Field(
         None,
-        description="模型名称别名列表，格式: [{'name': 'alias1', 'priority': 1}, ...]",
+        description="模型名称映射列表，格式: [{'name': 'alias1', 'priority': 1}, ...]",
     )
     global_model_id: Optional[str] = None
     # 按次计费配置
@@ -404,7 +404,7 @@ class ModelResponse(BaseModel):
     provider_id: str
     global_model_id: Optional[str]
     provider_model_name: str
-    provider_model_aliases: Optional[List[dict]] = None
+    provider_model_mappings: Optional[List[dict]] = None
 
     # 按次计费配置
     price_per_request: Optional[float] = None

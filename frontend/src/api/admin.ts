@@ -112,7 +112,7 @@ export interface KeyExport {
 export interface ModelExport {
   global_model_name: string | null
   provider_model_name: string
-  provider_model_aliases?: any
+  provider_model_mappings?: any
   price_per_request?: number | null
   tiered_pricing?: any
   supports_vision?: boolean | null

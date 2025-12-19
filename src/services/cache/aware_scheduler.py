@@ -589,14 +589,14 @@ class CacheAwareScheduler:
 
         target_format = normalize_api_format(api_format)
 
-        # 0. 解析 model_name 到 GlobalModel（支持直接匹配和别名匹配，使用 ModelCacheService）
+        # 0. 解析 model_name 到 GlobalModel（支持直接匹配和映射名匹配，使用 ModelCacheService）
         global_model = await ModelCacheService.resolve_global_model_by_name_or_alias(db, model_name)
 
         if not global_model:
             logger.warning(f"GlobalModel not found: {model_name}")
             raise ModelNotSupportedException(model=model_name)
 
-        # 使用 GlobalModel.id 作为缓存亲和性的模型标识，确保别名和规范名都能命中同一个缓存
+        # 使用 GlobalModel.id 作为缓存亲和性的模型标识，确保映射名和规范名都能命中同一个缓存
         global_model_id: str = str(global_model.id)
         requested_model_name = model_name
         resolved_model_name = str(global_model.name)
@@ -751,19 +751,19 @@ class CacheAwareScheduler:
 
         支持两种匹配方式：
         1. 直接匹配 GlobalModel.name
-        2. 通过 ModelCacheService 匹配别名（全局查找）
+        2. 通过 ModelCacheService 匹配映射名（全局查找）
 
         Args:
             db: 数据库会话
             provider: Provider 对象
-            model_name: 模型名称（可以是 GlobalModel.name 或别名）
+            model_name: 模型名称（可以是 GlobalModel.name 或映射名）
             is_stream: 是否是流式请求，如果为 True 则同时检查流式支持
             capability_requirements: 能力需求（可选），用于检查模型是否支持所需能力
 
         Returns:
             (is_supported, skip_reason, supported_capabilities) - 是否支持、跳过原因、模型支持的能力列表
         """
-        # 使用 ModelCacheService 解析模型名称（支持别名）
+        # 使用 ModelCacheService 解析模型名称（支持映射名）
         global_model = await ModelCacheService.resolve_global_model_by_name_or_alias(db, model_name)
 
         if not global_model:
@@ -914,7 +914,7 @@ class CacheAwareScheduler:
             db: 数据库会话
             providers: Provider 列表
             target_format: 目标 API 格式
-            model_name: 模型名称（用户请求的名称，可能是别名）
+            model_name: 模型名称（用户请求的名称，可能是映射名）
             affinity_key: 亲和性标识符（通常为API Key ID）
             resolved_model_name: 解析后的 GlobalModel.name（用于 Key.allowed_models 校验）
             max_candidates: 最大候选数

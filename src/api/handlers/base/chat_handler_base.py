@@ -260,9 +260,9 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
         mapping = await mapper.get_mapping(source_model, provider_id)
 
         if mapping and mapping.model:
-            # 使用 select_provider_model_name 支持别名功能
-            # 传入 api_key.id 作为 affinity_key，实现相同用户稳定选择同一别名
-            # 传入 api_format 用于过滤适用的别名作用域
+            # 使用 select_provider_model_name 支持映射功能
+            # 传入 api_key.id 作为 affinity_key，实现相同用户稳定选择同一映射
+            # 传入 api_format 用于过滤适用的映射作用域
             affinity_key = self.api_key.id if self.api_key else None
             mapped_name = mapping.model.select_provider_model_name(
                 affinity_key, api_format=self.FORMAT_ID

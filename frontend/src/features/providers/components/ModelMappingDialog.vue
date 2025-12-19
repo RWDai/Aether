@@ -419,7 +419,7 @@ const formData = ref<{
   aliases: []
 })
 
-// 检查是否有有效的别名
+// 检查是否有有效的映射
 const hasValidAliases = computed(() => {
   return formData.value.aliases.some(a => a.name.trim())
 })
@@ -538,7 +538,7 @@ function toggleGroupCollapse(apiFormat: string) {
   }
 }
 
-// 添加别名项
+// 添加映射项
 function addAliasItem() {
   const maxPriority = formData.value.aliases.length > 0
     ? Math.max(...formData.value.aliases.map(a => a.priority))
@@ -546,7 +546,7 @@ function addAliasItem() {
   formData.value.aliases.push({ name: '', priority: maxPriority + 1, isEditing: true })
 }
 
-// 删除别名项
+// 删除映射项
 function removeAliasItem(index: number) {
   formData.value.aliases.splice(index, 1)
 }
@@ -719,7 +719,7 @@ async function handleSubmit() {
       return
     }
 
-    const currentAliases = targetModel.provider_model_aliases || []
+    const currentAliases = targetModel.provider_model_mappings || []
     let newAliases: ProviderModelAlias[]
 
     const buildAlias = (a: FormAlias): ProviderModelAlias => ({
@@ -762,7 +762,7 @@ async function handleSubmit() {
     }
 
     await updateModel(props.providerId, targetModel.id, {
-      provider_model_aliases: newAliases
+      provider_model_mappings: newAliases
     })
 
     showSuccess(props.editingGroup ? '映射组已更新' : '映射已添加')

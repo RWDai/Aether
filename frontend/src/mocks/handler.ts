@@ -403,7 +403,7 @@ function getUsageRecords() {
   return cachedUsageRecords
 }
 
-// Mock 别名数据
+// Mock 映射数据
 const MOCK_ALIASES = [
   { id: 'alias-001', source_model: 'claude-4-sonnet', target_global_model_id: 'gm-001', target_global_model_name: 'claude-sonnet-4-20250514', target_global_model_display_name: 'Claude Sonnet 4', provider_id: null, provider_name: null, scope: 'global', mapping_type: 'alias', is_active: true, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
   { id: 'alias-002', source_model: 'claude-4-opus', target_global_model_id: 'gm-002', target_global_model_name: 'claude-opus-4-20250514', target_global_model_display_name: 'Claude Opus 4', provider_id: null, provider_name: null, scope: 'global', mapping_type: 'alias', is_active: true, created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z' },
@@ -1682,7 +1682,7 @@ registerDynamicRoute('GET', '/api/admin/models/mappings/:mappingId', async (_con
   requireAdmin()
   const alias = MOCK_ALIASES.find(a => a.id === params.mappingId)
   if (!alias) {
-    throw { response: createMockResponse({ detail: '别名不存在' }, 404) }
+    throw { response: createMockResponse({ detail: '映射不存在' }, 404) }
   }
   return createMockResponse(alias)
 })
@@ -1693,7 +1693,7 @@ registerDynamicRoute('PATCH', '/api/admin/models/mappings/:mappingId', async (co
   requireAdmin()
   const alias = MOCK_ALIASES.find(a => a.id === params.mappingId)
   if (!alias) {
-    throw { response: createMockResponse({ detail: '别名不存在' }, 404) }
+    throw { response: createMockResponse({ detail: '映射不存在' }, 404) }
   }
   const body = JSON.parse(config.data || '{}')
   return createMockResponse({ ...alias, ...body, updated_at: new Date().toISOString() })
@@ -1705,7 +1705,7 @@ registerDynamicRoute('DELETE', '/api/admin/models/mappings/:mappingId', async (_
   requireAdmin()
   const alias = MOCK_ALIASES.find(a => a.id === params.mappingId)
   if (!alias) {
-    throw { response: createMockResponse({ detail: '别名不存在' }, 404) }
+    throw { response: createMockResponse({ detail: '映射不存在' }, 404) }
   }
   return createMockResponse({ message: '删除成功（演示模式）' })
 })

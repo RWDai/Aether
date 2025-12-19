@@ -671,10 +671,10 @@ class Model(Base):
 
     # Provider 映射配置
     provider_model_name = Column(String(200), nullable=False)  # Provider 侧的主模型名称
-    # 模型名称别名列表（带优先级），用于同一模型在 Provider 侧有多个名称变体的场景
+    # 模型名称映射列表（带优先级），用于同一模型在 Provider 侧有多个名称变体的场景
     # 格式: [{"name": "Claude-Sonnet-4.5", "priority": 1}, {"name": "Claude-Sonnet-4-5", "priority": 2}]
     # 为空时只使用 provider_model_name
-    provider_model_aliases = Column(JSON, nullable=True, default=None)
+    provider_model_mappings = Column(JSON, nullable=True, default=None)
 
     # 按次计费配置（每次请求的固定费用，美元）- 可为空，为空时使用 GlobalModel 的默认值
     price_per_request = Column(Float, nullable=True)  # 每次请求固定费用
@@ -820,25 +820,25 @@ class Model(Base):
     ) -> str:
         """按优先级选择要使用的 Provider 模型名称
 
-        如果配置了 provider_model_aliases，按优先级选择（数字越小越优先）；
-        相同优先级的别名通过哈希分散实现负载均衡（与 Key 调度策略一致）；
+        如果配置了 provider_model_mappings，按优先级选择（数字越小越优先）；
+        相同优先级的映射通过哈希分散实现负载均衡（与 Key 调度策略一致）；
         否则返回 provider_model_name。
 
         Args:
-            affinity_key: 用于哈希分散的亲和键（如用户 API Key 哈希），确保同一用户稳定选择同一别名
-            api_format: 当前请求的 API 格式（如 CLAUDE、OPENAI 等），用于过滤适用的别名
+            affinity_key: 用于哈希分散的亲和键（如用户 API Key 哈希），确保同一用户稳定选择同一映射
+            api_format: 当前请求的 API 格式（如 CLAUDE、OPENAI 等），用于过滤适用的映射
         """
         import hashlib
 
-        if not self.provider_model_aliases:
+        if not self.provider_model_mappings:
             return self.provider_model_name
 
-        raw_aliases = self.provider_model_aliases
-        if not isinstance(raw_aliases, list) or len(raw_aliases) == 0:
+        raw_mappings = self.provider_model_mappings
+        if not isinstance(raw_mappings, list) or len(raw_mappings) == 0:
             return self.provider_model_name
 
-        aliases: list[dict] = []
-        for raw in raw_aliases:
+        mappings: list[dict] = []
+        for raw in raw_mappings:
             if not isinstance(raw, dict):
                 continue
             name = raw.get("name")
@@ -846,10 +846,10 @@ class Model(Base):
                 continue
 
             # 检查 api_formats 作用域（如果配置了且当前有 api_format）
-            alias_api_formats = raw.get("api_formats")
-            if api_format and alias_api_formats:
+            mapping_api_formats = raw.get("api_formats")
+            if api_format and mapping_api_formats:
                 # 如果配置了作用域，只有匹配时才生效
-                if isinstance(alias_api_formats, list) and api_format not in alias_api_formats:
+                if isinstance(mapping_api_formats, list) and api_format not in mapping_api_formats:
                     continue
 
             raw_priority = raw.get("priority", 1)
@@ -860,47 +860,47 @@ class Model(Base):
             if priority < 1:
                 priority = 1
 
-            aliases.append({"name": name.strip(), "priority": priority})
+            mappings.append({"name": name.strip(), "priority": priority})
 
-        if not aliases:
+        if not mappings:
             return self.provider_model_name
 
         # 按优先级排序（数字越小越优先）
-        sorted_aliases = sorted(aliases, key=lambda x: x["priority"])
+        sorted_mappings = sorted(mappings, key=lambda x: x["priority"])
 
         # 获取最高优先级（最小数字）
-        highest_priority = sorted_aliases[0]["priority"]
+        highest_priority = sorted_mappings[0]["priority"]
 
-        # 获取所有最高优先级的别名
-        top_priority_aliases = [
-            alias for alias in sorted_aliases
-            if alias["priority"] == highest_priority
+        # 获取所有最高优先级的映射
+        top_priority_mappings = [
+            mapping for mapping in sorted_mappings
+            if mapping["priority"] == highest_priority
         ]
 
-        # 如果有多个相同优先级的别名，通过哈希分散选择
-        if len(top_priority_aliases) > 1 and affinity_key:
-            # 为每个别名计算哈希得分，选择得分最小的
-            def hash_score(alias: dict) -> int:
-                combined = f"{affinity_key}:{alias['name']}"
+        # 如果有多个相同优先级的映射，通过哈希分散选择
+        if len(top_priority_mappings) > 1 and affinity_key:
+            # 为每个映射计算哈希得分，选择得分最小的
+            def hash_score(mapping: dict) -> int:
+                combined = f"{affinity_key}:{mapping['name']}"
                 return int(hashlib.md5(combined.encode()).hexdigest(), 16)
 
-            selected = min(top_priority_aliases, key=hash_score)
-        elif len(top_priority_aliases) > 1:
+            selected = min(top_priority_mappings, key=hash_score)
+        elif len(top_priority_mappings) > 1:
             # 没有 affinity_key 时，使用确定性选择（按名称排序后取第一个）
             # 避免随机选择导致同一请求重试时选择不同的模型名称
-            selected = min(top_priority_aliases, key=lambda x: x["name"])
+            selected = min(top_priority_mappings, key=lambda x: x["name"])
         else:
-            selected = top_priority_aliases[0]
+            selected = top_priority_mappings[0]
 
         return selected["name"]
 
     def get_all_provider_model_names(self) -> list[str]:
-        """获取所有可用的 Provider 模型名称（主名称 + 别名）"""
+        """获取所有可用的 Provider 模型名称（主名称 + 映射名称）"""
         names = [self.provider_model_name]
-        if self.provider_model_aliases:
-            for alias in self.provider_model_aliases:
-                if isinstance(alias, dict) and alias.get("name"):
-                    names.append(alias["name"])
+        if self.provider_model_mappings:
+            for mapping in self.provider_model_mappings:
+                if isinstance(mapping, dict) and mapping.get("name"):
+                    names.append(mapping["name"])
         return names
 
 
@@ -1305,6 +1305,53 @@ class StatsDaily(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
         nullable=False,
+    )
+
+
+class StatsDailyModel(Base):
+    """每日模型统计快照 - 用于快速查询每日模型维度数据"""
+
+    __tablename__ = "stats_daily_model"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+
+    # 统计日期 (UTC)
+    date = Column(DateTime(timezone=True), nullable=False, index=True)
+
+    # 模型名称
+    model = Column(String(100), nullable=False)
+
+    # 请求统计
+    total_requests = Column(Integer, default=0, nullable=False)
+
+    # Token 统计
+    input_tokens = Column(BigInteger, default=0, nullable=False)
+    output_tokens = Column(BigInteger, default=0, nullable=False)
+    cache_creation_tokens = Column(BigInteger, default=0, nullable=False)
+    cache_read_tokens = Column(BigInteger, default=0, nullable=False)
+
+    # 成本统计 (USD)
+    total_cost = Column(Float, default=0.0, nullable=False)
+
+    # 性能统计
+    avg_response_time_ms = Column(Float, default=0.0, nullable=False)
+
+    # 时间戳
+    created_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    # 唯一约束：每个模型每天只有一条记录
+    __table_args__ = (
+        UniqueConstraint("date", "model", name="uq_stats_daily_model"),
+        Index("idx_stats_daily_model_date", "date"),
+        Index("idx_stats_daily_model_date_model", "date", "model"),
     )
 
 

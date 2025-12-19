@@ -16,6 +16,7 @@ from src.models.database import (
     ApiKey,
     RequestCandidate,
     StatsDaily,
+    StatsDailyModel,
     StatsSummary,
     StatsUserDaily,
     Usage,
@@ -218,6 +219,120 @@ class StatsAggregatorService:
         # 日志使用业务日期（输入参数），而不是 UTC 日期
         logger.info(f"[StatsAggregator] 聚合日期 {date.date()} 完成: {computed['total_requests']} 请求")
         return stats
+
+    @staticmethod
+    def aggregate_daily_model_stats(db: Session, date: datetime) -> list[StatsDailyModel]:
+        """聚合指定日期的模型维度统计数据
+
+        Args:
+            db: 数据库会话
+            date: 要聚合的业务日期
+
+        Returns:
+            StatsDailyModel 记录列表
+        """
+        day_start, day_end = _get_business_day_range(date)
+
+        # 按模型分组统计
+        model_stats = (
+            db.query(
+                Usage.model,
+                func.count(Usage.id).label("total_requests"),
+                func.sum(Usage.input_tokens).label("input_tokens"),
+                func.sum(Usage.output_tokens).label("output_tokens"),
+                func.sum(Usage.cache_creation_input_tokens).label("cache_creation_tokens"),
+                func.sum(Usage.cache_read_input_tokens).label("cache_read_tokens"),
+                func.sum(Usage.total_cost_usd).label("total_cost"),
+                func.avg(Usage.response_time_ms).label("avg_response_time"),
+            )
+            .filter(and_(Usage.created_at >= day_start, Usage.created_at < day_end))
+            .group_by(Usage.model)
+            .all()
+        )
+
+        results = []
+        for stat in model_stats:
+            if not stat.model:
+                continue
+
+            existing = (
+                db.query(StatsDailyModel)
+                .filter(and_(StatsDailyModel.date == day_start, StatsDailyModel.model == stat.model))
+                .first()
+            )
+
+            if existing:
+                record = existing
+            else:
+                record = StatsDailyModel(
+                    id=str(uuid.uuid4()), date=day_start, model=stat.model
+                )
+
+            record.total_requests = stat.total_requests or 0
+            record.input_tokens = int(stat.input_tokens or 0)
+            record.output_tokens = int(stat.output_tokens or 0)
+            record.cache_creation_tokens = int(stat.cache_creation_tokens or 0)
+            record.cache_read_tokens = int(stat.cache_read_tokens or 0)
+            record.total_cost = float(stat.total_cost or 0)
+            record.avg_response_time_ms = float(stat.avg_response_time or 0)
+
+            if not existing:
+                db.add(record)
+            results.append(record)
+
+        db.commit()
+        logger.info(
+            f"[StatsAggregator] 聚合日期 {date.date()} 模型统计完成: {len(results)} 个模型"
+        )
+        return results
+
+    @staticmethod
+    def get_daily_model_stats(db: Session, start_date: datetime, end_date: datetime) -> list[dict]:
+        """获取日期范围内的模型统计数据（优先使用预聚合）
+
+        Args:
+            db: 数据库会话
+            start_date: 开始日期 (UTC)
+            end_date: 结束日期 (UTC)
+
+        Returns:
+            模型统计数据列表
+        """
+        from zoneinfo import ZoneInfo
+
+        app_tz = ZoneInfo(APP_TIMEZONE)
+
+        # 从预聚合表获取历史数据
+        stats = (
+            db.query(StatsDailyModel)
+            .filter(and_(StatsDailyModel.date >= start_date, StatsDailyModel.date < end_date))
+            .order_by(StatsDailyModel.date.asc(), StatsDailyModel.total_cost.desc())
+            .all()
+        )
+
+        # 转换为字典格式，按日期分组
+        result = []
+        for stat in stats:
+            # 转换日期为业务时区
+            if stat.date.tzinfo is None:
+                date_utc = stat.date.replace(tzinfo=timezone.utc)
+            else:
+                date_utc = stat.date.astimezone(timezone.utc)
+            date_str = date_utc.astimezone(app_tz).date().isoformat()
+
+            result.append({
+                "date": date_str,
+                "model": stat.model,
+                "requests": stat.total_requests,
+                "tokens": (
+                    stat.input_tokens + stat.output_tokens +
+                    stat.cache_creation_tokens + stat.cache_read_tokens
+                ),
+                "cost": stat.total_cost,
+                "avg_response_time": stat.avg_response_time_ms / 1000.0 if stat.avg_response_time_ms else 0,
+            })
+
+        return result
 
     @staticmethod
     def aggregate_user_daily_stats(
@@ -497,6 +612,7 @@ class StatsAggregatorService:
         current_date = start_date
         while current_date < today_local:
             StatsAggregatorService.aggregate_daily_stats(db, current_date)
+            StatsAggregatorService.aggregate_daily_model_stats(db, current_date)
             count += 1
             current_date += timedelta(days=1)
 

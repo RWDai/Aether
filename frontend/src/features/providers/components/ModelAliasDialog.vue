@@ -18,7 +18,7 @@
         </p>
       </div>
 
-      <!-- 别名列表 -->
+      <!-- 映射列表 -->
       <div class="space-y-3">
         <div class="flex items-center justify-between">
           <Label class="text-sm font-medium">名称映射</Label>
@@ -92,7 +92,7 @@
               </div>
             </div>
 
-            <!-- 别名输入框 -->
+            <!-- 映射输入框 -->
             <Input
               v-model="alias.name"
               placeholder="映射名称，如 Claude-Sonnet-4.5"
@@ -184,9 +184,9 @@ const editingPriorityIndex = ref<number | null>(null)
 // 监听 open 变化
 watch(() => props.open, (newOpen) => {
   if (newOpen && props.model) {
-    // 加载现有别名配置
-    if (props.model.provider_model_aliases && Array.isArray(props.model.provider_model_aliases)) {
-      aliases.value = JSON.parse(JSON.stringify(props.model.provider_model_aliases))
+    // 加载现有映射配置
+    if (props.model.provider_model_mappings && Array.isArray(props.model.provider_model_mappings)) {
+      aliases.value = JSON.parse(JSON.stringify(props.model.provider_model_mappings))
     } else {
       aliases.value = []
     }
@@ -197,16 +197,16 @@ watch(() => props.open, (newOpen) => {
   }
 })
 
-// 添加别名
+// 添加映射
 function addAlias() {
-  // 新别名优先级为当前最大优先级 + 1，或者默认为 1
+  // 新映射优先级为当前最大优先级 + 1，或者默认为 1
   const maxPriority = aliases.value.length > 0
     ? Math.max(...aliases.value.map(a => a.priority))
     : 0
   aliases.value.push({ name: '', priority: maxPriority + 1 })
 }
 
-// 移除别名
+// 移除映射
 function removeAlias(index: number) {
   aliases.value.splice(index, 1)
 }
@@ -244,7 +244,7 @@ function handleDrop(targetIndex: number) {
   const items = [...aliases.value]
   const draggedItem = items[dragIndex]
 
-  // 记录每个别名的原始优先级（在修改前）
+  // 记录每个映射的原始优先级（在修改前）
   const originalPriorityMap = new Map<number, number>()
   items.forEach((alias, idx) => {
     originalPriorityMap.set(idx, alias.priority)
@@ -255,7 +255,7 @@ function handleDrop(targetIndex: number) {
   items.splice(targetIndex, 0, draggedItem)
 
   // 按新顺序为每个组分配新的优先级
-  // 同组的别名保持相同的优先级（被拖动的别名单独成组）
+  // 同组的映射保持相同的优先级（被拖动的映射单独成组）
   const groupNewPriority = new Map<number, number>() // 原优先级 -> 新优先级
   let currentPriority = 1
 
@@ -263,12 +263,12 @@ function handleDrop(targetIndex: number) {
   const draggedOriginalPriority = originalPriorityMap.get(dragIndex)!
 
   items.forEach((alias, newIdx) => {
-    // 找到这个别名在原数组中的索引
+    // 找到这个映射在原数组中的索引
     const originalIdx = aliases.value.findIndex(a => a === alias)
     const originalPriority = originalIdx >= 0 ? originalPriorityMap.get(originalIdx)! : alias.priority
 
     if (alias === draggedItem) {
-      // 被拖动的别名是独立的新组，获得当前优先级
+      // 被拖动的映射是独立的新组，获得当前优先级
       alias.priority = currentPriority
       currentPriority++
     } else {
@@ -318,11 +318,11 @@ async function handleSubmit() {
 
   submitting.value = true
   try {
-    // 过滤掉空的别名
+    // 过滤掉空的映射
     const validAliases = aliases.value.filter(a => a.name.trim())
 
     await updateModel(props.providerId, props.model.id, {
-      provider_model_aliases: validAliases.length > 0 ? validAliases : null
+      provider_model_mappings: validAliases.length > 0 ? validAliases : null
     })
 
     showSuccess('映射配置已保存')

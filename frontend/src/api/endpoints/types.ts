@@ -244,18 +244,21 @@ export interface ConcurrencyStatus {
   key_max_concurrent?: number
 }
 
-export interface ProviderModelAlias {
+export interface ProviderModelMapping {
   name: string
   priority: number  // 优先级（数字越小优先级越高）
   api_formats?: string[]  // 作用域（适用的 API 格式），为空表示对所有格式生效
 }
+
+// 保留别名以保持向后兼容
+export type ProviderModelAlias = ProviderModelMapping
 
 export interface Model {
   id: string
   provider_id: string
   global_model_id?: string  // 关联的 GlobalModel ID
   provider_model_name: string  // Provider 侧的主模型名称
-  provider_model_aliases?: ProviderModelAlias[] | null  // 模型名称别名列表（带优先级）
+  provider_model_mappings?: ProviderModelMapping[] | null  // 模型名称映射列表（带优先级）
   // 原始配置值（可能为空，为空时使用 GlobalModel 默认值）
   price_per_request?: number | null  // 按次计费价格
   tiered_pricing?: TieredPricingConfig | null  // 阶梯计费配置
@@ -285,7 +288,7 @@ export interface Model {
 
 export interface ModelCreate {
   provider_model_name: string  // Provider 侧的主模型名称
-  provider_model_aliases?: ProviderModelAlias[]  // 模型名称别名列表（带优先级）
+  provider_model_mappings?: ProviderModelMapping[]  // 模型名称映射列表（带优先级）
   global_model_id: string  // 关联的 GlobalModel ID（必填）
   // 计费配置（可选，为空时使用 GlobalModel 默认值）
   price_per_request?: number  // 按次计费价格
@@ -302,7 +305,7 @@ export interface ModelCreate {
 
 export interface ModelUpdate {
   provider_model_name?: string
-  provider_model_aliases?: ProviderModelAlias[] | null  // 模型名称别名列表（带优先级）
+  provider_model_mappings?: ProviderModelMapping[] | null  // 模型名称映射列表（带优先级）
   global_model_id?: string
   price_per_request?: number | null  // 按次计费价格（null 表示清空/使用默认值）
   tiered_pricing?: TieredPricingConfig | null  // 阶梯计费配置

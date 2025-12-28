@@ -449,7 +449,17 @@ interface UpstreamModelGroup {
 }
 
 const groupedAvailableUpstreamModels = computed<UpstreamModelGroup[]>(() => {
+  // 收集当前表单已添加的名称
   const addedNames = new Set(formData.value.aliases.map(a => a.name.trim()))
+
+  // 收集所有已存在的映射名称（包括主模型名和映射名称）
+  for (const m of props.models) {
+    addedNames.add(m.provider_model_name)
+    for (const mapping of m.provider_model_mappings ?? []) {
+      if (mapping.name) addedNames.add(mapping.name)
+    }
+  }
+
   const availableModels = filteredUpstreamModels.value.filter(m => !addedNames.has(m.id))
 
   const groups = new Map<string, UpstreamModelGroup>()

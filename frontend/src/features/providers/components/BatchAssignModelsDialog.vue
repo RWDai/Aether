@@ -433,11 +433,17 @@ const availableGlobalModels = computed(() => {
   )
 })
 
-// 计算可添加的上游模型（排除已关联的）
+// 计算可添加的上游模型（排除已关联的，包括主模型名和映射名称）
 const availableUpstreamModelsBase = computed(() => {
-  const existingModelNames = new Set(
-    existingModels.value.map(m => m.provider_model_name)
-  )
+  const existingModelNames = new Set<string>()
+  for (const m of existingModels.value) {
+    // 主模型名
+    existingModelNames.add(m.provider_model_name)
+    // 映射名称
+    for (const mapping of m.provider_model_mappings ?? []) {
+      if (mapping.name) existingModelNames.add(mapping.name)
+    }
+  }
   return upstreamModels.value.filter(m => !existingModelNames.has(m.id))
 })
 

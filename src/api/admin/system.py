@@ -119,6 +119,13 @@ async def import_users(request: Request, db: Session = Depends(get_db)):
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
+@router.post("/smtp/test")
+async def test_smtp(request: Request, db: Session = Depends(get_db)):
+    """测试 SMTP 连接（管理员）"""
+    adapter = AdminTestSmtpAdapter()
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+
+
 # -------- 系统设置适配器 --------
 
 
@@ -1084,3 +1091,63 @@ class AdminImportUsersAdapter(AdminApiAdapter):
         except Exception as e:
             db.rollback()
             raise InvalidRequestException(f"导入失败: {str(e)}")
+
+
+class AdminTestSmtpAdapter(AdminApiAdapter):
+    async def handle(self, context):  # type: ignore[override]
+        """测试 SMTP 连接"""
+        from src.services.system.config import ConfigService
+        from src.services.verification.email_sender import EmailSenderService
+
+        db = context.db
+        payload = context.ensure_json_body() or {}
+
+        # 前端可传入未保存的配置，优先使用前端值，否则回退数据库
+        config = {
+            "smtp_host": payload.get("smtp_host") or ConfigService.get_config(db, "smtp_host"),
+            "smtp_port": payload.get("smtp_port") or ConfigService.get_config(db, "smtp_port", default=587),
+            "smtp_user": payload.get("smtp_user") or ConfigService.get_config(db, "smtp_user"),
+            "smtp_password": payload.get("smtp_password") or ConfigService.get_config(db, "smtp_password"),
+            "smtp_use_tls": payload.get("smtp_use_tls")
+            if payload.get("smtp_use_tls") is not None
+            else ConfigService.get_config(db, "smtp_use_tls", default=True),
+            "smtp_use_ssl": payload.get("smtp_use_ssl")
+            if payload.get("smtp_use_ssl") is not None
+            else ConfigService.get_config(db, "smtp_use_ssl", default=False),
+            "smtp_from_email": payload.get("smtp_from_email")
+            or ConfigService.get_config(db, "smtp_from_email"),
+            "smtp_from_name": payload.get("smtp_from_name")
+            or ConfigService.get_config(db, "smtp_from_name", default="Aether"),
+        }
+
+        # 验证必要配置
+        missing_fields = [
+            field for field in ["smtp_host", "smtp_user", "smtp_password", "smtp_from_email"] if not config.get(field)
+        ]
+        if missing_fields:
+            return {
+                "success": False,
+                "message": f"SMTP 配置不完整，请检查 {', '.join(missing_fields)}"
+            }
+
+        # 测试连接
+        try:
+            success, error_msg = await EmailSenderService.test_smtp_connection(
+                db=db, override_config=config
+            )
+
+            if success:
+                return {
+                    "success": True,
+                    "message": "SMTP 连接测试成功"
+                }
+            else:
+                return {
+                    "success": False,
+                    "message": f"SMTP 连接测试失败: {error_msg}"
+                }
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"SMTP 连接测试失败: {str(e)}"
+            }

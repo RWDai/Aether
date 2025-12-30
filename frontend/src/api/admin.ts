@@ -386,5 +386,14 @@ export const adminApi = {
       { provider_id: providerId, api_key_id: apiKeyId }
     )
     return response.data
+  },
+
+  // 测试 SMTP 连接，支持传入未保存的配置
+  async testSmtpConnection(config: Record<string, any> = {}): Promise<{ success: boolean; message: string }> {
+    const response = await apiClient.post<{ success: boolean; message: string }>(
+      '/api/admin/system/smtp/test',
+      config
+    )
+    return response.data
   }
 }

@@ -374,8 +374,6 @@ import {
 } from '@/api/endpoints'
 import { useUpstreamModelsCache, type UpstreamModel } from '../composables/useUpstreamModelsCache'
 
-const { fetchModels: fetchCachedModels, clearCache, getCachedModels } = useUpstreamModelsCache()
-
 const props = defineProps<{
   open: boolean
   providerId: string
@@ -387,6 +385,8 @@ const emit = defineEmits<{
   'update:open': [value: boolean]
   'changed': []
 }>()
+
+const { fetchModels: fetchCachedModels, clearCache, getCachedModels } = useUpstreamModelsCache()
 
 const { error: showError, success } = useToast()
 

@@ -126,8 +126,14 @@
               :disabled="testingModelName === model.global_model_name"
               @click.stop="testModelConnection(model)"
             >
-              <Loader2 v-if="testingModelName === model.global_model_name" class="w-3.5 h-3.5 animate-spin" />
-              <Play v-else class="w-3.5 h-3.5" />
+              <Loader2
+                v-if="testingModelName === model.global_model_name"
+                class="w-3.5 h-3.5 animate-spin"
+              />
+              <Play
+                v-else
+                class="w-3.5 h-3.5"
+              />
             </Button>
           </div>
         </div>

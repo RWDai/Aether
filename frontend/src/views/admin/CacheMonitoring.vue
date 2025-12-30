@@ -1057,7 +1057,10 @@ onBeforeUnmount(() => {
             <span class="text-xs text-muted-foreground hidden sm:inline">分析用户请求间隔，推荐合适的缓存 TTL</span>
           </div>
           <div class="flex flex-wrap items-center gap-2">
-            <Select v-model="analysisHours" v-model:open="analysisHoursSelectOpen">
+            <Select
+              v-model="analysisHours"
+              v-model:open="analysisHoursSelectOpen"
+            >
               <SelectTrigger class="w-24 sm:w-28 h-8">
                 <SelectValue placeholder="时间段" />
               </SelectTrigger>

@@ -98,12 +98,27 @@
 
         <!-- 提示信息 -->
         <p
-          v-if="!isDemo"
+          v-if="!isDemo && !allowRegistration"
           class="text-xs text-slate-400 dark:text-muted-foreground/80"
         >
           如需开通账户，请联系管理员配置访问权限
         </p>
       </form>
+
+      <!-- 注册链接 -->
+      <div
+        v-if="allowRegistration"
+        class="mt-4 text-center text-sm"
+      >
+        还没有账户？
+        <Button
+          variant="link"
+          class="h-auto p-0"
+          @click="handleSwitchToRegister"
+        >
+          立即注册
+        </Button>
+      </div>
     </div>
 
     <template #footer>
@@ -124,10 +139,18 @@
       </Button>
     </template>
   </Dialog>
+
+  <!-- Register Dialog -->
+  <RegisterDialog
+    v-model:open="showRegisterDialog"
+    :require-email-verification="requireEmailVerification"
+    @success="handleRegisterSuccess"
+    @switch-to-login="handleSwitchToLogin"
+  />
 </template>
 
 <script setup lang="ts">
-import { ref, watch, computed } from 'vue'
+import { ref, watch, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Dialog } from '@/components/ui'
 import Button from '@/components/ui/button.vue'
@@ -136,6 +159,8 @@ import Label from '@/components/ui/label.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useToast } from '@/composables/useToast'
 import { isDemoMode, DEMO_ACCOUNTS } from '@/config/demo'
+import RegisterDialog from './RegisterDialog.vue'
+import { authApi } from '@/api/auth'
 
 const props = defineProps<{
   modelValue: boolean
@@ -151,6 +176,9 @@ const { success: showSuccess, warning: showWarning, error: showError } = useToas
 
 const isOpen = ref(props.modelValue)
 const isDemo = computed(() => isDemoMode())
+const showRegisterDialog = ref(false)
+const requireEmailVerification = ref(false)
+const allowRegistration = ref(false) // 由系统配置控制，默认关闭
 
 watch(() => props.modelValue, (val) => {
   isOpen.value = val
@@ -201,4 +229,33 @@ async function handleLogin() {
     showError(authStore.error || '登录失败，请检查邮箱和密码')
   }
 }
+
+function handleSwitchToRegister() {
+  isOpen.value = false
+  showRegisterDialog.value = true
+}
+
+function handleRegisterSuccess() {
+  showRegisterDialog.value = false
+  showSuccess('注册成功！请登录')
+  isOpen.value = true
+}
+
+function handleSwitchToLogin() {
+  showRegisterDialog.value = false
+  isOpen.value = true
+}
+
+// Load registration settings on mount
+onMounted(async () => {
+  try {
+    const settings = await authApi.getRegistrationSettings()
+    allowRegistration.value = !!settings.enable_registration
+    requireEmailVerification.value = !!settings.require_email_verification
+  } catch (error) {
+    // If获取失败，保持默认：关闭注册 & 关闭邮箱验证
+    allowRegistration.value = false
+    requireEmailVerification.value = false
+  }
+})
 </script>

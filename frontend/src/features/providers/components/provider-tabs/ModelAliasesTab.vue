@@ -131,8 +131,14 @@
                 :disabled="testingMapping === `${group.model.id}-${group.apiFormatsKey}-${mapping.name}`"
                 @click="testMapping(group, mapping)"
               >
-                <Loader2 v-if="testingMapping === `${group.model.id}-${group.apiFormatsKey}-${mapping.name}`" class="w-3 h-3 animate-spin" />
-                <Play v-else class="w-3 h-3" />
+                <Loader2
+                  v-if="testingMapping === `${group.model.id}-${group.apiFormatsKey}-${mapping.name}`"
+                  class="w-3 h-3 animate-spin"
+                />
+                <Play
+                  v-else
+                  class="w-3 h-3"
+                />
               </Button>
             </div>
           </div>

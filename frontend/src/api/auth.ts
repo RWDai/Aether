@@ -31,6 +31,45 @@ export interface UserStats {
   [key: string]: unknown // 允许扩展其他统计数据
 }
 
+export interface SendVerificationCodeRequest {
+  email: string
+}
+
+export interface SendVerificationCodeResponse {
+  message: string
+  success: boolean
+  expire_minutes?: number
+}
+
+export interface VerifyEmailRequest {
+  email: string
+  code: string
+}
+
+export interface VerifyEmailResponse {
+  message: string
+  success: boolean
+}
+
+export interface RegisterRequest {
+  email: string
+  username: string
+  password: string
+}
+
+export interface RegisterResponse {
+  user_id: string
+  email: string
+  username: string
+  message: string
+}
+
+export interface RegistrationSettingsResponse {
+  enable_registration: boolean
+  require_email_verification: boolean
+  verification_code_expire_minutes?: number
+}
+
 export interface User {
   id: string // UUID
   username: string
@@ -86,6 +125,34 @@ export const authApi = {
     if (response.data.refresh_token) {
       localStorage.setItem('refresh_token', response.data.refresh_token)
     }
+    return response.data
+  },
+
+  async sendVerificationCode(email: string): Promise<SendVerificationCodeResponse> {
+    const response = await apiClient.post<SendVerificationCodeResponse>(
+      '/api/auth/send-verification-code',
+      { email }
+    )
+    return response.data
+  },
+
+  async verifyEmail(email: string, code: string): Promise<VerifyEmailResponse> {
+    const response = await apiClient.post<VerifyEmailResponse>(
+      '/api/auth/verify-email',
+      { email, code }
+    )
+    return response.data
+  },
+
+  async register(data: RegisterRequest): Promise<RegisterResponse> {
+    const response = await apiClient.post<RegisterResponse>('/api/auth/register', data)
+    return response.data
+  },
+
+  async getRegistrationSettings(): Promise<RegistrationSettingsResponse> {
+    const response = await apiClient.get<RegistrationSettingsResponse>(
+      '/api/auth/registration-settings'
+    )
     return response.data
   }
 }

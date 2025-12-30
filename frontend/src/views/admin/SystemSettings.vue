@@ -185,6 +185,218 @@
         </div>
       </CardSection>
 
+      <!-- SMTP 邮件配置 -->
+      <CardSection
+        title="SMTP 邮件配置"
+        description="配置 SMTP 服务用于发送验证码邮件"
+      >
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div>
+            <Label
+              for="smtp-host"
+              class="block text-sm font-medium"
+            >
+              SMTP 服务器地址
+            </Label>
+            <Input
+              id="smtp-host"
+              v-model="systemConfig.smtp_host"
+              type="text"
+              placeholder="smtp.gmail.com"
+              class="mt-1"
+            />
+            <p class="mt-1 text-xs text-muted-foreground">
+              邮件服务器地址
+            </p>
+          </div>
+
+          <div>
+            <Label
+              for="smtp-port"
+              class="block text-sm font-medium"
+            >
+              SMTP 端口
+            </Label>
+            <Input
+              id="smtp-port"
+              v-model.number="systemConfig.smtp_port"
+              type="number"
+              placeholder="587"
+              class="mt-1"
+            />
+            <p class="mt-1 text-xs text-muted-foreground">
+              常用端口: 587 (TLS), 465 (SSL), 25 (非加密)
+            </p>
+          </div>
+
+          <div>
+            <Label
+              for="smtp-user"
+              class="block text-sm font-medium"
+            >
+              SMTP 用户名
+            </Label>
+            <Input
+              id="smtp-user"
+              v-model="systemConfig.smtp_user"
+              type="text"
+              placeholder="your-email@example.com"
+              class="mt-1"
+            />
+            <p class="mt-1 text-xs text-muted-foreground">
+              通常是您的邮箱地址
+            </p>
+          </div>
+
+          <div>
+            <Label
+              for="smtp-password"
+              class="block text-sm font-medium"
+            >
+              SMTP 密码
+            </Label>
+            <Input
+              id="smtp-password"
+              v-model="systemConfig.smtp_password"
+              type="password"
+              placeholder="********"
+              class="mt-1"
+            />
+            <p class="mt-1 text-xs text-muted-foreground">
+              邮箱密码或应用专用密码
+            </p>
+          </div>
+
+          <div>
+            <Label
+              for="smtp-from-email"
+              class="block text-sm font-medium"
+            >
+              发件人邮箱
+            </Label>
+            <Input
+              id="smtp-from-email"
+              v-model="systemConfig.smtp_from_email"
+              type="email"
+              placeholder="noreply@example.com"
+              class="mt-1"
+            />
+            <p class="mt-1 text-xs text-muted-foreground">
+              显示为发件人的邮箱地址
+            </p>
+          </div>
+
+          <div>
+            <Label
+              for="smtp-from-name"
+              class="block text-sm font-medium"
+            >
+              发件人名称
+            </Label>
+            <Input
+              id="smtp-from-name"
+              v-model="systemConfig.smtp_from_name"
+              type="text"
+              placeholder="Aether"
+              class="mt-1"
+            />
+            <p class="mt-1 text-xs text-muted-foreground">
+              显示为发件人的名称
+            </p>
+          </div>
+
+          <div>
+            <Label
+              for="verification-code-expire"
+              class="block text-sm font-medium"
+            >
+              验证码有效期（分钟）
+            </Label>
+            <Input
+              id="verification-code-expire"
+              v-model.number="systemConfig.verification_code_expire_minutes"
+              type="number"
+              placeholder="30"
+              class="mt-1"
+            />
+            <p class="mt-1 text-xs text-muted-foreground">
+              验证码的有效时间
+            </p>
+          </div>
+
+          <div class="flex items-center h-full">
+            <div class="flex items-center space-x-2">
+              <Checkbox
+                id="smtp-use-tls"
+                v-model:checked="systemConfig.smtp_use_tls"
+              />
+              <div>
+                <Label
+                  for="smtp-use-tls"
+                  class="cursor-pointer"
+                >
+                  使用 TLS 加密
+                </Label>
+                <p class="text-xs text-muted-foreground">
+                  推荐开启以提高安全性
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div class="flex items-center h-full">
+            <div class="flex items-center space-x-2">
+              <Checkbox
+                id="smtp-use-ssl"
+                v-model:checked="systemConfig.smtp_use_ssl"
+              />
+              <div>
+                <Label
+                  for="smtp-use-ssl"
+                  class="cursor-pointer"
+                >
+                  使用 SSL 加密 (465)
+                </Label>
+                <p class="text-xs text-muted-foreground">
+                  部分服务需要隐式 SSL，一般使用端口 465
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="mt-4 flex gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            :disabled="testSmtpLoading"
+            @click="handleTestSmtp"
+          >
+            {{ testSmtpLoading ? '测试中...' : '测试 SMTP 连接' }}
+          </Button>
+        </div>
+
+        <div
+          v-if="smtpTestResult"
+          class="mt-4 p-4 rounded-lg"
+          :class="smtpTestResult.success ? 'bg-green-50 dark:bg-green-950' : 'bg-destructive/10'"
+        >
+          <p
+            class="text-sm font-medium"
+            :class="smtpTestResult.success ? 'text-green-700 dark:text-green-300' : 'text-destructive'"
+          >
+            {{ smtpTestResult.success ? '✓ SMTP 连接测试成功' : '✗ SMTP 连接测试失败' }}
+          </p>
+          <p
+            v-if="smtpTestResult.message"
+            class="text-xs mt-1"
+            :class="smtpTestResult.success ? 'text-green-600 dark:text-green-400' : 'text-destructive'"
+          >
+            {{ smtpTestResult.message }}
+          </p>
+        </div>
+      </CardSection>
+
       <!-- 独立余额 Key 过期管理 -->
       <CardSection
         title="独立余额 Key 过期管理"
@@ -464,7 +676,6 @@
           </div>
         </div>
       </CardSection>
-
     </div>
 
     <!-- 导入配置对话框 -->
@@ -798,6 +1009,16 @@ interface SystemConfig {
   // 用户注册
   enable_registration: boolean
   require_email_verification: boolean
+  // SMTP 邮件配置
+  smtp_host: string | null
+  smtp_port: number
+  smtp_user: string | null
+  smtp_password: string | null
+  smtp_use_tls: boolean
+  smtp_use_ssl: boolean
+  smtp_from_email: string | null
+  smtp_from_name: string
+  verification_code_expire_minutes: number
   // 独立余额 Key 过期管理
   auto_delete_expired_keys: boolean
   // 日志记录
@@ -817,6 +1038,8 @@ interface SystemConfig {
 
 const loading = ref(false)
 const logLevelSelectOpen = ref(false)
+const testSmtpLoading = ref(false)
+const smtpTestResult = ref<{ success: boolean; message?: string } | null>(null)
 
 // 导出/导入相关
 const exportLoading = ref(false)
@@ -847,6 +1070,16 @@ const systemConfig = ref<SystemConfig>({
   // 用户注册
   enable_registration: false,
   require_email_verification: false,
+  // SMTP 邮件配置
+  smtp_host: null,
+  smtp_port: 587,
+  smtp_user: null,
+  smtp_password: null,
+  smtp_use_tls: true,
+  smtp_use_ssl: false,
+  smtp_from_email: null,
+  smtp_from_name: 'Aether',
+  verification_code_expire_minutes: 30,
   // 独立余额 Key 过期管理
   auto_delete_expired_keys: false,
   // 日志记录
@@ -903,6 +1136,16 @@ async function loadSystemConfig() {
       // 用户注册
       'enable_registration',
       'require_email_verification',
+      // SMTP 邮件配置
+      'smtp_host',
+      'smtp_port',
+      'smtp_user',
+      'smtp_password',
+      'smtp_use_tls',
+      'smtp_use_ssl',
+      'smtp_from_email',
+      'smtp_from_name',
+      'verification_code_expire_minutes',
       // 独立余额 Key 过期管理
       'auto_delete_expired_keys',
       // 日志记录
@@ -961,6 +1204,52 @@ async function saveSystemConfig() {
         key: 'require_email_verification',
         value: systemConfig.value.require_email_verification,
         description: '是否需要邮箱验证'
+      },
+      // SMTP 邮件配置
+      {
+        key: 'smtp_host',
+        value: systemConfig.value.smtp_host,
+        description: 'SMTP 服务器地址'
+      },
+      {
+        key: 'smtp_port',
+        value: systemConfig.value.smtp_port,
+        description: 'SMTP 端口'
+      },
+      {
+        key: 'smtp_user',
+        value: systemConfig.value.smtp_user,
+        description: 'SMTP 用户名'
+      },
+      {
+        key: 'smtp_password',
+        value: systemConfig.value.smtp_password,
+        description: 'SMTP 密码'
+      },
+      {
+        key: 'smtp_use_tls',
+        value: systemConfig.value.smtp_use_tls,
+        description: '是否使用 TLS 加密'
+      },
+      {
+        key: 'smtp_use_ssl',
+        value: systemConfig.value.smtp_use_ssl,
+        description: '是否使用 SSL 加密'
+      },
+      {
+        key: 'smtp_from_email',
+        value: systemConfig.value.smtp_from_email,
+        description: '发件人邮箱'
+      },
+      {
+        key: 'smtp_from_name',
+        value: systemConfig.value.smtp_from_name,
+        description: '发件人名称'
+      },
+      {
+        key: 'verification_code_expire_minutes',
+        value: systemConfig.value.verification_code_expire_minutes,
+        description: '验证码有效期（分钟）'
       },
       // 独立余额 Key 过期管理
       {
@@ -1038,6 +1327,41 @@ async function saveSystemConfig() {
     log.error('保存配置失败:', err)
   } finally {
     loading.value = false
+  }
+}
+
+// 测试 SMTP 连接
+async function handleTestSmtp() {
+  testSmtpLoading.value = true
+  smtpTestResult.value = null
+
+  try {
+    const result = await adminApi.testSmtpConnection({
+      smtp_host: systemConfig.value.smtp_host,
+      smtp_port: systemConfig.value.smtp_port,
+      smtp_user: systemConfig.value.smtp_user,
+      smtp_password: systemConfig.value.smtp_password,
+      smtp_use_tls: systemConfig.value.smtp_use_tls,
+      smtp_use_ssl: systemConfig.value.smtp_use_ssl,
+      smtp_from_email: systemConfig.value.smtp_from_email,
+      smtp_from_name: systemConfig.value.smtp_from_name
+    })
+    smtpTestResult.value = result
+
+    if (result.success) {
+      success('SMTP 连接测试成功')
+    } else {
+      error('SMTP 连接测试失败')
+    }
+  } catch (err: any) {
+    log.error('SMTP 连接测试失败:', err)
+    smtpTestResult.value = {
+      success: false,
+      message: err.response?.data?.detail || err.message || 'SMTP 连接测试失败'
+    }
+    error('SMTP 连接测试失败')
+  } finally {
+    testSmtpLoading.value = false
   }
 }
 

@@ -177,8 +177,8 @@
               <Label for="proxy_user">用户名（可选）</Label>
               <Input
                 :id="`proxy_user_${formId}`"
-                :name="`proxy_user_${formId}`"
                 v-model="form.proxy_username"
+                :name="`proxy_user_${formId}`"
                 placeholder="代理认证用户名"
                 autocomplete="off"
                 data-form-type="other"
@@ -191,8 +191,8 @@
               <Label :for="`proxy_pass_${formId}`">密码（可选）</Label>
               <Input
                 :id="`proxy_pass_${formId}`"
-                :name="`proxy_pass_${formId}`"
                 v-model="form.proxy_password"
+                :name="`proxy_pass_${formId}`"
                 type="text"
                 :placeholder="passwordPlaceholder"
                 autocomplete="off"

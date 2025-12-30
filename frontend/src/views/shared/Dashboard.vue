@@ -179,8 +179,8 @@
             </Badge>
           </div>
           <div
+            class="grid gap-2 sm:gap-3"
             :class="[
-              'grid gap-2 sm:gap-3',
               hasCacheData ? 'grid-cols-2 xl:grid-cols-4' : 'grid-cols-1 max-w-xs'
             ]"
           >

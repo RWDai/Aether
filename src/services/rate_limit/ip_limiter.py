@@ -28,6 +28,8 @@ class IPRateLimiter:
         "register": 3,  # 注册接口
         "api": 60,  # API 接口
         "public": 60,  # 公共接口
+        "verification_send": 3,  # 发送验证码接口
+        "verification_verify": 10,  # 验证验证码接口
     }
 
     @staticmethod

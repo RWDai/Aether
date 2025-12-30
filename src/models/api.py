@@ -123,6 +123,71 @@ class LogoutResponse(BaseModel):
     success: bool
 
 
+class SendVerificationCodeRequest(BaseModel):
+    """发送验证码请求"""
+
+    email: str = Field(..., min_length=3, max_length=255, description="邮箱地址")
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, v):
+        """验证邮箱格式"""
+        email_pattern = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
+        if not re.match(email_pattern, v):
+            raise ValueError("邮箱格式无效")
+        return v.lower()
+
+
+class SendVerificationCodeResponse(BaseModel):
+    """发送验证码响应"""
+
+    message: str
+    success: bool
+    expire_minutes: Optional[int] = None
+
+
+class VerifyEmailRequest(BaseModel):
+    """验证邮箱请求"""
+
+    email: str = Field(..., min_length=3, max_length=255, description="邮箱地址")
+    code: str = Field(..., min_length=6, max_length=6, description="6位验证码")
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, v):
+        """验证邮箱格式"""
+        email_pattern = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
+        if not re.match(email_pattern, v):
+            raise ValueError("邮箱格式无效")
+        return v.lower()
+
+    @classmethod
+    @field_validator("code")
+    def validate_code(cls, v):
+        """验证验证码格式"""
+        v = v.strip()
+        if not v.isdigit():
+            raise ValueError("验证码必须是6位数字")
+        if len(v) != 6:
+            raise ValueError("验证码必须是6位数字")
+        return v
+
+
+class VerifyEmailResponse(BaseModel):
+    """验证邮箱响应"""
+
+    message: str
+    success: bool
+
+
+class RegistrationSettingsResponse(BaseModel):
+    """注册设置响应（公开接口返回）"""
+
+    enable_registration: bool
+    require_email_verification: bool
+    verification_code_expire_minutes: Optional[int] = 30
+
+
 # ========== 用户管理 ==========
 class CreateUserRequest(BaseModel):
     """创建用户请求"""

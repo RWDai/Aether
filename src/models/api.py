@@ -4,7 +4,7 @@ API端点请求/响应模型定义
 
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -17,6 +17,7 @@ class LoginRequest(BaseModel):
 
     email: str = Field(..., min_length=3, max_length=255, description="邮箱地址")
     password: str = Field(..., min_length=1, max_length=128, description="密码")
+    auth_type: Literal["local", "ldap"] = Field(default="local", description="认证类型")
 
     @classmethod
     @field_validator("email")

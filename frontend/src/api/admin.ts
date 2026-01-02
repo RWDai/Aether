@@ -473,5 +473,30 @@ export const adminApi = {
       `/api/admin/system/email/templates/${templateType}/reset`
     )
     return response.data
+  },
+
+  // LDAP 配置相关
+  // 获取 LDAP 配置
+  async getLdapConfig(): Promise<any> {
+    const response = await apiClient.get<any>('/api/admin/ldap/config')
+    return response.data
+  },
+
+  // 更新 LDAP 配置
+  async updateLdapConfig(config: any): Promise<{ message: string }> {
+    const response = await apiClient.put<{ message: string }>(
+      '/api/admin/ldap/config',
+      config
+    )
+    return response.data
+  },
+
+  // 测试 LDAP 连接
+  async testLdapConnection(config?: any): Promise<{ success: boolean; message: string }> {
+    const response = await apiClient.post<{ success: boolean; message: string }>(
+      '/api/admin/ldap/test',
+      config || {}
+    )
+    return response.data
   }
 }

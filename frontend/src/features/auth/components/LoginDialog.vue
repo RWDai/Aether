@@ -66,19 +66,35 @@
         </div>
       </div>
 
+      <!-- 认证方式切换 -->
+      <Tabs
+        v-if="showAuthTypeTabs"
+        v-model="authType"
+        class="w-full"
+      >
+        <TabsList class="grid w-full grid-cols-2">
+          <TabsTrigger value="local">
+            本地登录
+          </TabsTrigger>
+          <TabsTrigger value="ldap">
+            LDAP 登录
+          </TabsTrigger>
+        </TabsList>
+      </Tabs>
+
       <!-- 登录表单 -->
       <form
         class="space-y-4"
         @submit.prevent="handleLogin"
       >
         <div class="space-y-2">
-          <Label for="login-email">邮箱</Label>
+          <Label for="login-email">{{ emailLabel }}</Label>
           <Input
             id="login-email"
             v-model="form.email"
-            type="email"
+            :type="authType === 'ldap' ? 'text' : 'email'"
             required
-            placeholder="hello@example.com"
+            :placeholder="authType === 'ldap' ? 'username 或 email' : 'hello@example.com'"
             autocomplete="off"
           />
         </div>
@@ -156,6 +172,9 @@ import { Dialog } from '@/components/ui'
 import Button from '@/components/ui/button.vue'
 import Input from '@/components/ui/input.vue'
 import Label from '@/components/ui/label.vue'
+import Tabs from '@/components/ui/tabs.vue'
+import TabsList from '@/components/ui/tabs-list.vue'
+import TabsTrigger from '@/components/ui/tabs-trigger.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useToast } from '@/composables/useToast'
 import { isDemoMode, DEMO_ACCOUNTS } from '@/config/demo'
@@ -179,6 +198,20 @@ const isDemo = computed(() => isDemoMode())
 const showRegisterDialog = ref(false)
 const requireEmailVerification = ref(false)
 const allowRegistration = ref(false) // 由系统配置控制，默认关闭
+
+// LDAP authentication settings
+const authType = ref<'local' | 'ldap'>('local')
+const localEnabled = ref(true)
+const ldapEnabled = ref(false)
+const ldapExclusive = ref(false)
+
+const showAuthTypeTabs = computed(() => {
+  return localEnabled.value && ldapEnabled.value && !ldapExclusive.value
+})
+
+const emailLabel = computed(() => {
+  return authType.value === 'ldap' ? '用户名/邮箱' : '邮箱'
+})
 
 watch(() => props.modelValue, (val) => {
   isOpen.value = val
@@ -212,7 +245,7 @@ async function handleLogin() {
     return
   }
 
-  const success = await authStore.login(form.value.email, form.value.password)
+  const success = await authStore.login(form.value.email, form.value.password, authType.value)
   if (success) {
     showSuccess('登录成功，正在跳转...')
 
@@ -246,16 +279,36 @@ function handleSwitchToLogin() {
   isOpen.value = true
 }
 
-// Load registration settings on mount
+// Load authentication and registration settings on mount
 onMounted(async () => {
   try {
-    const settings = await authApi.getRegistrationSettings()
-    allowRegistration.value = !!settings.enable_registration
-    requireEmailVerification.value = !!settings.require_email_verification
+    // Load registration settings
+    const regSettings = await authApi.getRegistrationSettings()
+    allowRegistration.value = !!regSettings.enable_registration
+    requireEmailVerification.value = !!regSettings.require_email_verification
+
+    // Load authentication settings
+    const authSettings = await authApi.getAuthSettings()
+    localEnabled.value = authSettings.local_enabled
+    ldapEnabled.value = authSettings.ldap_enabled
+    ldapExclusive.value = authSettings.ldap_exclusive
+
+    // Set default auth type based on settings
+    if (authSettings.ldap_exclusive) {
+      authType.value = 'ldap'
+    } else if (!authSettings.local_enabled && authSettings.ldap_enabled) {
+      authType.value = 'ldap'
+    } else {
+      authType.value = 'local'
+    }
   } catch (error) {
-    // If获取失败，保持默认：关闭注册 & 关闭邮箱验证
+    // If获取失败，保持默认：关闭注册 & 关闭邮箱验证 & 使用本地认证
     allowRegistration.value = false
     requireEmailVerification.value = false
+    localEnabled.value = true
+    ldapEnabled.value = false
+    ldapExclusive.value = false
+    authType.value = 'local'
   }
 })
 </script>

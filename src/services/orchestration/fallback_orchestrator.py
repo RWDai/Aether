@@ -543,7 +543,9 @@ class FallbackOrchestrator:
                 raise last_error
 
         # 所有组合都已尝试完毕，全部失败
-        self._raise_all_failed_exception(request_id, max_attempts, last_candidate, model_name, api_format_enum)
+        self._raise_all_failed_exception(
+            request_id, max_attempts, last_candidate, model_name, api_format_enum, last_error
+        )
 
     async def _try_candidate_with_retries(
         self,
@@ -565,6 +567,7 @@ class FallbackOrchestrator:
         provider = candidate.provider
         endpoint = candidate.endpoint
         max_retries_for_candidate = int(endpoint.max_retries) if candidate.is_cached else 1
+        last_error: Optional[Exception] = None
 
         for retry_index in range(max_retries_for_candidate):
             attempt_counter += 1
@@ -599,6 +602,7 @@ class FallbackOrchestrator:
                 return {"success": True, "response": response}
 
             except ExecutionError as exec_err:
+                last_error = exec_err.cause
                 action = await self._handle_candidate_error(
                     exec_err=exec_err,
                     candidate=candidate,
@@ -630,6 +634,7 @@ class FallbackOrchestrator:
             "success": False,
             "attempt_counter": attempt_counter,
             "max_attempts": max_attempts,
+            "error": last_error,
         }
 
     def _attach_metadata_to_error(
@@ -678,6 +683,7 @@ class FallbackOrchestrator:
         last_candidate: Optional[ProviderCandidate],
         model_name: str,
         api_format_enum: APIFormat,
+        last_error: Optional[Exception] = None,
     ) -> NoReturn:
         """所有组合都失败时抛出异常"""
         logger.error(f"  [{request_id}] 所有 {max_attempts} 个组合均失败")
@@ -693,9 +699,28 @@ class FallbackOrchestrator:
                 "api_format": api_format_enum.value,
             }
 
+        # 提取上游错误响应
+        upstream_status: Optional[int] = None
+        upstream_response: Optional[str] = None
+        if last_error:
+            # 从 httpx.HTTPStatusError 提取
+            if isinstance(last_error, httpx.HTTPStatusError):
+                upstream_status = last_error.response.status_code
+                try:
+                    upstream_response = last_error.response.text
+                except Exception:
+                    pass
+            # 从异常属性提取
+            elif hasattr(last_error, "upstream_status"):
+                upstream_status = getattr(last_error, "upstream_status", None)
+            if hasattr(last_error, "upstream_response"):
+                upstream_response = getattr(last_error, "upstream_response", None)
+
         raise ProviderNotAvailableException(
             f"所有Provider均不可用，已尝试{max_attempts}个组合",
             request_metadata=request_metadata,
+            upstream_status=upstream_status,
+            upstream_response=upstream_response,
         )
 
     async def execute_with_fallback(

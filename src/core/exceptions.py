@@ -547,11 +547,19 @@ class ErrorResponse:
         - 所有错误都记录到日志，通过错误 ID 关联
         """
         if isinstance(e, ProxyException):
+            details = e.details.copy() if e.details else {}
+            status_code = e.status_code
+            message = e.message
+            # 如果是 ProviderNotAvailableException 且有上游错误，直接透传上游信息
+            if isinstance(e, ProviderNotAvailableException) and e.upstream_response:
+                if e.upstream_status:
+                    status_code = e.upstream_status
+                message = e.upstream_response
             return ErrorResponse.create(
                 error_type=e.error_type,
-                message=e.message,
-                status_code=e.status_code,
-                details=e.details,
+                message=message,
+                status_code=status_code,
+                details=details if details else None,
             )
         elif isinstance(e, HTTPException):
             return ErrorResponse.create(

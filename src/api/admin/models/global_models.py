@@ -146,20 +146,25 @@ class AdminListGlobalModelsAdapter(AdminApiAdapter):
             search=self.search,
         )
 
-        # 为每个 GlobalModel 添加统计数据
+        # 一次性查询所有 GlobalModel 的 provider_count（优化 N+1 问题）
+        model_ids = [gm.id for gm in models]
+        provider_counts = {}
+        if model_ids:
+            count_results = (
+                context.db.query(
+                    Model.global_model_id, func.count(func.distinct(Model.provider_id))
+                )
+                .filter(Model.global_model_id.in_(model_ids))
+                .group_by(Model.global_model_id)
+                .all()
+            )
+            provider_counts = {gm_id: count for gm_id, count in count_results}
+
+        # 构建响应
         model_responses = []
         for gm in models:
-            # 统计关联的 Model 数量（去重 Provider）
-            provider_count = (
-                context.db.query(func.count(func.distinct(Model.provider_id)))
-                .filter(Model.global_model_id == gm.id)
-                .scalar()
-                or 0
-            )
-
             response = GlobalModelResponse.model_validate(gm)
-            response.provider_count = provider_count
-            # usage_count 直接从 GlobalModel 表读取，已在 model_validate 中自动映射
+            response.provider_count = provider_counts.get(gm.id, 0)
             model_responses.append(response)
 
         return GlobalModelListResponse(

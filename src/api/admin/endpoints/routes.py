@@ -206,6 +206,7 @@ class AdminCreateProviderEndpointAdapter(AdminApiAdapter):
             provider_id=self.provider_id,
             api_format=self.endpoint_data.api_format,
             base_url=self.endpoint_data.base_url,
+            custom_path=self.endpoint_data.custom_path,
             headers=self.endpoint_data.headers,
             timeout=self.endpoint_data.timeout,
             max_retries=self.endpoint_data.max_retries,

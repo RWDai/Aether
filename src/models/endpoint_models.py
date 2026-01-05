@@ -19,6 +19,7 @@ class ProviderEndpointCreate(BaseModel):
     provider_id: str = Field(..., description="Provider ID")
     api_format: str = Field(..., description="API 格式 (CLAUDE, OPENAI, CLAUDE_CLI, OPENAI_CLI)")
     base_url: str = Field(..., min_length=1, max_length=500, description="API 基础 URL")
+    custom_path: Optional[str] = Field(default=None, max_length=200, description="自定义请求路径")
 
     # 请求配置
     headers: Optional[Dict[str, str]] = Field(default=None, description="自定义请求头")
@@ -62,6 +63,7 @@ class ProviderEndpointUpdate(BaseModel):
     base_url: Optional[str] = Field(
         default=None, min_length=1, max_length=500, description="API 基础 URL"
     )
+    custom_path: Optional[str] = Field(default=None, max_length=200, description="自定义请求路径")
     headers: Optional[Dict[str, str]] = Field(default=None, description="自定义请求头")
     timeout: Optional[int] = Field(default=None, ge=10, le=600, description="超时时间（秒）")
     max_retries: Optional[int] = Field(default=None, ge=0, le=10, description="最大重试次数")
@@ -94,6 +96,7 @@ class ProviderEndpointResponse(BaseModel):
     # API 配置
     api_format: str
     base_url: str
+    custom_path: Optional[str] = None
 
     # 请求配置
     headers: Optional[Dict[str, str]] = None

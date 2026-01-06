@@ -515,6 +515,9 @@ class ProviderWithEndpointsSummary(BaseModel):
         default=0, description="不健康的端点数量（health_score < 0.5）"
     )
 
+    # 高级配置
+    config: Optional[Dict[str, Any]] = Field(default=None, description="Provider 配置")
+
     # 时间戳
     created_at: datetime
     updated_at: datetime

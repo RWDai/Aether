@@ -188,6 +188,7 @@ def _build_provider_summary(db: Session, provider: Provider) -> ProviderWithEndp
         unhealthy_endpoints=unhealthy_endpoints,
         api_formats=api_formats,
         endpoint_health_details=endpoint_health_details,
+        config=provider.config,
         created_at=provider.created_at,
         updated_at=provider.updated_at,
     )

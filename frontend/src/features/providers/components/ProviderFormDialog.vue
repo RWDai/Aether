@@ -160,6 +160,25 @@
           </div>
         </div>
       </div>
+
+      <!-- 高级配置 -->
+      <div class="space-y-4">
+        <h3 class="text-sm font-medium border-b pb-2">
+          高级配置
+        </h3>
+        <div class="flex items-center justify-between p-3 border rounded-lg">
+          <div class="space-y-0.5">
+            <Label class="text-sm font-medium">隐藏客户端 IP</Label>
+            <p class="text-xs text-muted-foreground">
+              开启后不会将客户端 IP 相关信息（如 X-Forwarded-For）透传给上游供应商
+            </p>
+          </div>
+          <Switch
+            :model-value="form.strip_ip_headers"
+            @update:model-value="(v) => form.strip_ip_headers = v"
+          />
+        </div>
+      </div>
     </form>
 
     <template #footer>
@@ -194,6 +213,7 @@ import {
   SelectValue,
   SelectContent,
   SelectItem,
+  Switch,
 } from '@/components/ui'
 import { Server, SquarePen } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
@@ -238,6 +258,8 @@ const form = ref({
   is_active: true,
   rate_limit: undefined as number | undefined,
   concurrent_limit: undefined as number | undefined,
+  // 高级配置
+  strip_ip_headers: false,
 })
 
 // 重置表单
@@ -257,6 +279,7 @@ function resetForm() {
     is_active: true,
     rate_limit: undefined,
     concurrent_limit: undefined,
+    strip_ip_headers: false,
   }
 }
 
@@ -281,6 +304,7 @@ function loadProviderData() {
     is_active: props.provider.is_active,
     rate_limit: undefined,
     concurrent_limit: undefined,
+    strip_ip_headers: props.provider.config?.strip_ip_headers ?? false,
   }
 }
 
@@ -304,8 +328,16 @@ const handleSubmit = async () => {
 
   loading.value = true
   try {
+    // 构建 config 对象
+    const config = {
+      strip_ip_headers: form.value.strip_ip_headers,
+    }
+
+    // 从 form 中排除 strip_ip_headers，构建 payload
+    const { strip_ip_headers: _, ...formWithoutConfig } = form.value
+
     const payload = {
-      ...form.value,
+      ...formWithoutConfig,
       rpm_limit:
         form.value.rpm_limit === undefined || form.value.rpm_limit === ''
           ? null
@@ -313,6 +345,8 @@ const handleSubmit = async () => {
       // 空字符串时不发送
       quota_last_reset_at: form.value.quota_last_reset_at || undefined,
       quota_expires_at: form.value.quota_expires_at || undefined,
+      // 添加 config 对象
+      config,
     }
 
     if (isEditMode.value && props.provider) {

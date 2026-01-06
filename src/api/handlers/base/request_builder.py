@@ -39,6 +39,36 @@ SENSITIVE_HEADERS: FrozenSet[str] = frozenset(
     }
 )
 
+# IP 相关头部 - 用于控制是否透传客户端 IP 信息给上游
+# 当 Provider 配置 strip_ip_headers=True 时，这些头部会被过滤
+IP_RELATED_HEADERS: FrozenSet[str] = frozenset(
+    {
+        "x-forwarded-for",
+        "x-real-ip",
+        "x-forwarded-host",
+        "x-forwarded-proto",
+        "x-forwarded-port",
+        "x-forwarded-scheme",
+        "forwarded",
+        "cf-connecting-ip",  # Cloudflare
+        "true-client-ip",  # Cloudflare/Akamai
+        "x-client-ip",
+        "x-cluster-client-ip",
+        "x-original-forwarded-for",
+        "x-originating-ip",
+        "proxy-client-ip",
+        "wl-proxy-client-ip",  # WebLogic
+        "http_x_forwarded_for",
+        "http_x_forwarded",
+        "http_x_cluster_client_ip",
+        "http_client_ip",
+        "http_forwarded_for",
+        "http_forwarded",
+        "http_via",
+        "remote_addr",
+    }
+)
+
 
 # ==============================================================================
 # 请求构建器
@@ -137,10 +167,20 @@ class PassthroughRequestBuilder(RequestBuilder):
     ) -> Dict[str, str]:
         """
         透传请求头 - 清理敏感头部（黑名单），透传其他所有头部
+
+        如果 Provider 配置了 strip_ip_headers=True，则同时过滤 IP 相关头部，
+        避免将客户端 IP 信息透传给上游供应商。
         """
         from src.core.api_format_metadata import get_auth_config, resolve_api_format
 
         headers: Dict[str, str] = {}
+
+        # 检查 Provider 是否配置了过滤 IP 头部
+        strip_ip_headers = False
+        provider = getattr(endpoint, "provider", None)
+        if provider:
+            provider_config = getattr(provider, "config", None) or {}
+            strip_ip_headers = provider_config.get("strip_ip_headers", False)
 
         # 1. 根据 API 格式自动设置认证头
         decrypted_key = crypto_service.decrypt(key.api_key)
@@ -166,6 +206,10 @@ class PassthroughRequestBuilder(RequestBuilder):
 
                 # 跳过敏感头部
                 if lower_name in SENSITIVE_HEADERS:
+                    continue
+
+                # 如果启用了 IP 头部过滤，跳过 IP 相关头部
+                if strip_ip_headers and lower_name in IP_RELATED_HEADERS:
                     continue
 
                 headers[name] = value

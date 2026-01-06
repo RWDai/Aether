@@ -222,8 +222,15 @@ export interface ProviderWithEndpointsSummary {
   unhealthy_endpoints: number
   api_formats: string[]
   endpoint_health_details: EndpointHealthDetail[]
+  config?: ProviderConfig
   created_at: string
   updated_at: string
+}
+
+// Provider 配置
+export interface ProviderConfig {
+  strip_ip_headers?: boolean  // 是否过滤 IP 相关头部，不透传给上游
+  [key: string]: unknown      // 其他配置
 }
 
 export interface HealthStatus {

@@ -11,9 +11,11 @@ from src.api.base.admin_adapter import AdminApiAdapter
 from src.api.base.pipeline import ApiRequestPipeline
 from src.core.enums import ProviderBillingType
 from src.core.exceptions import InvalidRequestException, NotFoundException
+from src.core.logger import logger
 from src.database import get_db
 from src.models.admin_requests import CreateProviderRequest, UpdateProviderRequest
 from src.models.database import Provider
+from src.services.cache.provider_cache import ProviderCacheService
 
 router = APIRouter(tags=["Provider CRUD"])
 pipeline = ApiRequestPipeline()
@@ -27,24 +29,114 @@ async def list_providers(
     is_active: Optional[bool] = None,
     db: Session = Depends(get_db),
 ):
+    """
+    获取提供商列表
+
+    获取所有提供商的基本信息列表，支持分页和状态过滤。
+
+    **查询参数**:
+    - `skip`: 跳过的记录数，用于分页，默认为 0
+    - `limit`: 返回的最大记录数，范围 1-500，默认为 100
+    - `is_active`: 可选的活跃状态过滤，true 仅返回活跃提供商，false 返回禁用提供商，不传则返回全部
+
+    **返回字段**:
+    - `id`: 提供商 ID
+    - `name`: 提供商名称（唯一标识）
+    - `display_name`: 显示名称
+    - `api_format`: API 格式（如 claude、openai、gemini 等）
+    - `base_url`: API 基础 URL
+    - `api_key`: API 密钥（脱敏显示）
+    - `priority`: 优先级
+    - `is_active`: 是否活跃
+    - `created_at`: 创建时间
+    - `updated_at`: 更新时间
+    """
     adapter = AdminListProvidersAdapter(skip=skip, limit=limit, is_active=is_active)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.post("/")
 async def create_provider(request: Request, db: Session = Depends(get_db)):
+    """
+    创建新提供商
+
+    创建一个新的 AI 模型提供商配置。
+
+    **请求体字段**:
+    - `name`: 提供商名称（必填，唯一，用于系统标识）
+    - `display_name`: 显示名称（必填）
+    - `description`: 描述信息（可选）
+    - `website`: 官网地址（可选）
+    - `billing_type`: 计费类型（可选，pay_as_you_go/subscription/prepaid，默认 pay_as_you_go）
+    - `monthly_quota_usd`: 月度配额（美元）（可选）
+    - `quota_reset_day`: 配额重置日期（1-31）（可选）
+    - `quota_last_reset_at`: 上次配额重置时间（可选）
+    - `quota_expires_at`: 配额过期时间（可选）
+    - `rpm_limit`: 每分钟请求数限制（可选）
+    - `provider_priority`: 提供商优先级（数字越小优先级越高，默认 100）
+    - `is_active`: 是否启用（默认 true）
+    - `concurrent_limit`: 并发限制（可选）
+    - `config`: 额外配置信息（JSON，可选）
+
+    **返回字段**:
+    - `id`: 新创建的提供商 ID
+    - `name`: 提供商名称
+    - `display_name`: 显示名称
+    - `message`: 成功提示信息
+    """
     adapter = AdminCreateProviderAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.put("/{provider_id}")
 async def update_provider(provider_id: str, request: Request, db: Session = Depends(get_db)):
+    """
+    更新提供商配置
+
+    更新指定提供商的配置信息。只需传入需要更新的字段，未传入的字段保持不变。
+
+    **路径参数**:
+    - `provider_id`: 提供商 ID
+
+    **请求体字段**（所有字段可选）:
+    - `name`: 提供商名称
+    - `display_name`: 显示名称
+    - `description`: 描述信息
+    - `website`: 官网地址
+    - `billing_type`: 计费类型（pay_as_you_go/subscription/prepaid）
+    - `monthly_quota_usd`: 月度配额（美元）
+    - `quota_reset_day`: 配额重置日期（1-31）
+    - `quota_last_reset_at`: 上次配额重置时间
+    - `quota_expires_at`: 配额过期时间
+    - `rpm_limit`: 每分钟请求数限制
+    - `provider_priority`: 提供商优先级
+    - `is_active`: 是否启用
+    - `concurrent_limit`: 并发限制
+    - `config`: 额外配置信息（JSON）
+
+    **返回字段**:
+    - `id`: 提供商 ID
+    - `name`: 提供商名称
+    - `is_active`: 是否启用
+    - `message`: 成功提示信息
+    """
     adapter = AdminUpdateProviderAdapter(provider_id=provider_id)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.delete("/{provider_id}")
 async def delete_provider(provider_id: str, request: Request, db: Session = Depends(get_db)):
+    """
+    删除提供商
+
+    删除指定的提供商。注意：此操作会级联删除关联的端点、密钥和模型配置。
+
+    **路径参数**:
+    - `provider_id`: 提供商 ID
+
+    **返回字段**:
+    - `message`: 删除成功提示信息
+    """
     adapter = AdminDeleteProviderAdapter(provider_id=provider_id)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -136,7 +228,6 @@ class AdminCreateProviderAdapter(AdminApiAdapter):
                 rpm_limit=validated_data.rpm_limit,
                 provider_priority=validated_data.provider_priority,
                 is_active=validated_data.is_active,
-                rate_limit=validated_data.rate_limit,
                 concurrent_limit=validated_data.concurrent_limit,
                 config=validated_data.config,
             )
@@ -206,6 +297,11 @@ class AdminUpdateProviderAdapter(AdminApiAdapter):
             provider.updated_at = datetime.now(timezone.utc)
             db.commit()
             db.refresh(provider)
+
+            # 如果更新了 billing_type，清除缓存
+            if "billing_type" in update_data:
+                await ProviderCacheService.invalidate_provider_cache(provider.id)
+                logger.debug(f"已清除 Provider 缓存: {provider.id}")
 
             context.add_audit_metadata(
                 action="update_provider",

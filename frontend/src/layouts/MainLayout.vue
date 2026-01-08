@@ -295,6 +295,15 @@
     </template>
 
     <RouterView />
+
+    <!-- 更新提示弹窗 -->
+    <UpdateDialog
+      v-if="updateInfo"
+      v-model="showUpdateDialog"
+      :current-version="updateInfo.current_version"
+      :latest-version="updateInfo.latest_version || ''"
+      :release-url="updateInfo.release_url"
+    />
   </AppShell>
 </template>
 
@@ -304,14 +313,17 @@ import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useDarkMode } from '@/composables/useDarkMode'
 import { isDemoMode } from '@/config/demo'
+import { adminApi, type CheckUpdateResponse } from '@/api/admin'
 import Button from '@/components/ui/button.vue'
 import AppShell from '@/components/layout/AppShell.vue'
 import SidebarNav from '@/components/layout/SidebarNav.vue'
 import HeaderLogo from '@/components/HeaderLogo.vue'
+import UpdateDialog from '@/components/common/UpdateDialog.vue'
 import {
   Home,
   Users,
   Key,
+  KeyRound,
   BarChart3,
   Cog,
   Settings,
@@ -344,10 +356,55 @@ const showAuthError = ref(false)
 const mobileMenuOpen = ref(false)
 let authCheckInterval: number | null = null
 
+// 更新检查相关
+const showUpdateDialog = ref(false)
+const updateInfo = ref<CheckUpdateResponse | null>(null)
+
 // 路由变化时自动关闭移动端菜单
 watch(() => route.path, () => {
   mobileMenuOpen.value = false
 })
+
+// 检查是否应该显示更新提示
+function shouldShowUpdatePrompt(latestVersion: string): boolean {
+  const ignoreKey = 'aether_update_ignore'
+  const ignoreData = localStorage.getItem(ignoreKey)
+  if (!ignoreData) return true
+
+  try {
+    const { version, until } = JSON.parse(ignoreData)
+    // 如果忽略的是同一版本且未过期，则不显示
+    if (version === latestVersion && Date.now() < until) {
+      return false
+    }
+  } catch {
+    // 解析失败，显示提示
+  }
+  return true
+}
+
+// 检查更新
+async function checkForUpdate() {
+  // 只有管理员才检查更新
+  if (authStore.user?.role !== 'admin') return
+
+  // 同一会话内只检查一次
+  const sessionKey = 'aether_update_checked'
+  if (sessionStorage.getItem(sessionKey)) return
+  sessionStorage.setItem(sessionKey, '1')
+
+  try {
+    const result = await adminApi.checkUpdate()
+    if (result.has_update && result.latest_version) {
+      if (shouldShowUpdatePrompt(result.latest_version)) {
+        updateInfo.value = result
+        showUpdateDialog.value = true
+      }
+    }
+  } catch {
+    // 静默失败，不影响用户体验
+  }
+}
 
 onMounted(() => {
   authCheckInterval = setInterval(() => {
@@ -355,6 +412,11 @@ onMounted(() => {
       showAuthError.value = true
     }
   }, 5000)
+
+  // 延迟检查更新，避免影响页面加载
+  setTimeout(() => {
+    checkForUpdate()
+  }, 2000)
 })
 
 onUnmounted(() => {
@@ -398,6 +460,7 @@ const navigation = computed(() => {
       items: [
         { name: '模型目录', href: '/dashboard/models', icon: Box },
         { name: 'API 密钥', href: '/dashboard/api-keys', icon: Key },
+        { name: '访问令牌', href: '/dashboard/management-tokens', icon: KeyRound },
       ]
     },
     {
@@ -423,6 +486,7 @@ const navigation = computed(() => {
         { name: '提供商', href: '/admin/providers', icon: FolderTree },
         { name: '模型管理', href: '/admin/models', icon: Layers },
         { name: '独立密钥', href: '/admin/keys', icon: Key },
+        { name: '访问令牌', href: '/admin/management-tokens', icon: KeyRound },
         { name: '使用记录', href: '/admin/usage', icon: BarChart3 },
       ]
     },

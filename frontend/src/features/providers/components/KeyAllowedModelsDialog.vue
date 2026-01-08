@@ -32,11 +32,11 @@
             v-for="modelName in selectedModels"
             :key="modelName"
             variant="secondary"
-            class="text-[11px] px-2 py-0.5 bg-background border-border/60 shadow-sm"
+            class="text-[11px] px-2 py-0.5 bg-background border-border/60 shadow-sm text-foreground dark:text-white"
           >
             {{ getModelLabel(modelName) }}
             <button
-              class="ml-0.5 hover:text-destructive focus:outline-none"
+              class="ml-0.5 hover:text-destructive focus:outline-none text-foreground dark:text-white"
               @click.stop="toggleModel(modelName, false)"
             >
               &times;

@@ -15,6 +15,7 @@ class ApiMode(str, Enum):
     ADMIN = "admin"
     USER = "user"  # JWT 认证的普通用户（不要求管理员权限）
     PUBLIC = "public"
+    MANAGEMENT = "management"  # Management Token 认证
 
 
 class ApiAdapter(ABC):

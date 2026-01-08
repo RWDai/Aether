@@ -31,6 +31,22 @@ async def get_model_catalog(
     request: Request,
     db: Session = Depends(get_db),
 ) -> ModelCatalogResponse:
+    """
+    获取统一模型目录
+
+    基于 GlobalModel 聚合所有活跃模型及其关联提供商的信息，返回完整的模型目录视图。
+
+    **返回字段**:
+    - `models`: 模型列表，每个模型包含：
+      - `global_model_name`: GlobalModel 名称
+      - `display_name`: 显示名称
+      - `description`: 模型描述
+      - `providers`: 提供商列表，包含提供商名称、价格、能力等详细信息
+      - `price_range`: 价格区间（基于 GlobalModel 第一阶梯价格）
+      - `total_providers`: 关联提供商数量
+      - `capabilities`: 模型能力标志（视觉、函数调用、流式输出）
+    - `total`: 模型总数
+    """
     adapter = AdminGetModelCatalogAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 

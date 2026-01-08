@@ -7,7 +7,7 @@ from .health import router as health_router
 from .keys import router as keys_router
 from .routes import router as routes_router
 
-router = APIRouter(prefix="/api/admin/endpoints", tags=["Endpoint Management"])
+router = APIRouter(prefix="/api/admin/endpoints", tags=["Admin - Endpoints"])
 
 # Endpoint CRUD
 router.include_router(routes_router)

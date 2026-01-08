@@ -22,7 +22,7 @@ export interface UserExport {
   password_hash: string
   role: string
   allowed_providers?: string[] | null
-  allowed_endpoints?: string[] | null
+  allowed_api_formats?: string[] | null
   allowed_models?: string[] | null
   model_capability_settings?: any
   quota_usd?: number | null
@@ -40,7 +40,6 @@ export interface UserApiKeyExport {
   balance_used_usd?: number
   current_balance_usd?: number | null
   allowed_providers?: string[] | null
-  allowed_endpoints?: string[] | null
   allowed_api_formats?: string[] | null
   allowed_models?: string[] | null
   rate_limit?: number | null  // null = 无限制
@@ -158,6 +157,15 @@ export interface EmailTemplateResetResponse {
     subject: string
     html: string
   }
+}
+
+// 检查更新响应
+export interface CheckUpdateResponse {
+  current_version: string
+  latest_version: string | null
+  has_update: boolean
+  release_url: string | null
+  error: string | null
 }
 
 // LDAP 配置响应
@@ -523,6 +531,14 @@ export const adminApi = {
   async getSystemVersion(): Promise<{ version: string }> {
     const response = await apiClient.get<{ version: string }>(
       '/api/admin/system/version'
+    )
+    return response.data
+  },
+
+  // 检查系统更新
+  async checkUpdate(): Promise<CheckUpdateResponse> {
+    const response = await apiClient.get<CheckUpdateResponse>(
+      '/api/admin/system/check-update'
     )
     return response.data
   },

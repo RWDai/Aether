@@ -10,7 +10,7 @@ from fastapi import HTTPException, Request
 from sqlalchemy.orm import Session
 
 from src.core.logger import logger
-from src.models.database import ApiKey, User
+from src.models.database import ApiKey, ManagementToken, User
 from src.utils.request_utils import get_client_ip
 
 
@@ -37,6 +37,9 @@ class ApiRequestContext:
 
     # URL 路径参数（如 Gemini API 的 /v1beta/models/{model}:generateContent）
     path_params: Dict[str, Any] = field(default_factory=dict)
+
+    # Management Token（用于管理 API 认证）
+    management_token: Optional[ManagementToken] = None
 
     # 供适配器扩展的状态存储
     extra: Dict[str, Any] = field(default_factory=dict)

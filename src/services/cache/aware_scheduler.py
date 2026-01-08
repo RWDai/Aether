@@ -121,11 +121,13 @@ class CacheAwareScheduler:
         PRIORITY_MODE_GLOBAL_KEY,
     }
     # 调度模式常量
-    SCHEDULING_MODE_FIXED_ORDER = "fixed_order"  # 固定顺序模式
-    SCHEDULING_MODE_CACHE_AFFINITY = "cache_affinity"  # 缓存亲和模式
+    SCHEDULING_MODE_FIXED_ORDER = "fixed_order"  # 固定顺序模式：严格按优先级，忽略缓存
+    SCHEDULING_MODE_CACHE_AFFINITY = "cache_affinity"  # 缓存亲和模式：优先缓存，同优先级哈希分散
+    SCHEDULING_MODE_LOAD_BALANCE = "load_balance"  # 负载均衡模式：忽略缓存，同优先级随机轮换
     ALLOWED_SCHEDULING_MODES = {
         SCHEDULING_MODE_FIXED_ORDER,
         SCHEDULING_MODE_CACHE_AFFINITY,
+        SCHEDULING_MODE_LOAD_BALANCE,
     }
 
     def __init__(
@@ -486,11 +488,10 @@ class CacheAwareScheduler:
             user_api_key: 用户 API Key 对象（可能包含 user relationship）
 
         Returns:
-            包含 allowed_providers, allowed_endpoints, allowed_models 的字典
+            包含 allowed_providers, allowed_models, allowed_api_formats 的字典
         """
         result = {
             "allowed_providers": None,
-            "allowed_endpoints": None,
             "allowed_models": None,
             "allowed_api_formats": None,
         }
@@ -534,20 +535,16 @@ class CacheAwareScheduler:
             user_api_key.allowed_providers, user.allowed_providers if user else None
         )
 
-        # 合并 allowed_endpoints
-        result["allowed_endpoints"] = merge_restrictions(
-            user_api_key.allowed_endpoints if hasattr(user_api_key, "allowed_endpoints") else None,
-            user.allowed_endpoints if user else None,
-        )
-
         # 合并 allowed_models
         result["allowed_models"] = merge_restrictions(
             user_api_key.allowed_models, user.allowed_models if user else None
         )
 
-        # API 格式仅从 ApiKey 获取（User 不设置此限制）
-        if user_api_key.allowed_api_formats:
-            result["allowed_api_formats"] = set(user_api_key.allowed_api_formats)
+        # 合并 allowed_api_formats
+        result["allowed_api_formats"] = merge_restrictions(
+            user_api_key.allowed_api_formats,
+            user.allowed_api_formats if user else None
+        )
 
         return result
 
@@ -607,12 +604,13 @@ class CacheAwareScheduler:
         restrictions = self._get_effective_restrictions(user_api_key)
         allowed_api_formats = restrictions["allowed_api_formats"]
         allowed_providers = restrictions["allowed_providers"]
-        allowed_endpoints = restrictions["allowed_endpoints"]
         allowed_models = restrictions["allowed_models"]
 
         # 0.1 检查 API 格式是否被允许
         if allowed_api_formats is not None:
-            if target_format.value not in allowed_api_formats:
+            # 统一转为大写比较，兼容数据库中存储的大小写
+            allowed_upper = {f.upper() for f in allowed_api_formats}
+            if target_format.value.upper() not in allowed_upper:
                 logger.debug(
                     f"API Key {user_api_key.id[:8] if user_api_key else 'N/A'}... 不允许使用 API 格式 {target_format.value}, "
                     f"允许的格式: {allowed_api_formats}"
@@ -659,7 +657,7 @@ class CacheAwareScheduler:
         if not providers:
             return [], global_model_id
 
-        # 2. 构建候选列表（传入 allowed_endpoints、is_stream 和 capability_requirements 用于过滤）
+        # 2. 构建候选列表（传入 is_stream 和 capability_requirements 用于过滤）
         candidates = await self._build_candidates(
             db=db,
             providers=providers,
@@ -668,7 +666,6 @@ class CacheAwareScheduler:
             resolved_model_name=resolved_model_name,
             affinity_key=affinity_key,
             max_candidates=max_candidates,
-            allowed_endpoints=allowed_endpoints,
             is_stream=is_stream,
             capability_requirements=capability_requirements,
         )
@@ -685,8 +682,9 @@ class CacheAwareScheduler:
             f"(api_format={target_format.value}, model={model_name})"
         )
 
-        # 4. 应用缓存亲和性排序（仅在缓存亲和模式下启用）
+        # 4. 根据调度模式应用不同的排序策略
         if self.scheduling_mode == self.SCHEDULING_MODE_CACHE_AFFINITY:
+            # 缓存亲和模式：优先使用缓存的，同优先级内哈希分散
             if affinity_key and candidates:
                 candidates = await self._apply_cache_affinity(
                     candidates=candidates,
@@ -694,8 +692,13 @@ class CacheAwareScheduler:
                     api_format=target_format,
                     global_model_id=global_model_id,
                 )
+        elif self.scheduling_mode == self.SCHEDULING_MODE_LOAD_BALANCE:
+            # 负载均衡模式：忽略缓存，同优先级内随机轮换
+            candidates = self._apply_load_balance(candidates)
+            for candidate in candidates:
+                candidate.is_cached = False
         else:
-            # 固定顺序模式：标记所有候选为非缓存
+            # 固定顺序模式：严格按优先级，忽略缓存
             for candidate in candidates:
                 candidate.is_cached = False
 
@@ -905,7 +908,6 @@ class CacheAwareScheduler:
         affinity_key: Optional[str],
         resolved_model_name: Optional[str] = None,
         max_candidates: Optional[int] = None,
-        allowed_endpoints: Optional[set] = None,
         is_stream: bool = False,
         capability_requirements: Optional[Dict[str, bool]] = None,
     ) -> List[ProviderCandidate]:
@@ -920,7 +922,6 @@ class CacheAwareScheduler:
             affinity_key: 亲和性标识符（通常为API Key ID）
             resolved_model_name: 解析后的 GlobalModel.name（用于 Key.allowed_models 校验）
             max_candidates: 最大候选数
-            allowed_endpoints: 允许的 Endpoint ID 集合（None 表示不限制）
             is_stream: 是否是流式请求，如果为 True 则过滤不支持流式的 Provider
             capability_requirements: 能力需求（可选）
 
@@ -947,13 +948,6 @@ class CacheAwareScheduler:
                     else endpoint.api_format.value
                 )
                 if not endpoint.is_active or endpoint_format_str != target_format.value:
-                    continue
-
-                # 检查 Endpoint 是否在允许列表中
-                if allowed_endpoints is not None and endpoint.id not in allowed_endpoints:
-                    logger.debug(
-                        f"Endpoint {endpoint.id[:8]}... 不在用户/API Key 的允许列表中，跳过"
-                    )
                     continue
 
                 # 获取活跃的 Key 并按 internal_priority + 负载均衡排序
@@ -1174,6 +1168,57 @@ class CacheAwareScheduler:
                     )
 
                 result.extend(sorted(group, key=secondary_sort))
+
+        return result
+
+    def _apply_load_balance(
+        self, candidates: List[ProviderCandidate]
+    ) -> List[ProviderCandidate]:
+        """
+        负载均衡模式：同优先级内随机轮换
+
+        排序逻辑：
+        1. 按优先级分组（provider_priority, internal_priority 或 global_priority）
+        2. 同优先级组内随机打乱
+        3. 不考虑缓存亲和性
+        """
+        if not candidates:
+            return candidates
+
+        from collections import defaultdict
+
+        # 使用 tuple 作为统一的 key 类型，兼容两种模式
+        priority_groups: Dict[tuple, List[ProviderCandidate]] = defaultdict(list)
+
+        # 根据优先级模式选择分组方式
+        if self.priority_mode == self.PRIORITY_MODE_GLOBAL_KEY:
+            # 全局 Key 优先模式：按 global_priority 分组
+            for candidate in candidates:
+                global_priority = (
+                    candidate.key.global_priority
+                    if candidate.key and candidate.key.global_priority is not None
+                    else 999999
+                )
+                priority_groups[(global_priority,)].append(candidate)
+        else:
+            # 提供商优先模式：按 (provider_priority, internal_priority) 分组
+            for candidate in candidates:
+                key = (
+                    candidate.provider.provider_priority or 999999,
+                    candidate.key.internal_priority if candidate.key else 999999,
+                )
+                priority_groups[key].append(candidate)
+
+        result: List[ProviderCandidate] = []
+        for priority in sorted(priority_groups.keys()):
+            group = priority_groups[priority]
+            if len(group) > 1:
+                # 同优先级内随机打乱
+                shuffled = list(group)
+                random.shuffle(shuffled)
+                result.extend(shuffled)
+            else:
+                result.extend(group)
 
         return result
 

@@ -23,6 +23,7 @@ class BillingTemplates:
     # - 输出 token
     # - 缓存创建（创建时收费，约 1.25x 输入价格）
     # - 缓存读取（约 0.1x 输入价格）
+    # - 按次计费（可选，配置 price_per_request 时生效）
     # =========================================================================
     CLAUDE_STANDARD: List[BillingDimension] = [
         BillingDimension(
@@ -45,6 +46,12 @@ class BillingTemplates:
             usage_field="cache_read_tokens",
             price_field="cache_read_price_per_1m",
         ),
+        BillingDimension(
+            name="request",
+            usage_field="request_count",
+            price_field="price_per_request",
+            unit=BillingUnit.PER_REQUEST,
+        ),
     ]
 
     # =========================================================================
@@ -52,6 +59,7 @@ class BillingTemplates:
     # - 输入 token
     # - 输出 token
     # - 缓存读取（部分模型支持，无缓存创建费用）
+    # - 按次计费（可选，配置 price_per_request 时生效）
     # =========================================================================
     OPENAI_STANDARD: List[BillingDimension] = [
         BillingDimension(
@@ -69,6 +77,12 @@ class BillingTemplates:
             usage_field="cache_read_tokens",
             price_field="cache_read_price_per_1m",
         ),
+        BillingDimension(
+            name="request",
+            usage_field="request_count",
+            price_field="price_per_request",
+            unit=BillingUnit.PER_REQUEST,
+        ),
     ]
 
     # =========================================================================
@@ -77,6 +91,7 @@ class BillingTemplates:
     # - 推理输出 (output_tokens)
     # - 缓存命中 (cache_read_tokens) - 类似 Claude 的缓存读取
     # - 缓存存储 (cache_storage_token_hours) - 按 token 数 * 存储时长计费
+    # - 按次计费（可选，配置 price_per_request 时生效）
     #
     # 注意：豆包的缓存创建是免费的，但存储需要按时付费
     # =========================================================================
@@ -102,6 +117,12 @@ class BillingTemplates:
             price_field="cache_storage_price_per_1m_hour",
             unit=BillingUnit.PER_1M_TOKENS_HOUR,
         ),
+        BillingDimension(
+            name="request",
+            usage_field="request_count",
+            price_field="price_per_request",
+            unit=BillingUnit.PER_REQUEST,
+        ),
     ]
 
     # =========================================================================
@@ -109,6 +130,7 @@ class BillingTemplates:
     # - 输入 token
     # - 输出 token
     # - 缓存读取
+    # - 按次计费（用于图片生成等模型，需配置 price_per_request）
     # =========================================================================
     GEMINI_STANDARD: List[BillingDimension] = [
         BillingDimension(
@@ -125,6 +147,12 @@ class BillingTemplates:
             name="cache_read",
             usage_field="cache_read_tokens",
             price_field="cache_read_price_per_1m",
+        ),
+        BillingDimension(
+            name="request",
+            usage_field="request_count",
+            price_field="price_per_request",
+            unit=BillingUnit.PER_REQUEST,
         ),
     ]
 

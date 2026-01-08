@@ -73,14 +73,16 @@
       >
         <button
           type="button"
-          :class="['auth-tab', authType === 'local' && 'active']"
+          class="auth-tab"
+          :class="[authType === 'local' && 'active']"
           @click="authType = 'local'"
         >
           本地登录
         </button>
         <button
           type="button"
-          :class="['auth-tab', authType === 'ldap' && 'active']"
+          class="auth-tab"
+          :class="[authType === 'ldap' && 'active']"
           @click="authType = 'ldap'"
         >
           LDAP 登录

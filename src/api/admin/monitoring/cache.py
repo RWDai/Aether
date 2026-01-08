@@ -117,12 +117,21 @@ async def get_cache_stats(
     """
     获取缓存亲和性统计信息
 
-    返回:
-    - 缓存命中率
-    - 缓存用户数
-    - Provider切换次数
-    - Key切换次数
-    - 缓存预留配置
+    获取缓存调度器的运行统计数据，包括命中率、切换次数、调度器配置等。
+    用于监控缓存亲和性功能的运行状态和性能指标。
+
+    **返回字段**:
+    - `status`: 状态（ok）
+    - `data`: 统计数据对象
+      - `scheduler`: 调度器名称（cache_aware 或 random）
+      - `total_affinities`: 总缓存亲和性数量
+      - `cache_hit_rate`: 缓存命中率（0.0-1.0）
+      - `provider_switches`: Provider 切换次数
+      - `key_switches`: Key 切换次数
+      - `cache_hits`: 缓存命中次数
+      - `cache_misses`: 缓存未命中次数
+      - `scheduler_metrics`: 调度器详细指标
+      - `affinity_stats`: 亲和性统计数据
     """
     adapter = AdminCacheStatsAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
@@ -137,16 +146,33 @@ async def get_user_affinity(
     """
     查询指定用户的所有缓存亲和性
 
-    参数:
-    - user_identifier: 用户标识符，支持以下格式：
-      * 用户名 (username)，如: yuanhonghu
-      * 邮箱 (email)，如: user@example.com
-      * 用户UUID (user_id)，如: 550e8400-e29b-41d4-a716-446655440000
-      * API Key ID，如: 660e8400-e29b-41d4-a716-446655440000
+    根据用户标识符查询该用户在各个端点上的缓存亲和性记录。
+    支持多种标识符格式的自动识别和解析。
 
-    返回:
-    - 用户信息
-    - 所有端点的缓存亲和性列表（每个端点一条记录）
+    **路径参数**:
+    - `user_identifier`: 用户标识符，支持以下格式：
+      - 用户名（username），如：yuanhonghu
+      - 邮箱（email），如：user@example.com
+      - 用户 UUID（user_id），如：550e8400-e29b-41d4-a716-446655440000
+      - API Key ID，如：660e8400-e29b-41d4-a716-446655440000
+
+    **返回字段**:
+    - `status`: 状态（ok 或 not_found）
+    - `message`: 提示消息（当无缓存时）
+    - `user_info`: 用户信息
+      - `user_id`: 用户 ID
+      - `username`: 用户名
+      - `email`: 邮箱
+    - `affinities`: 缓存亲和性列表
+      - `provider_id`: Provider ID
+      - `endpoint_id`: Endpoint ID
+      - `key_id`: Key ID
+      - `api_format`: API 格式
+      - `model_name`: 模型名称（global_model_id）
+      - `created_at`: 创建时间
+      - `expire_at`: 过期时间
+      - `request_count`: 请求计数
+    - `total_endpoints`: 缓存的端点数量
     """
     adapter = AdminGetUserAffinityAdapter(user_identifier=user_identifier)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
@@ -161,10 +187,50 @@ async def list_affinities(
     db: Session = Depends(get_db),
 ) -> Any:
     """
-    获取所有缓存亲和性列表，可选按关键词过滤
+    获取所有缓存亲和性列表
 
-    参数:
-    - keyword: 可选，支持用户名/邮箱/User ID/API Key ID 或模糊匹配
+    查询系统中所有的缓存亲和性记录，支持按关键词过滤和分页。
+    返回详细的用户、Provider、Endpoint、Key 信息。
+
+    **查询参数**:
+    - `keyword`: 可选，支持以下过滤方式（可选）
+      - 用户名/邮箱/User ID/API Key ID（精确匹配）
+      - 任意字段的模糊匹配（affinity_key、user_id、username、email、provider_id、key_id）
+    - `limit`: 返回数量限制（1-1000，默认 100）
+    - `offset`: 偏移量（用于分页，默认 0）
+
+    **返回字段**:
+    - `status`: 状态（ok）
+    - `data`: 分页数据对象
+      - `items`: 缓存亲和性列表
+        - `affinity_key`: API Key ID（用于缓存键）
+        - `user_api_key_name`: 用户 API Key 名称
+        - `user_api_key_prefix`: 脱敏后的用户 API Key
+        - `is_standalone`: 是否为独立 API Key
+        - `user_id`: 用户 ID
+        - `username`: 用户名
+        - `email`: 邮箱
+        - `provider_id`: Provider ID
+        - `provider_name`: Provider 显示名称
+        - `endpoint_id`: Endpoint ID
+        - `endpoint_api_format`: Endpoint API 格式
+        - `endpoint_url`: Endpoint 基础 URL
+        - `key_id`: Key ID
+        - `key_name`: Key 名称
+        - `key_prefix`: 脱敏后的 Provider Key
+        - `rate_multiplier`: 速率倍数
+        - `global_model_id`: GlobalModel ID
+        - `model_name`: 模型名称
+        - `model_display_name`: 模型显示名称
+        - `api_format`: API 格式
+        - `created_at`: 创建时间
+        - `expire_at`: 过期时间
+        - `request_count`: 请求计数
+      - `meta`: 分页元数据
+        - `count`: 总数量
+        - `limit`: 每页数量
+        - `offset`: 当前偏移量
+      - `matched_user_id`: 匹配到的用户 ID（当关键词为用户标识时）
     """
     adapter = AdminListAffinitiesAdapter(keyword=keyword, limit=limit, offset=offset)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
@@ -177,10 +243,27 @@ async def clear_user_cache(
     db: Session = Depends(get_db),
 ) -> Any:
     """
-    Clear cache affinity for a specific user
+    清除指定用户的缓存亲和性
 
-    Parameters:
-    - user_identifier: User identifier (username, email, user_id, or API Key ID)
+    清除指定用户或 API Key 的所有缓存亲和性记录。
+    支持按用户维度或单个 API Key 维度清除。
+
+    **路径参数**:
+    - `user_identifier`: 用户标识符，支持以下格式：
+      - 用户名（username）
+      - 邮箱（email）
+      - 用户 UUID（user_id）
+      - API Key ID（清除该 API Key 的缓存）
+
+    **返回字段**:
+    - `status`: 状态（ok）
+    - `message`: 操作结果消息
+    - `user_info`: 用户信息
+      - `user_id`: 用户 ID
+      - `username`: 用户名
+      - `email`: 邮箱
+      - `api_key_id`: API Key ID（当清除单个 API Key 时）
+      - `api_key_name`: API Key 名称（当清除单个 API Key 时）
     """
     adapter = AdminClearUserCacheAdapter(user_identifier=user_identifier)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
@@ -196,13 +279,23 @@ async def clear_single_affinity(
     db: Session = Depends(get_db),
 ) -> Any:
     """
-    Clear a single cache affinity entry
+    清除单条缓存亲和性记录
 
-    Parameters:
-    - affinity_key: API Key ID
-    - endpoint_id: Endpoint ID
-    - model_id: Model ID (GlobalModel ID)
-    - api_format: API format (claude/openai)
+    根据精确的缓存键（affinity_key + endpoint_id + model_id + api_format）
+    清除单条缓存亲和性记录。用于精确控制缓存清除。
+
+    **路径参数**:
+    - `affinity_key`: API Key ID（用于缓存的键）
+    - `endpoint_id`: Endpoint ID
+    - `model_id`: GlobalModel ID
+    - `api_format`: API 格式（如：claude、openai、gemini）
+
+    **返回字段**:
+    - `status`: 状态（ok）
+    - `message`: 操作结果消息
+    - `affinity_key`: API Key ID
+    - `endpoint_id`: Endpoint ID
+    - `model_id`: GlobalModel ID
     """
     adapter = AdminClearSingleAffinityAdapter(
         affinity_key=affinity_key, endpoint_id=endpoint_id, model_id=model_id, api_format=api_format
@@ -216,9 +309,17 @@ async def clear_all_cache(
     db: Session = Depends(get_db),
 ) -> Any:
     """
-    Clear all cache affinities
+    清除所有缓存亲和性
 
-    Warning: This affects all users, use with caution
+    清除系统中所有用户的缓存亲和性记录。此操作会影响所有用户，
+    下次请求时将重新建立缓存亲和性。请谨慎使用。
+
+    **警告**: 此操作影响所有用户，使用前请确认
+
+    **返回字段**:
+    - `status`: 状态（ok）
+    - `message`: 操作结果消息
+    - `count`: 清除的缓存数量
     """
     adapter = AdminClearAllCacheAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
@@ -231,10 +332,19 @@ async def clear_provider_cache(
     db: Session = Depends(get_db),
 ) -> Any:
     """
-    Clear cache affinities for a specific provider
+    清除指定 Provider 的缓存亲和性
 
-    Parameters:
-    - provider_id: Provider ID
+    清除与指定 Provider 相关的所有缓存亲和性记录。
+    当 Provider 配置变更或下线时使用。
+
+    **路径参数**:
+    - `provider_id`: Provider ID
+
+    **返回字段**:
+    - `status`: 状态（ok）
+    - `message`: 操作结果消息
+    - `provider_id`: Provider ID
+    - `count`: 清除的缓存数量
     """
     adapter = AdminClearProviderCacheAdapter(provider_id=provider_id)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
@@ -248,9 +358,25 @@ async def get_cache_config(
     """
     获取缓存相关配置
 
-    返回:
-    - 缓存TTL
-    - 缓存预留比例
+    获取缓存亲和性功能的配置参数，包括缓存 TTL、预留比例、
+    动态预留机制配置等。
+
+    **返回字段**:
+    - `status`: 状态（ok）
+    - `data`: 配置数据
+      - `cache_ttl_seconds`: 缓存亲和性有效期（秒）
+      - `cache_reservation_ratio`: 静态预留比例（已被动态预留替代）
+      - `dynamic_reservation`: 动态预留机制配置
+        - `enabled`: 是否启用
+        - `config`: 配置参数
+          - `probe_phase_requests`: 探测阶段请求数阈值
+          - `probe_reservation`: 探测阶段预留比例
+          - `stable_min_reservation`: 稳定阶段最小预留比例
+          - `stable_max_reservation`: 稳定阶段最大预留比例
+          - `low_load_threshold`: 低负载阈值
+          - `high_load_threshold`: 高负载阈值
+        - `description`: 各参数说明
+      - `description`: 配置说明
     """
     adapter = AdminCacheConfigAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
@@ -262,7 +388,31 @@ async def get_cache_metrics(
     db: Session = Depends(get_db),
 ) -> Any:
     """
-    以 Prometheus 文本格式暴露缓存调度指标，方便接入 Grafana。
+    获取缓存调度指标（Prometheus 格式）
+
+    以 Prometheus 文本格式输出缓存调度器的监控指标，
+    方便接入 Prometheus/Grafana 等监控系统。
+
+    **返回格式**: Prometheus 文本格式（Content-Type: text/plain）
+
+    **指标列表**:
+    - `cache_scheduler_total_batches`: 总批次数
+    - `cache_scheduler_last_batch_size`: 最后一批候选数
+    - `cache_scheduler_total_candidates`: 总候选数
+    - `cache_scheduler_last_candidate_count`: 最后一批候选计数
+    - `cache_scheduler_cache_hits`: 缓存命中次数
+    - `cache_scheduler_cache_misses`: 缓存未命中次数
+    - `cache_scheduler_cache_hit_rate`: 缓存命中率
+    - `cache_scheduler_concurrency_denied`: 并发拒绝次数
+    - `cache_scheduler_avg_candidates_per_batch`: 平均每批候选数
+    - `cache_affinity_total`: 总缓存亲和性数量
+    - `cache_affinity_hits`: 亲和性命中次数
+    - `cache_affinity_misses`: 亲和性未命中次数
+    - `cache_affinity_hit_rate`: 亲和性命中率
+    - `cache_affinity_invalidations`: 亲和性失效次数
+    - `cache_affinity_provider_switches`: Provider 切换次数
+    - `cache_affinity_key_switches`: Key 切换次数
+    - `cache_scheduler_info`: 调度器信息（label: scheduler）
     """
     adapter = AdminCacheMetricsAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
@@ -998,10 +1148,39 @@ async def get_model_mapping_cache_stats(
     """
     获取模型映射缓存统计信息
 
-    返回:
-    - 缓存键数量
-    - 缓存 TTL 配置
-    - 各类型缓存数量
+    获取模型解析缓存的详细统计信息，包括各类型缓存键数量、
+    映射关系列表、Provider 级别的模型映射缓存等。
+
+    **返回字段**:
+    - `status`: 状态（ok）
+    - `data`: 统计数据
+      - `available`: Redis 是否可用
+      - `message`: 提示消息（当 Redis 未启用时）
+      - `ttl_seconds`: 缓存 TTL（秒）
+      - `total_keys`: 总缓存键数量
+      - `breakdown`: 各类型缓存键数量分解
+        - `model_by_id`: Model ID 缓存数量
+        - `model_by_provider_global`: Provider-GlobalModel 缓存数量
+        - `global_model_by_id`: GlobalModel ID 缓存数量
+        - `global_model_by_name`: GlobalModel 名称缓存数量
+        - `global_model_resolve`: GlobalModel 解析缓存数量
+      - `mappings`: 模型映射列表（最多 100 条）
+        - `mapping_name`: 映射名称（别名）
+        - `global_model_name`: GlobalModel 名称
+        - `global_model_display_name`: GlobalModel 显示名称
+        - `providers`: 使用该映射的 Provider 列表
+        - `ttl`: 缓存剩余 TTL（秒）
+      - `provider_model_mappings`: Provider 级别的模型映射（最多 100 条）
+        - `provider_id`: Provider ID
+        - `provider_name`: Provider 名称
+        - `global_model_id`: GlobalModel ID
+        - `global_model_name`: GlobalModel 名称
+        - `global_model_display_name`: GlobalModel 显示名称
+        - `provider_model_name`: Provider 侧的模型名称
+        - `aliases`: 别名列表
+        - `ttl`: 缓存剩余 TTL（秒）
+        - `hit_count`: 缓存命中次数
+      - `unmapped`: 未映射或无效的缓存条目
     """
     adapter = AdminModelMappingCacheStatsAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
@@ -1015,7 +1194,15 @@ async def clear_all_model_mapping_cache(
     """
     清除所有模型映射缓存
 
-    警告: 这会影响所有模型解析，请谨慎使用
+    清除系统中所有的模型映射缓存，包括 Model、GlobalModel、
+    模型解析等所有相关缓存。下次请求时将重新从数据库查询。
+
+    **警告**: 此操作会影响所有模型解析，请谨慎使用
+
+    **返回字段**:
+    - `status`: 状态（ok）
+    - `message`: 操作结果消息
+    - `deleted_count`: 删除的缓存键数量
     """
     adapter = AdminClearAllModelMappingCacheAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
@@ -1030,8 +1217,17 @@ async def clear_model_mapping_cache_by_name(
     """
     清除指定模型名称的映射缓存
 
-    参数:
-    - model_name: 模型名称（可以是 GlobalModel.name 或映射名称）
+    根据模型名称清除相关的映射缓存，包括 resolve 缓存和 name 缓存。
+    用于更新单个模型的配置后刷新缓存。
+
+    **路径参数**:
+    - `model_name`: 模型名称（可以是 GlobalModel.name 或映射名称）
+
+    **返回字段**:
+    - `status`: 状态（ok）
+    - `message`: 操作结果消息
+    - `model_name`: 模型名称
+    - `deleted_keys`: 删除的缓存键列表
     """
     adapter = AdminClearModelMappingCacheByNameAdapter(model_name=model_name)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
@@ -1047,9 +1243,19 @@ async def clear_provider_model_mapping_cache(
     """
     清除指定 Provider 和 GlobalModel 的模型映射缓存
 
-    参数:
-    - provider_id: Provider ID
-    - global_model_id: GlobalModel ID
+    清除特定 Provider 和 GlobalModel 组合的映射缓存及其命中次数统计。
+    用于 Provider 模型配置更新后刷新缓存。
+
+    **路径参数**:
+    - `provider_id`: Provider ID
+    - `global_model_id`: GlobalModel ID
+
+    **返回字段**:
+    - `status`: 状态（ok）
+    - `message`: 操作结果消息
+    - `provider_id`: Provider ID
+    - `global_model_id`: GlobalModel ID
+    - `deleted_keys`: 删除的缓存键列表
     """
     adapter = AdminClearProviderModelMappingCacheAdapter(
         provider_id=provider_id, global_model_id=global_model_id

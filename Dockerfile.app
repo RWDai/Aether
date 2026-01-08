@@ -58,6 +58,15 @@ RUN printf '%s\n' \
 '    index index.html;' \
 '    client_max_body_size 100M;' \
 '' \
+'    # gzip 压缩配置（对 base64 图片等非流式响应有效）' \
+'    gzip on;' \
+'    gzip_min_length 256;' \
+'    gzip_comp_level 5;' \
+'    gzip_vary on;' \
+'    gzip_proxied any;' \
+'    gzip_types application/json text/plain text/css text/javascript application/javascript application/octet-stream;' \
+'    gzip_disable "msie6";' \
+'' \
 '    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {' \
 '        expires 1y;' \
 '        add_header Cache-Control "public, no-transform";' \
@@ -71,6 +80,15 @@ RUN printf '%s\n' \
 '' \
 '    location ~ ^/(dashboard|admin|login)(/|$) {' \
 '        try_files $uri $uri/ /index.html;' \
+'    }' \
+'' \
+'    location ~ ^/(docs|redoc|openapi\\.json)$ {' \
+'        proxy_pass http://127.0.0.1:PORT_PLACEHOLDER;' \
+'        proxy_http_version 1.1;' \
+'        proxy_set_header Host $host;' \
+'        proxy_set_header X-Real-IP $real_ip;' \
+'        proxy_set_header X-Forwarded-For $forwarded_for;' \
+'        proxy_set_header X-Forwarded-Proto $scheme;' \
 '    }' \
 '' \
 '    location / {' \
@@ -109,14 +127,14 @@ RUN printf '%s\n' \
 'pidfile=/var/run/supervisord.pid' \
 '' \
 '[program:nginx]' \
-'command=/bin/bash -c "sed \"s/PORT_PLACEHOLDER/${PORT:-8084}/g\" /etc/nginx/sites-available/default.template > /etc/nginx/sites-available/default && /usr/sbin/nginx -g \"daemon off;\""' \
+'command=/bin/bash -c "sed \"s/PORT_PLACEHOLDER/8084/g\" /etc/nginx/sites-available/default.template > /etc/nginx/sites-available/default && /usr/sbin/nginx -g \"daemon off;\""' \
 'autostart=true' \
 'autorestart=true' \
 'stdout_logfile=/var/log/nginx/access.log' \
 'stderr_logfile=/var/log/nginx/error.log' \
 '' \
 '[program:app]' \
-'command=gunicorn src.main:app --preload -w %(ENV_GUNICORN_WORKERS)s -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:%(ENV_PORT)s --timeout 120 --access-logfile - --error-logfile - --log-level info' \
+'command=gunicorn src.main:app --preload -w %(ENV_GUNICORN_WORKERS)s -k uvicorn.workers.UvicornWorker --bind 127.0.0.1:8084 --timeout 120 --access-logfile - --error-logfile - --log-level info' \
 'directory=/app' \
 'autostart=true' \
 'autorestart=true' \
@@ -129,17 +147,23 @@ RUN printf '%s\n' \
 # 创建目录
 RUN mkdir -p /var/log/supervisor /app/logs /app/data
 
+# 入口脚本（启动前执行迁移）
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 # 环境变量
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONIOENCODING=utf-8 \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
-    PORT=8084
+    PORT=8084 \
+    GUNICORN_WORKERS=4
 
 EXPOSE 80
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost/health || exit 1
 
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]

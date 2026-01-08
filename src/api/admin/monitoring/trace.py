@@ -71,7 +71,47 @@ async def get_request_trace(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    """获取特定请求的完整追踪信息"""
+    """
+    获取请求的完整追踪信息
+
+    获取指定请求的完整链路追踪信息，包括所有候选（candidates）的执行情况。
+
+    **路径参数**:
+    - `request_id`: 请求 ID
+
+    **返回字段**:
+    - `request_id`: 请求 ID
+    - `total_candidates`: 候选总数
+    - `final_status`: 最终状态（success: 成功，failed: 失败，streaming: 流式传输中，pending: 等待中）
+    - `total_latency_ms`: 总延迟（毫秒）
+    - `candidates`: 候选列表，每个候选包含：
+      - `id`: 候选 ID
+      - `request_id`: 请求 ID
+      - `candidate_index`: 候选索引
+      - `retry_index`: 重试序号
+      - `provider_id`: 提供商 ID
+      - `provider_name`: 提供商名称
+      - `provider_website`: 提供商官网
+      - `endpoint_id`: 端点 ID
+      - `endpoint_name`: 端点名称（API 格式）
+      - `key_id`: 密钥 ID
+      - `key_name`: 密钥名称
+      - `key_preview`: 密钥脱敏预览
+      - `key_capabilities`: 密钥支持的能力
+      - `required_capabilities`: 请求需要的能力标签
+      - `status`: 状态（pending, success, failed, skipped）
+      - `skip_reason`: 跳过原因
+      - `is_cached`: 是否缓存命中
+      - `status_code`: HTTP 状态码
+      - `error_type`: 错误类型
+      - `error_message`: 错误信息
+      - `latency_ms`: 延迟（毫秒）
+      - `concurrent_requests`: 并发请求数
+      - `extra_data`: 额外数据
+      - `created_at`: 创建时间
+      - `started_at`: 开始时间
+      - `finished_at`: 完成时间
+    """
 
     adapter = AdminGetRequestTraceAdapter(request_id=request_id)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
@@ -85,9 +125,23 @@ async def get_provider_failure_rate(
     db: Session = Depends(get_db),
 ):
     """
-    获取某个 Provider 的失败率统计
+    获取提供商的失败率统计
 
-    需要管理员权限
+    获取指定提供商最近的失败率统计信息。需要管理员权限。
+
+    **路径参数**:
+    - `provider_id`: 提供商 ID
+
+    **查询参数**:
+    - `limit`: 统计最近的尝试数量，默认 100，最大 1000
+
+    **返回字段**:
+    - `provider_id`: 提供商 ID
+    - `total_attempts`: 总尝试次数
+    - `success_count`: 成功次数
+    - `failed_count`: 失败次数
+    - `failure_rate`: 失败率（百分比）
+    - `avg_latency_ms`: 平均延迟（毫秒）
     """
     adapter = AdminProviderFailureRateAdapter(provider_id=provider_id, limit=limit)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)

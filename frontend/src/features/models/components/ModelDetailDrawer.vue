@@ -460,13 +460,13 @@
                         <TableHead class="h-10 font-semibold">
                           Provider
                         </TableHead>
-                        <TableHead class="w-[120px] h-10 font-semibold">
+                        <TableHead class="w-[100px] h-10 font-semibold">
                           能力
                         </TableHead>
-                        <TableHead class="w-[180px] h-10 font-semibold">
+                        <TableHead class="w-[200px] h-10 font-semibold">
                           价格 ($/M)
                         </TableHead>
-                        <TableHead class="w-[80px] h-10 font-semibold text-center">
+                        <TableHead class="w-[100px] h-10 font-semibold text-center">
                           操作
                         </TableHead>
                       </TableRow>

@@ -37,7 +37,7 @@ from src.models.endpoint_models import (
 )
 from src.services.health.endpoint import EndpointHealthService
 
-router = APIRouter(prefix="/api/public", tags=["Public Catalog"])
+router = APIRouter(prefix="/api/public", tags=["System Catalog"])
 pipeline = ApiRequestPipeline()
 
 
@@ -49,7 +49,29 @@ async def get_public_providers(
     limit: int = Query(100, description="返回记录数限制"),
     db: Session = Depends(get_db),
 ):
-    """获取提供商列表（用户视图）。"""
+    """
+    获取提供商列表（用户视图）
+
+    返回系统中可用的提供商列表，包含提供商的基本信息和统计数据。
+    默认只返回活跃的提供商。
+
+    **查询参数**
+    - is_active: 可选，过滤活跃状态。None 表示只返回活跃提供商，True 返回活跃，False 返回非活跃
+    - skip: 跳过的记录数，用于分页，默认 0
+    - limit: 返回记录数限制，默认 100，最大 100
+
+    **返回字段**
+    - id: 提供商唯一标识符
+    - name: 提供商名称（英文标识）
+    - display_name: 提供商显示名称
+    - description: 提供商描述信息
+    - is_active: 是否活跃
+    - provider_priority: 提供商优先级
+    - models_count: 该提供商下的模型总数
+    - active_models_count: 该提供商下活跃的模型数
+    - endpoints_count: 该提供商下的端点总数
+    - active_endpoints_count: 该提供商下活跃的端点数
+    """
 
     adapter = PublicProvidersAdapter(is_active=is_active, skip=skip, limit=limit)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=ApiMode.PUBLIC)
@@ -64,6 +86,37 @@ async def get_public_models(
     limit: int = Query(100, description="返回记录数限制"),
     db: Session = Depends(get_db),
 ):
+    """
+    获取模型列表（用户视图）
+
+    返回系统中可用的模型列表，包含模型的详细信息和定价。
+    默认只返回活跃提供商下的活跃模型。
+
+    **查询参数**
+    - provider_id: 可选，按提供商 ID 过滤，只返回该提供商下的模型
+    - is_active: 可选，过滤活跃状态（当前未使用，始终返回活跃模型）
+    - skip: 跳过的记录数，用于分页，默认 0
+    - limit: 返回记录数限制，默认 100，最大 100
+
+    **返回字段**
+    - id: 模型唯一标识符
+    - provider_id: 所属提供商 ID
+    - provider_name: 提供商名称
+    - provider_display_name: 提供商显示名称
+    - name: 模型统一名称（优先使用 GlobalModel 名称）
+    - display_name: 模型显示名称
+    - description: 模型描述信息
+    - tags: 模型标签（当前为 null）
+    - icon_url: 模型图标 URL
+    - input_price_per_1m: 输入价格（每 100 万 token）
+    - output_price_per_1m: 输出价格（每 100 万 token）
+    - cache_creation_price_per_1m: 缓存创建价格（每 100 万 token）
+    - cache_read_price_per_1m: 缓存读取价格（每 100 万 token）
+    - supports_vision: 是否支持视觉输入
+    - supports_function_calling: 是否支持函数调用
+    - supports_streaming: 是否支持流式输出
+    - is_active: 是否活跃
+    """
     adapter = PublicModelsAdapter(
         provider_id=provider_id, is_active=is_active, skip=skip, limit=limit
     )
@@ -72,6 +125,19 @@ async def get_public_models(
 
 @router.get("/stats", response_model=ProviderStatsResponse)
 async def get_public_stats(request: Request, db: Session = Depends(get_db)):
+    """
+    获取系统统计信息
+
+    返回系统的整体统计数据，包括提供商数量、模型数量和支持的 API 格式。
+    只统计活跃的提供商和模型。
+
+    **返回字段**
+    - total_providers: 活跃提供商总数
+    - active_providers: 活跃提供商数量（与 total_providers 相同）
+    - total_models: 活跃模型总数
+    - active_models: 活跃模型数量（与 total_models 相同）
+    - supported_formats: 支持的 API 格式列表（如 claude、openai、gemini 等）
+    """
     adapter = PublicStatsAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=ApiMode.PUBLIC)
 
@@ -84,6 +150,37 @@ async def search_models(
     limit: int = Query(20, description="返回记录数限制"),
     db: Session = Depends(get_db),
 ):
+    """
+    搜索模型
+
+    根据关键词搜索模型，支持按模型名称、显示名称等字段进行模糊匹配。
+    只返回活跃提供商下的活跃模型。
+
+    **查询参数**
+    - q: 必填，搜索关键词，支持模糊匹配模型的 provider_model_name、GlobalModel.name 或 GlobalModel.display_name
+    - provider_id: 可选，按提供商 ID 过滤，只在该提供商下搜索
+    - limit: 返回记录数限制，默认 20，最大值取决于系统配置
+
+    **返回字段**
+    返回符合条件的模型列表，字段与 /api/public/models 接口相同：
+    - id: 模型唯一标识符
+    - provider_id: 所属提供商 ID
+    - provider_name: 提供商名称
+    - provider_display_name: 提供商显示名称
+    - name: 模型统一名称
+    - display_name: 模型显示名称
+    - description: 模型描述
+    - tags: 模型标签
+    - icon_url: 模型图标 URL
+    - input_price_per_1m: 输入价格（每 100 万 token）
+    - output_price_per_1m: 输出价格（每 100 万 token）
+    - cache_creation_price_per_1m: 缓存创建价格（每 100 万 token）
+    - cache_read_price_per_1m: 缓存读取价格（每 100 万 token）
+    - supports_vision: 是否支持视觉
+    - supports_function_calling: 是否支持函数调用
+    - supports_streaming: 是否支持流式输出
+    - is_active: 是否活跃
+    """
     adapter = PublicSearchModelsAdapter(query=q, provider_id=provider_id, limit=limit)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=ApiMode.PUBLIC)
 
@@ -95,7 +192,37 @@ async def get_public_api_format_health(
     per_format_limit: int = Query(100, ge=10, le=500, description="每个格式的事件数限制"),
     db: Session = Depends(get_db),
 ):
-    """获取各 API 格式的健康监控数据（公开版，不含敏感信息）"""
+    """
+    获取各 API 格式的健康监控数据
+
+    返回系统中各 API 格式（如 Claude、OpenAI、Gemini）的健康状态和历史事件。
+    公开版本，不包含敏感信息（如 provider_id、key_id 等）。
+
+    **查询参数**
+    - lookback_hours: 回溯的时间范围（小时），默认 6 小时，范围 1-168（7 天）
+    - per_format_limit: 每个 API 格式返回的历史事件数量上限，默认 100，范围 10-500
+
+    **返回字段**
+    - generated_at: 响应生成时间
+    - formats: API 格式健康监控数据列表，每个格式包含：
+      - api_format: API 格式名称（如 claude、openai、gemini）
+      - api_path: 本站入口路径
+      - total_attempts: 总请求尝试次数
+      - success_count: 成功次数
+      - failed_count: 失败次数
+      - skipped_count: 跳过次数
+      - success_rate: 成功率（success / (success + failed)）
+      - last_event_at: 最后事件时间
+      - events: 历史事件列表，按时间倒序，每个事件包含：
+        - timestamp: 事件时间
+        - status: 状态（success、failed、skipped）
+        - status_code: HTTP 状态码
+        - latency_ms: 延迟（毫秒）
+        - error_type: 错误类型（如果失败）
+      - timeline: 时间线数据，用于展示请求量趋势
+      - time_range_start: 时间范围起始
+      - time_range_end: 时间范围结束
+    """
     adapter = PublicApiFormatHealthMonitorAdapter(
         lookback_hours=lookback_hours,
         per_format_limit=per_format_limit,
@@ -112,7 +239,30 @@ async def get_public_global_models(
     search: Optional[str] = Query(None, description="搜索关键词"),
     db: Session = Depends(get_db),
 ):
-    """获取 GlobalModel 列表（用户视图，只读）"""
+    """
+    获取全局模型（GlobalModel）列表
+
+    返回系统定义的全局模型列表，用于统一不同提供商的模型标识。
+    默认只返回活跃的全局模型。
+
+    **查询参数**
+    - skip: 跳过的记录数，用于分页，默认 0，最小 0
+    - limit: 返回记录数限制，默认 100，范围 1-1000
+    - is_active: 可选，过滤活跃状态。None 表示只返回活跃模型，True 返回活跃，False 返回非活跃
+    - search: 可选，搜索关键词，支持模糊匹配模型名称（name）和显示名称（display_name）
+
+    **返回字段**
+    - models: 全局模型列表，每个模型包含：
+      - id: 全局模型唯一标识符（UUID）
+      - name: 模型名称（统一标识符）
+      - display_name: 模型显示名称
+      - is_active: 是否活跃
+      - default_price_per_request: 默认的按请求计价配置
+      - default_tiered_pricing: 默认的阶梯定价配置
+      - supported_capabilities: 支持的能力列表（如 vision、function_calling 等）
+      - config: 模型配置信息（如 description、icon_url 等）
+    - total: 符合条件的模型总数
+    """
     adapter = PublicGlobalModelsAdapter(
         skip=skip,
         limit=limit,

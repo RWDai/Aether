@@ -29,7 +29,19 @@ async def get_endpoint_concurrency(
     request: Request,
     db: Session = Depends(get_db),
 ) -> ConcurrencyStatusResponse:
-    """获取 Endpoint 当前并发状态"""
+    """
+    获取 Endpoint 当前并发状态
+
+    查询指定 Endpoint 的实时并发使用情况，包括当前并发数和最大并发限制。
+
+    **路径参数**:
+    - `endpoint_id`: Endpoint ID
+
+    **返回字段**:
+    - `endpoint_id`: Endpoint ID
+    - `endpoint_current_concurrency`: 当前并发数
+    - `endpoint_max_concurrent`: 最大并发限制
+    """
     adapter = AdminEndpointConcurrencyAdapter(endpoint_id=endpoint_id)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -40,7 +52,19 @@ async def get_key_concurrency(
     request: Request,
     db: Session = Depends(get_db),
 ) -> ConcurrencyStatusResponse:
-    """获取 Key 当前并发状态"""
+    """
+    获取 Key 当前并发状态
+
+    查询指定 API Key 的实时并发使用情况，包括当前并发数和最大并发限制。
+
+    **路径参数**:
+    - `key_id`: API Key ID
+
+    **返回字段**:
+    - `key_id`: API Key ID
+    - `key_current_concurrency`: 当前并发数
+    - `key_max_concurrent`: 最大并发限制
+    """
     adapter = AdminKeyConcurrencyAdapter(key_id=key_id)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -51,7 +75,19 @@ async def reset_concurrency(
     http_request: Request,
     db: Session = Depends(get_db),
 ) -> dict:
-    """Reset concurrency counters (admin function, use with caution)"""
+    """
+    重置并发计数器
+
+    重置指定 Endpoint 或 Key 的并发计数器，用于解决计数不准确的问题。
+    管理员功能，请谨慎使用。
+
+    **请求体字段**:
+    - `endpoint_id`: Endpoint ID（可选）
+    - `key_id`: API Key ID（可选）
+
+    **返回字段**:
+    - `message`: 操作结果消息
+    """
     adapter = AdminResetConcurrencyAdapter(endpoint_id=request.endpoint_id, key_id=request.key_id)
     return await pipeline.run(adapter=adapter, http_request=http_request, db=db, mode=adapter.mode)
 

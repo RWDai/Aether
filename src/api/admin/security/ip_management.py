@@ -18,7 +18,7 @@ from src.core.logger import logger
 from src.database import get_db
 from src.services.rate_limit.ip_limiter import IPRateLimiter
 
-router = APIRouter(prefix="/api/admin/security/ip", tags=["IP Security"])
+router = APIRouter(prefix="/api/admin/security/ip", tags=["Admin - Security"])
 pipeline = ApiRequestPipeline()
 
 
@@ -56,42 +56,110 @@ class RemoveIPFromWhitelistRequest(BaseModel):
 
 @router.post("/blacklist")
 async def add_to_blacklist(request: Request, db: Session = Depends(get_db)):
-    """Add IP to blacklist"""
+    """
+    添加 IP 到黑名单
+
+    将指定 IP 地址添加到黑名单，被加入黑名单的 IP 将无法访问系统。需要管理员权限。
+
+    **请求体字段**:
+    - `ip_address`: IP 地址
+    - `reason`: 加入黑名单的原因
+    - `ttl`: 可选，过期时间（秒），不指定表示永久
+
+    **返回字段**:
+    - `success`: 是否成功
+    - `message`: 操作结果信息
+    - `reason`: 加入黑名单的原因
+    - `ttl`: 过期时间（秒或"永久"）
+    """
     adapter = AddToBlacklistAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=ApiMode.ADMIN)
 
 
 @router.delete("/blacklist/{ip_address}")
 async def remove_from_blacklist(ip_address: str, request: Request, db: Session = Depends(get_db)):
-    """Remove IP from blacklist"""
+    """
+    从黑名单移除 IP
+
+    将指定 IP 地址从黑名单中移除。需要管理员权限。
+
+    **路径参数**:
+    - `ip_address`: IP 地址
+
+    **返回字段**:
+    - `success`: 是否成功
+    - `message`: 操作结果信息
+    """
     adapter = RemoveFromBlacklistAdapter(ip_address=ip_address)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=ApiMode.ADMIN)
 
 
 @router.get("/blacklist/stats")
 async def get_blacklist_stats(request: Request, db: Session = Depends(get_db)):
-    """Get blacklist statistics"""
+    """
+    获取黑名单统计信息
+
+    获取黑名单的统计信息和列表。需要管理员权限。
+
+    **返回字段**:
+    - `total`: 黑名单总数
+    - `items`: 黑名单列表，每个项包含：
+      - `ip`: IP 地址
+      - `reason`: 加入原因
+      - `added_at`: 添加时间
+      - `ttl`: 剩余有效时间（秒）
+    """
     adapter = GetBlacklistStatsAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=ApiMode.ADMIN)
 
 
 @router.post("/whitelist")
 async def add_to_whitelist(request: Request, db: Session = Depends(get_db)):
-    """Add IP to whitelist"""
+    """
+    添加 IP 到白名单
+
+    将指定 IP 地址或 CIDR 网段添加到白名单，白名单中的 IP 将跳过速率限制检查。需要管理员权限。
+
+    **请求体字段**:
+    - `ip_address`: IP 地址或 CIDR 格式（如 192.168.1.0/24）
+
+    **返回字段**:
+    - `success`: 是否成功
+    - `message`: 操作结果信息
+    """
     adapter = AddToWhitelistAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=ApiMode.ADMIN)
 
 
 @router.delete("/whitelist/{ip_address}")
 async def remove_from_whitelist(ip_address: str, request: Request, db: Session = Depends(get_db)):
-    """Remove IP from whitelist"""
+    """
+    从白名单移除 IP
+
+    将指定 IP 地址从白名单中移除。需要管理员权限。
+
+    **路径参数**:
+    - `ip_address`: IP 地址
+
+    **返回字段**:
+    - `success`: 是否成功
+    - `message`: 操作结果信息
+    """
     adapter = RemoveFromWhitelistAdapter(ip_address=ip_address)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=ApiMode.ADMIN)
 
 
 @router.get("/whitelist")
 async def get_whitelist(request: Request, db: Session = Depends(get_db)):
-    """Get whitelist"""
+    """
+    获取白名单
+
+    获取当前的 IP 白名单列表。需要管理员权限。
+
+    **返回字段**:
+    - `whitelist`: 白名单 IP 地址列表
+    - `total`: 白名单总数
+    """
     adapter = GetWhitelistAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=ApiMode.ADMIN)
 

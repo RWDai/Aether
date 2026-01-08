@@ -248,11 +248,94 @@ async def lifespan(app: FastAPI):
 
 from src import __version__ as app_version
 
+# OpenAPI Tags 元数据定义
+openapi_tags = [
+    {
+        "name": "Authentication",
+        "description": "用户认证相关接口，包括登录、注册、令牌刷新等",
+    },
+    {
+        "name": "User Profile",
+        "description": "用户个人信息管理，包括 API 密钥、使用统计、偏好设置等",
+    },
+    {
+        "name": "Management Tokens",
+        "description": "管理令牌，用于 CLI 工具等外部应用的认证",
+    },
+    {
+        "name": "Dashboard",
+        "description": "仪表盘统计数据，包括请求量、Token 用量、成本等概览信息",
+    },
+    {
+        "name": "Announcements",
+        "description": "系统公告管理",
+    },
+    {
+        "name": "Monitoring",
+        "description": "用户监控与审计日志查询",
+    },
+    {
+        "name": "Admin - Users",
+        "description": "用户管理（管理员）",
+    },
+    {
+        "name": "Admin - Providers",
+        "description": "提供商管理（管理员）",
+    },
+    {
+        "name": "Admin - Endpoints",
+        "description": "端点管理（管理员）",
+    },
+    {
+        "name": "Admin - Models",
+        "description": "模型管理（管理员）",
+    },
+    {
+        "name": "Admin - API Keys",
+        "description": "API 密钥管理（管理员）",
+    },
+    {
+        "name": "Admin - Usage",
+        "description": "使用统计管理（管理员）",
+    },
+    {
+        "name": "Admin - Monitoring",
+        "description": "系统监控（管理员）",
+    },
+    {
+        "name": "Admin - Security",
+        "description": "安全配置管理（管理员）",
+    },
+    {
+        "name": "Admin - System",
+        "description": "系统配置管理（管理员）",
+    },
+    {
+        "name": "Claude API",
+        "description": "Claude API 代理接口，兼容 Anthropic Claude API 格式",
+    },
+    {
+        "name": "OpenAI API",
+        "description": "OpenAI API 代理接口，兼容 OpenAI Chat Completions API 格式",
+    },
+    {
+        "name": "Gemini API",
+        "description": "Gemini API 代理接口，兼容 Google Gemini API 格式",
+    },
+    {
+        "name": "System Catalog",
+        "description": "系统目录接口，用于获取可用模型列表等",
+    },
+]
+
 app = FastAPI(
-    title="AI Proxy with Modular Architecture",
+    title="Aether API Gateway",
     version=app_version,
-    description="AI代理服务，采用模块化架构，支持插件化扩展",
     lifespan=lifespan,
+    docs_url="/docs" if config.docs_enabled else None,
+    redoc_url="/redoc" if config.docs_enabled else None,
+    openapi_url="/openapi.json" if config.docs_enabled else None,
+    openapi_tags=openapi_tags
 )
 
 # 注册全局异常处理器
@@ -272,15 +355,17 @@ app.add_middleware(PluginMiddleware)
 # 生产环境必须通过 CORS_ORIGINS 环境变量显式指定允许的域名
 # 开发环境默认允许本地前端访问
 if config.cors_origins:
+    # CORS_ORIGINS=* 时自动禁用 credentials（浏览器规范要求）
+    allow_credentials = config.cors_allow_credentials and "*" not in config.cors_origins
     app.add_middleware(
         CORSMiddleware,
         allow_origins=config.cors_origins,  # 使用配置的白名单
-        allow_credentials=config.cors_allow_credentials,
+        allow_credentials=allow_credentials,
         allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
         allow_headers=["*"],
         expose_headers=["*"],
     )
-    logger.info(f"CORS已启用,允许的源: {config.cors_origins}")
+    logger.info(f"CORS已启用,允许的源: {config.cors_origins}, credentials: {allow_credentials}")
 else:
     # 没有配置CORS源,不允许跨域
     logger.warning(

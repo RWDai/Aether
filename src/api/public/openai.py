@@ -27,6 +27,24 @@ async def create_chat_completion(
     http_request: Request,
     db: Session = Depends(get_db),
 ):
+    """
+    OpenAI Chat Completions API
+
+    兼容 OpenAI Chat Completions API 格式的代理接口。
+
+    **认证方式**: Bearer Token（API Key 或 JWT Token）
+
+    **请求格式**:
+    ```json
+    {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "stream": false
+    }
+    ```
+
+    **支持的参数**: model, messages, stream, temperature, max_tokens 等标准 OpenAI 参数
+    """
     adapter = OpenAIChatAdapter()
     return await pipeline.run(
         adapter=adapter,
@@ -42,6 +60,13 @@ async def create_responses(
     http_request: Request,
     db: Session = Depends(get_db),
 ):
+    """
+    OpenAI Responses API (CLI)
+
+    兼容 OpenAI Codex CLI 使用的 Responses API 格式，请求透传到上游。
+
+    **认证方式**: Bearer Token（API Key 或 JWT Token）
+    """
     adapter = OpenAICliAdapter()
     return await pipeline.run(
         adapter=adapter,

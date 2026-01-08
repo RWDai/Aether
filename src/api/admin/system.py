@@ -42,21 +42,157 @@ def _get_version_from_git() -> str | None:
     return None
 
 
-@router.get("/version")
-async def get_system_version():
-    """获取系统版本信息"""
-    # 优先从 git 获取
+def _get_current_version() -> str:
+    """获取当前版本号"""
     version = _get_version_from_git()
     if version:
-        return {"version": version}
-
-    # 回退到静态版本文件
+        return version
     try:
         from src._version import __version__
 
-        return {"version": __version__}
+        return __version__
     except ImportError:
-        return {"version": "unknown"}
+        return "unknown"
+
+
+def _parse_version(version_str: str) -> tuple:
+    """解析版本号为可比较的元组，支持 3-4 段版本号
+
+    例如:
+    - '0.2.5' -> (0, 2, 5, 0)
+    - '0.2.5.1' -> (0, 2, 5, 1)
+    - 'v0.2.5-4-g1234567' -> (0, 2, 5, 0)
+    """
+    import re
+
+    version_str = version_str.lstrip("v")
+    main_version = re.split(r"[-+]", version_str)[0]
+    try:
+        parts = main_version.split(".")
+        # 标准化为 4 段，便于比较
+        int_parts = [int(p) for p in parts]
+        while len(int_parts) < 4:
+            int_parts.append(0)
+        return tuple(int_parts[:4])
+    except ValueError:
+        return (0, 0, 0, 0)
+
+
+@router.get("/version")
+async def get_system_version():
+    """
+    获取系统版本信息
+
+    获取当前系统的版本号。优先从 git describe 获取，回退到静态版本文件。
+
+    **返回字段**:
+    - `version`: 版本号字符串
+    """
+    return {"version": _get_current_version()}
+
+
+@router.get("/check-update")
+async def check_update():
+    """
+    检查系统更新
+
+    从 GitHub Tags 获取最新版本并与当前版本对比。
+
+    **返回字段**:
+    - `current_version`: 当前版本号
+    - `latest_version`: 最新版本号
+    - `has_update`: 是否有更新可用
+    - `release_url`: 最新版本的 GitHub 页面链接
+    """
+    import httpx
+
+    from src.clients.http_client import HTTPClientPool
+
+    current_version = _get_current_version()
+    github_repo = "Aethersailor/Aether"
+    github_tags_url = f"https://api.github.com/repos/{github_repo}/tags"
+
+    try:
+        async with HTTPClientPool.get_temp_client(
+            timeout=httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0)
+        ) as client:
+            response = await client.get(
+                github_tags_url,
+                headers={
+                    "Accept": "application/vnd.github.v3+json",
+                    "User-Agent": f"Aether/{current_version}",
+                },
+                params={"per_page": 10},
+            )
+
+            if response.status_code != 200:
+                return {
+                    "current_version": current_version,
+                    "latest_version": None,
+                    "has_update": False,
+                    "release_url": None,
+                    "error": f"GitHub API 返回错误: {response.status_code}",
+                }
+
+            tags = response.json()
+            if not tags:
+                return {
+                    "current_version": current_version,
+                    "latest_version": None,
+                    "has_update": False,
+                    "release_url": None,
+                    "error": None,
+                }
+
+            # 找到最新的版本 tag（按版本号排序，而非时间）
+            version_tags = []
+            for tag in tags:
+                tag_name = tag.get("name", "")
+                if tag_name.startswith("v") or tag_name[0].isdigit():
+                    version_tags.append((tag_name, _parse_version(tag_name)))
+
+            if not version_tags:
+                return {
+                    "current_version": current_version,
+                    "latest_version": None,
+                    "has_update": False,
+                    "release_url": None,
+                    "error": None,
+                }
+
+            # 按版本号排序，取最大的
+            version_tags.sort(key=lambda x: x[1], reverse=True)
+            latest_tag = version_tags[0][0]
+            latest_version = latest_tag.lstrip("v")
+
+            current_tuple = _parse_version(current_version)
+            latest_tuple = _parse_version(latest_version)
+            has_update = latest_tuple > current_tuple
+
+            return {
+                "current_version": current_version,
+                "latest_version": latest_version,
+                "has_update": has_update,
+                "release_url": f"https://github.com/{github_repo}/releases/tag/{latest_tag}",
+                "error": None,
+            }
+
+    except httpx.TimeoutException:
+        return {
+            "current_version": current_version,
+            "latest_version": None,
+            "has_update": False,
+            "release_url": None,
+            "error": "检查更新超时",
+        }
+    except Exception as e:
+        return {
+            "current_version": current_version,
+            "latest_version": None,
+            "has_update": False,
+            "release_url": None,
+            "error": f"检查更新失败: {str(e)}",
+        }
 
 
 pipeline = ApiRequestPipeline()
@@ -64,7 +200,16 @@ pipeline = ApiRequestPipeline()
 
 @router.get("/settings")
 async def get_system_settings(request: Request, db: Session = Depends(get_db)):
-    """获取系统设置（管理员）"""
+    """
+    获取系统设置
+
+    获取系统的全局设置信息。需要管理员权限。
+
+    **返回字段**:
+    - `default_provider`: 默认提供商名称
+    - `default_model`: 默认模型名称
+    - `enable_usage_tracking`: 是否启用使用情况追踪
+    """
 
     adapter = AdminGetSystemSettingsAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
@@ -72,7 +217,19 @@ async def get_system_settings(request: Request, db: Session = Depends(get_db)):
 
 @router.put("/settings")
 async def update_system_settings(http_request: Request, db: Session = Depends(get_db)):
-    """更新系统设置（管理员）"""
+    """
+    更新系统设置
+
+    更新系统的全局设置。需要管理员权限。
+
+    **请求体字段**:
+    - `default_provider`: 可选，默认提供商名称（空字符串表示清除设置）
+    - `default_model`: 可选，默认模型名称（空字符串表示清除设置）
+    - `enable_usage_tracking`: 可选，是否启用使用情况追踪
+
+    **返回字段**:
+    - `message`: 操作结果信息
+    """
 
     adapter = AdminUpdateSystemSettingsAdapter()
     return await pipeline.run(adapter=adapter, http_request=http_request, db=db, mode=adapter.mode)
@@ -80,7 +237,14 @@ async def update_system_settings(http_request: Request, db: Session = Depends(ge
 
 @router.get("/configs")
 async def get_all_system_configs(request: Request, db: Session = Depends(get_db)):
-    """获取所有系统配置（管理员）"""
+    """
+    获取所有系统配置
+
+    获取系统中所有的配置项。需要管理员权限。
+
+    **返回字段**:
+    - 配置项的键值对字典
+    """
 
     adapter = AdminGetAllConfigsAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
@@ -88,7 +252,19 @@ async def get_all_system_configs(request: Request, db: Session = Depends(get_db)
 
 @router.get("/configs/{key}")
 async def get_system_config(key: str, request: Request, db: Session = Depends(get_db)):
-    """获取特定系统配置（管理员）"""
+    """
+    获取特定系统配置
+
+    获取指定配置项的值。需要管理员权限。
+
+    **路径参数**:
+    - `key`: 配置项键名
+
+    **返回字段**:
+    - `key`: 配置项键名
+    - `value`: 配置项的值（敏感配置项不返回实际值）
+    - `is_set`: 可选，对于敏感配置项，指示是否已设置
+    """
 
     adapter = AdminGetSystemConfigAdapter(key=key)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
@@ -100,7 +276,24 @@ async def set_system_config(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    """设置系统配置（管理员）"""
+    """
+    设置系统配置
+
+    设置或更新指定配置项的值。需要管理员权限。
+
+    **路径参数**:
+    - `key`: 配置项键名
+
+    **请求体字段**:
+    - `value`: 配置项的值
+    - `description`: 可选，配置项描述
+
+    **返回字段**:
+    - `key`: 配置项键名
+    - `value`: 配置项的值（敏感配置项显示为 ********）
+    - `description`: 配置项描述
+    - `updated_at`: 更新时间
+    """
 
     adapter = AdminSetSystemConfigAdapter(key=key)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
@@ -108,7 +301,17 @@ async def set_system_config(
 
 @router.delete("/configs/{key}")
 async def delete_system_config(key: str, request: Request, db: Session = Depends(get_db)):
-    """删除系统配置（管理员）"""
+    """
+    删除系统配置
+
+    删除指定的配置项。需要管理员权限。
+
+    **路径参数**:
+    - `key`: 配置项键名
+
+    **返回字段**:
+    - `message`: 操作结果信息
+    """
 
     adapter = AdminDeleteSystemConfigAdapter(key=key)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
@@ -116,20 +319,54 @@ async def delete_system_config(key: str, request: Request, db: Session = Depends
 
 @router.get("/stats")
 async def get_system_stats(request: Request, db: Session = Depends(get_db)):
+    """
+    获取系统统计信息
+
+    获取系统的整体统计数据。需要管理员权限。
+
+    **返回字段**:
+    - `users`: 用户统计（total: 总用户数, active: 活跃用户数）
+    - `providers`: 提供商统计（total: 总提供商数, active: 活跃提供商数）
+    - `api_keys`: API Key 总数
+    - `requests`: 请求总数
+    """
     adapter = AdminSystemStatsAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.post("/cleanup")
 async def trigger_cleanup(request: Request, db: Session = Depends(get_db)):
-    """Manually trigger usage record cleanup task"""
+    """
+    手动触发清理任务
+
+    手动触发使用记录清理任务，清理过期的请求/响应数据。需要管理员权限。
+
+    **返回字段**:
+    - `message`: 操作结果信息
+    - `stats`: 清理统计信息
+      - `total_records`: 总记录数统计（before, after, deleted）
+      - `body_fields`: 请求/响应体字段清理统计（before, after, cleaned）
+      - `header_fields`: 请求/响应头字段清理统计（before, after, cleaned）
+    - `timestamp`: 清理完成时间
+    """
     adapter = AdminTriggerCleanupAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.get("/api-formats")
 async def get_api_formats(request: Request, db: Session = Depends(get_db)):
-    """获取所有可用的API格式列表"""
+    """
+    获取所有可用的 API 格式列表
+
+    获取系统支持的所有 API 格式及其元数据。需要管理员权限。
+
+    **返回字段**:
+    - `formats`: API 格式列表，每个格式包含：
+      - `value`: 格式值
+      - `label`: 显示名称
+      - `default_path`: 默认路径
+      - `aliases`: 别名列表
+    """
     adapter = AdminGetApiFormatsAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -576,7 +813,6 @@ class AdminExportConfigAdapter(AdminApiAdapter):
                     "rpm_limit": provider.rpm_limit,
                     "provider_priority": provider.provider_priority,
                     "is_active": provider.is_active,
-                    "rate_limit": provider.rate_limit,
                     "concurrent_limit": provider.concurrent_limit,
                     "config": provider.config,
                     "endpoints": endpoints_data,
@@ -723,7 +959,6 @@ class AdminImportConfigAdapter(AdminApiAdapter):
                             "provider_priority", 100
                         )
                         existing_provider.is_active = prov_data.get("is_active", True)
-                        existing_provider.rate_limit = prov_data.get("rate_limit")
                         existing_provider.concurrent_limit = prov_data.get(
                             "concurrent_limit"
                         )
@@ -748,7 +983,6 @@ class AdminImportConfigAdapter(AdminApiAdapter):
                         rpm_limit=prov_data.get("rpm_limit"),
                         provider_priority=prov_data.get("provider_priority", 100),
                         is_active=prov_data.get("is_active", True),
-                        rate_limit=prov_data.get("rate_limit"),
                         concurrent_limit=prov_data.get("concurrent_limit"),
                         config=prov_data.get("config"),
                     )
@@ -782,7 +1016,7 @@ class AdminImportConfigAdapter(AdminApiAdapter):
                             )
                             existing_ep.headers = ep_data.get("headers")
                             existing_ep.timeout = ep_data.get("timeout", 300)
-                            existing_ep.max_retries = ep_data.get("max_retries", 3)
+                            existing_ep.max_retries = ep_data.get("max_retries", 2)
                             existing_ep.max_concurrent = ep_data.get("max_concurrent")
                             existing_ep.rate_limit = ep_data.get("rate_limit")
                             existing_ep.is_active = ep_data.get("is_active", True)
@@ -798,7 +1032,7 @@ class AdminImportConfigAdapter(AdminApiAdapter):
                             base_url=ep_data["base_url"],
                             headers=ep_data.get("headers"),
                             timeout=ep_data.get("timeout", 300),
-                            max_retries=ep_data.get("max_retries", 3),
+                            max_retries=ep_data.get("max_retries", 2),
                             max_concurrent=ep_data.get("max_concurrent"),
                             rate_limit=ep_data.get("rate_limit"),
                             is_active=ep_data.get("is_active", True),
@@ -1001,7 +1235,6 @@ class AdminExportUsersAdapter(AdminApiAdapter):
                 "balance_used_usd": key.balance_used_usd,
                 "current_balance_usd": key.current_balance_usd,
                 "allowed_providers": key.allowed_providers,
-                "allowed_endpoints": key.allowed_endpoints,
                 "allowed_api_formats": key.allowed_api_formats,
                 "allowed_models": key.allowed_models,
                 "rate_limit": key.rate_limit,
@@ -1038,7 +1271,7 @@ class AdminExportUsersAdapter(AdminApiAdapter):
                     "password_hash": user.password_hash,
                     "role": user.role.value if user.role else "user",
                     "allowed_providers": user.allowed_providers,
-                    "allowed_endpoints": user.allowed_endpoints,
+                    "allowed_api_formats": user.allowed_api_formats,
                     "allowed_models": user.allowed_models,
                     "model_capability_settings": user.model_capability_settings,
                     "quota_usd": user.quota_usd,
@@ -1130,7 +1363,6 @@ class AdminImportUsersAdapter(AdminApiAdapter):
                 balance_used_usd=key_data.get("balance_used_usd", 0.0),
                 current_balance_usd=key_data.get("current_balance_usd"),
                 allowed_providers=key_data.get("allowed_providers"),
-                allowed_endpoints=key_data.get("allowed_endpoints"),
                 allowed_api_formats=key_data.get("allowed_api_formats"),
                 allowed_models=key_data.get("allowed_models"),
                 rate_limit=key_data.get("rate_limit"),
@@ -1174,7 +1406,7 @@ class AdminImportUsersAdapter(AdminApiAdapter):
                         if user_data.get("role"):
                             existing_user.role = UserRole(user_data["role"])
                         existing_user.allowed_providers = user_data.get("allowed_providers")
-                        existing_user.allowed_endpoints = user_data.get("allowed_endpoints")
+                        existing_user.allowed_api_formats = user_data.get("allowed_api_formats")
                         existing_user.allowed_models = user_data.get("allowed_models")
                         existing_user.model_capability_settings = user_data.get(
                             "model_capability_settings"
@@ -1198,7 +1430,7 @@ class AdminImportUsersAdapter(AdminApiAdapter):
                         password_hash=user_data.get("password_hash", ""),
                         role=role,
                         allowed_providers=user_data.get("allowed_providers"),
-                        allowed_endpoints=user_data.get("allowed_endpoints"),
+                        allowed_api_formats=user_data.get("allowed_api_formats"),
                         allowed_models=user_data.get("allowed_models"),
                         model_capability_settings=user_data.get("model_capability_settings"),
                         quota_usd=user_data.get("quota_usd"),

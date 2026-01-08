@@ -6,6 +6,7 @@ from .adaptive import router as adaptive_router
 from .api_keys import router as api_keys_router
 from .endpoints import router as endpoints_router
 from .ldap import router as ldap_router
+from .management_tokens import router as management_tokens_router
 from .models import router as models_router
 from .monitoring import router as monitoring_router
 from .provider_query import router as provider_query_router
@@ -30,5 +31,6 @@ router.include_router(models_router)
 router.include_router(security_router)
 router.include_router(provider_query_router)
 router.include_router(ldap_router)
+router.include_router(management_tokens_router)
 
 __all__ = ["router"]

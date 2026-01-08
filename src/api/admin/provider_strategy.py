@@ -39,6 +39,31 @@ async def update_provider_billing(
     request: Request,
     db: Session = Depends(get_db),
 ):
+    """
+    更新提供商计费配置
+
+    更新指定提供商的计费策略、配额设置和优先级配置。
+
+    **路径参数**:
+    - `provider_id`: 提供商 ID
+
+    **请求体字段**:
+    - `billing_type`: 计费类型（pay_as_you_go、subscription、prepaid、monthly_quota）
+    - `monthly_quota_usd`: 月度配额（美元），可选
+    - `quota_reset_day`: 配额重置周期（天数，1-365），默认 30
+    - `quota_last_reset_at`: 当前周期开始时间，可选（设置后会自动同步该周期内的历史使用量）
+    - `quota_expires_at`: 配额过期时间，可选
+    - `rpm_limit`: 每分钟请求数限制，可选
+    - `provider_priority`: 提供商优先级（0-200），默认 100
+
+    **返回字段**:
+    - `message`: 操作结果信息
+    - `provider`: 更新后的提供商信息
+      - `id`: 提供商 ID
+      - `name`: 提供商名称
+      - `billing_type`: 计费类型
+      - `provider_priority`: 提供商优先级
+    """
     adapter = AdminProviderBillingAdapter(provider_id=provider_id)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -50,6 +75,39 @@ async def get_provider_stats(
     hours: int = 24,
     db: Session = Depends(get_db),
 ):
+    """
+    获取提供商统计数据
+
+    获取指定提供商的计费信息、RPM 使用情况和使用统计数据。
+
+    **路径参数**:
+    - `provider_id`: 提供商 ID
+
+    **查询参数**:
+    - `hours`: 统计时间范围（小时），默认 24
+
+    **返回字段**:
+    - `provider_id`: 提供商 ID
+    - `provider_name`: 提供商名称
+    - `period_hours`: 统计时间范围
+    - `billing_info`: 计费信息
+      - `billing_type`: 计费类型
+      - `monthly_quota_usd`: 月度配额
+      - `monthly_used_usd`: 月度已使用
+      - `quota_remaining_usd`: 剩余配额
+      - `quota_expires_at`: 配额过期时间
+    - `rpm_info`: RPM 信息
+      - `rpm_limit`: RPM 限制
+      - `rpm_used`: 已使用 RPM
+      - `rpm_reset_at`: RPM 重置时间
+    - `usage_stats`: 使用统计
+      - `total_requests`: 总请求数
+      - `successful_requests`: 成功请求数
+      - `failed_requests`: 失败请求数
+      - `success_rate`: 成功率
+      - `avg_response_time_ms`: 平均响应时间（毫秒）
+      - `total_cost_usd`: 总成本（美元）
+    """
     adapter = AdminProviderStatsAdapter(provider_id=provider_id, hours=hours)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -67,6 +125,20 @@ async def reset_provider_quota(
 
 @router.get("/strategies")
 async def list_available_strategies(request: Request, db: Session = Depends(get_db)):
+    """
+    获取可用负载均衡策略列表
+
+    列出系统中所有已注册的负载均衡策略插件。
+
+    **返回字段**:
+    - `strategies`: 策略列表
+      - `name`: 策略名称
+      - `priority`: 策略优先级
+      - `version`: 策略版本
+      - `description`: 策略描述
+      - `author`: 策略作者
+    - `total`: 策略总数
+    """
     adapter = AdminListStrategiesAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 

@@ -166,21 +166,95 @@ class LDAPConfigTest(BaseModel):
 
 @router.get("/config")
 async def get_ldap_config(request: Request, db: Session = Depends(get_db)) -> Any:
-    """获取LDAP配置（管理员）"""
+    """
+    获取 LDAP 配置
+
+    获取系统当前的 LDAP 认证配置信息，用于管理界面显示和编辑。
+    密码字段不会返回原文，仅返回是否已设置的标志。
+
+    **返回字段**:
+    - `server_url`: LDAP 服务器地址（如：ldap://ldap.example.com:389）
+    - `bind_dn`: 绑定 DN（如：cn=admin,dc=example,dc=com）
+    - `base_dn`: 搜索基准 DN（如：ou=users,dc=example,dc=com）
+    - `has_bind_password`: 是否已设置绑定密码（布尔值）
+    - `user_search_filter`: 用户搜索过滤器（默认：(uid={username})）
+    - `username_attr`: 用户名属性（默认：uid）
+    - `email_attr`: 邮箱属性（默认：mail）
+    - `display_name_attr`: 显示名称属性（默认：cn）
+    - `is_enabled`: 是否启用 LDAP 认证
+    - `is_exclusive`: 是否仅允许 LDAP 登录（独占模式）
+    - `use_starttls`: 是否使用 STARTTLS 加密连接
+    - `connect_timeout`: 连接超时时间（秒，1-60）
+    """
     adapter = AdminGetLDAPConfigAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.put("/config")
 async def update_ldap_config(request: Request, db: Session = Depends(get_db)) -> Any:
-    """更新LDAP配置（管理员）"""
+    """
+    更新 LDAP 配置
+
+    更新系统的 LDAP 认证配置。支持完整配置更新，包括连接参数、
+    搜索过滤器、属性映射等。提供多重安全校验，防止误锁定管理员。
+
+    **请求体字段**:
+    - `server_url`: LDAP 服务器地址（必填，1-255字符）
+    - `bind_dn`: 绑定 DN（必填，1-255字符）
+    - `bind_password`: 绑定密码（可选，设为空字符串可清除密码）
+    - `base_dn`: 搜索基准 DN（必填，1-255字符）
+    - `user_search_filter`: 用户搜索过滤器（必须包含 {username} 占位符，默认：(uid={username})）
+    - `username_attr`: 用户名属性（默认：uid）
+    - `email_attr`: 邮箱属性（默认：mail）
+    - `display_name_attr`: 显示名称属性（默认：cn）
+    - `is_enabled`: 是否启用 LDAP 认证
+    - `is_exclusive`: 是否仅允许 LDAP 登录（需先启用 LDAP）
+    - `use_starttls`: 是否使用 STARTTLS 加密连接
+    - `connect_timeout`: 连接超时时间（秒，1-60，默认 10）
+
+    **安全校验**:
+    - 启用 LDAP 时必须设置有效的绑定密码
+    - 启用独占模式前会检查是否有至少 1 个有效的本地管理员账户
+    - 独占模式要求先启用 LDAP 认证
+    - 搜索过滤器必须包含 {username} 占位符且括号匹配
+    - 搜索过滤器嵌套层数不超过 5 层，长度不超过 200 字符
+
+    **返回字段**:
+    - `message`: 操作结果消息
+    """
     adapter = AdminUpdateLDAPConfigAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.post("/test")
 async def test_ldap_connection(request: Request, db: Session = Depends(get_db)) -> Any:
-    """测试LDAP连接（管理员）"""
+    """
+    测试 LDAP 连接
+
+    在保存配置前测试 LDAP 服务器连接是否正常。支持使用已保存的配置，
+    也支持通过请求体覆盖任意配置项进行临时测试，而不影响已保存的配置。
+
+    **请求体字段**（均为可选，用于临时覆盖）:
+    - `server_url`: LDAP 服务器地址（覆盖已保存的配置）
+    - `bind_dn`: 绑定 DN（覆盖已保存的配置）
+    - `bind_password`: 绑定密码（覆盖已保存的密码）
+    - `base_dn`: 搜索基准 DN（覆盖已保存的配置）
+    - `user_search_filter`: 用户搜索过滤器（覆盖已保存的配置）
+    - `username_attr`: 用户名属性（覆盖已保存的配置）
+    - `email_attr`: 邮箱属性（覆盖已保存的配置）
+    - `display_name_attr`: 显示名称属性（覆盖已保存的配置）
+    - `use_starttls`: 是否使用 STARTTLS（覆盖已保存的配置）
+    - `connect_timeout`: 连接超时时间（覆盖已保存的配置）
+
+    **测试逻辑**:
+    - 未提供的字段使用已保存的配置值
+    - `bind_password` 优先使用请求体中的值，否则使用已保存的加密密码
+    - 测试时会尝试连接 LDAP 服务器并验证绑定 DN
+
+    **返回字段**:
+    - `success`: 测试是否成功（布尔值）
+    - `message`: 测试结果消息（成功或失败原因）
+    """
     adapter = AdminTestLDAPConnectionAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 

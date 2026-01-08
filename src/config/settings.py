@@ -145,6 +145,24 @@ class Config:
         self.http_write_timeout = float(os.getenv("HTTP_WRITE_TIMEOUT", "60.0"))
         self.http_pool_timeout = float(os.getenv("HTTP_POOL_TIMEOUT", "10.0"))
 
+        # HTTP 连接池配置
+        # HTTP_MAX_CONNECTIONS: 最大连接数，影响并发能力
+        #   - 每个连接占用一个 socket，过多会耗尽系统资源
+        #   - 默认根据 Worker 数量自动计算：单 Worker 200，多 Worker 按比例分配
+        # HTTP_KEEPALIVE_CONNECTIONS: 保活连接数，影响连接复用效率
+        #   - 高频请求场景应该增大此值
+        #   - 默认为 max_connections 的 30%（长连接场景更高效）
+        # HTTP_KEEPALIVE_EXPIRY: 保活过期时间（秒）
+        #   - 过短会频繁重建连接，过长会占用资源
+        #   - 默认 30 秒，生图等长连接场景可适当增大
+        self.http_max_connections = int(
+            os.getenv("HTTP_MAX_CONNECTIONS") or self._auto_http_max_connections()
+        )
+        self.http_keepalive_connections = int(
+            os.getenv("HTTP_KEEPALIVE_CONNECTIONS") or self._auto_http_keepalive_connections()
+        )
+        self.http_keepalive_expiry = float(os.getenv("HTTP_KEEPALIVE_EXPIRY", "30.0"))
+
         # 流式处理配置
         # STREAM_PREFETCH_LINES: 预读行数，用于检测嵌套错误
         # STREAM_STATS_DELAY: 统计记录延迟（秒），等待流完全关闭
@@ -181,6 +199,28 @@ class Config:
             os.getenv("VERIFICATION_SEND_COOLDOWN", "60")
         )
 
+        # Management Token 速率限制（每分钟每 IP）
+        self.management_token_rate_limit = int(
+            os.getenv("MANAGEMENT_TOKEN_RATE_LIMIT", "30")
+        )
+
+        # 每个用户最多可创建的 Management Token 数量
+        self.management_token_max_per_user = int(
+            os.getenv("MANAGEMENT_TOKEN_MAX_PER_USER", "20")
+        )
+
+        # API 文档配置
+        # DOCS_ENABLED: 是否启用 API 文档（/docs, /redoc, /openapi.json）
+        #   - 未设置: 开发环境启用，生产环境禁用
+        #   - true: 强制启用
+        #   - false: 强制禁用
+        docs_enabled_env = os.getenv("DOCS_ENABLED")
+        if docs_enabled_env is not None:
+            self.docs_enabled = docs_enabled_env.lower() == "true"
+        else:
+            # 默认：开发环境启用，生产环境禁用
+            self.docs_enabled = self.environment == "development"
+
         # 验证连接池配置
         self._validate_pool_config()
 
@@ -201,6 +241,53 @@ class Config:
     def _auto_max_overflow(self) -> int:
         """智能计算最大溢出连接数 - 与 pool_size 相同"""
         return self.db_pool_size
+
+    def _auto_http_max_connections(self) -> int:
+        """
+        智能计算 HTTP 最大连接数
+
+        计算依据:
+        1. 系统 socket 资源有限（Linux 默认 ulimit -n 通常为 1024）
+        2. 多 Worker 部署时每个进程独立连接池
+        3. 需要为数据库连接、Redis 连接等预留资源
+
+        公式: base_connections / workers
+        - 单 Worker: 200 连接（适合开发/低负载）
+        - 多 Worker: 按比例分配，确保总数不超过系统限制
+
+        范围: 50 - 500
+        """
+        # 基础连接数：假设系统可用 socket 约 800 个用于 HTTP
+        # （预留给 DB、Redis、内部服务等）
+        base_connections = 800
+        workers = max(self.worker_processes, 1)
+
+        # 每个 Worker 分配的连接数
+        per_worker = base_connections // workers
+
+        # 限制范围：最小 50（保证基本并发），最大 500（避免资源耗尽）
+        return max(50, min(per_worker, 500))
+
+    def _auto_http_keepalive_connections(self) -> int:
+        """
+        智能计算 HTTP 保活连接数
+
+        计算依据:
+        1. 保活连接用于复用，减少 TCP 握手开销
+        2. 对于 API 网关场景，上游请求频繁，保活比例应较高
+        3. 生图等长连接场景，连接会被长时间占用
+
+        公式: max_connections * 0.3
+        - 30% 的比例在复用效率和资源占用间取得平衡
+        - 长连接场景建议手动调高到 50-70%
+
+        范围: 10 - max_connections
+        """
+        # 保活连接数为最大连接数的 30%
+        keepalive = int(self.http_max_connections * 0.3)
+
+        # 最小 10 个保活连接，最大不超过 max_connections
+        return max(10, min(keepalive, self.http_max_connections))
 
     def _parse_ttfb_timeout(self) -> float:
         """

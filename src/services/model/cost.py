@@ -194,6 +194,13 @@ class ModelCostService:
                             "pricing": global_model.default_tiered_pricing,
                             "source": "global"
                         }
+                else:
+                    # Provider 没有实现该模型，直接使用 GlobalModel 的默认阶梯配置
+                    if global_model.default_tiered_pricing is not None:
+                        result = {
+                            "pricing": global_model.default_tiered_pricing,
+                            "source": "global"
+                        }
 
         self._tiered_pricing_cache[cache_key] = result
         return result
@@ -275,6 +282,18 @@ class ModelCostService:
                         input_price = model_obj.get_effective_input_price()
                         output_price = model_obj.get_effective_output_price()
                     logger.debug(f"找到模型价格配置: {provider_name}/{model} "
+                        f"(输入: ${input_price}/M, 输出: ${output_price}/M)")
+                else:
+                    # Provider 没有实现该模型，直接使用 GlobalModel 的默认价格
+                    tiered = global_model.default_tiered_pricing
+                    if tiered and tiered.get("tiers"):
+                        first_tier = tiered["tiers"][0]
+                        input_price = first_tier.get("input_price_per_1m", 0)
+                        output_price = first_tier.get("output_price_per_1m", 0)
+                    else:
+                        input_price = 0.0
+                        output_price = 0.0
+                    logger.debug(f"使用 GlobalModel 默认价格: {provider_name}/{model} "
                         f"(输入: ${input_price}/M, 输出: ${output_price}/M)")
 
         # 如果没有找到价格配置，使用 0.0 并记录警告
@@ -380,6 +399,16 @@ class ModelCostService:
                         # 使用 get_effective_* 方法，会自动回退到 GlobalModel 的默认值
                         cache_creation_price = model_obj.get_effective_cache_creation_price()
                         cache_read_price = model_obj.get_effective_cache_read_price()
+                else:
+                    # Provider 没有实现该模型，直接使用 GlobalModel 的默认价格
+                    tiered = global_model.default_tiered_pricing
+                    if tiered and tiered.get("tiers"):
+                        first_tier = tiered["tiers"][0]
+                        cache_creation_price = first_tier.get("cache_creation_price_per_1m")
+                        cache_read_price = first_tier.get("cache_read_price_per_1m")
+                    else:
+                        cache_creation_price = None
+                        cache_read_price = None
 
         # 默认缓存价格估算（如果没有配置）- 基于输入价格计算
         if cache_creation_price is None or cache_read_price is None:
@@ -434,6 +463,9 @@ class ModelCostService:
                 if model_obj:
                     # 使用 get_effective_* 方法，会自动回退到 GlobalModel 的默认值
                     price_per_request = model_obj.get_effective_price_per_request()
+                else:
+                    # Provider 没有实现该模型，直接使用 GlobalModel 的默认价格
+                    price_per_request = global_model.default_price_per_request
 
         return price_per_request
 

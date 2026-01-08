@@ -45,6 +45,29 @@ def format_tokens(num: int) -> str:
 
 @router.get("/stats")
 async def get_dashboard_stats(request: Request, db: Session = Depends(get_db)):
+    """
+    获取仪表盘统计数据
+
+    根据用户角色返回不同的统计数据。管理员可以看到全局数据，普通用户只能看到自己的数据。
+
+    **返回字段（管理员）**:
+    - `stats`: 统计卡片数组，包含总请求、总费用、总Token、总缓存等信息
+    - `today`: 今日统计（requests, cost, actual_cost, tokens, cache_creation_tokens, cache_read_tokens）
+    - `api_keys`: API Key 统计（total, active）
+    - `tokens`: 本月 Token 统计
+    - `token_breakdown`: Token 详细分类（input, output, cache_creation, cache_read）
+    - `system_health`: 系统健康指标（avg_response_time, error_rate, error_requests, fallback_count, total_requests）
+    - `cost_stats`: 成本统计（total_cost, total_actual_cost, cost_savings）
+    - `cache_stats`: 缓存统计信息
+    - `users`: 用户统计（total, active）
+
+    **返回字段（普通用户）**:
+    - `stats`: 统计卡片数组，包含 API 密钥、本月请求、配额使用、总Token 等信息
+    - `today`: 今日统计
+    - `token_breakdown`: Token 详细分类
+    - `cache_stats`: 缓存统计信息
+    - `monthly_cost`: 本月费用
+    """
     adapter = DashboardStatsAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -55,6 +78,23 @@ async def get_recent_requests(
     limit: int = Query(10, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
+    """
+    获取最近请求列表
+
+    获取最近的 API 请求记录。管理员可以看到所有用户的请求，普通用户只能看到自己的请求。
+
+    **查询参数**:
+    - `limit`: 返回记录数，默认 10，最大 100
+
+    **返回字段**:
+    - `requests`: 请求列表，每条记录包含：
+      - `id`: 请求 ID
+      - `user`: 用户名
+      - `model`: 使用的模型
+      - `tokens`: Token 数量
+      - `time`: 请求时间（HH:MM 格式）
+      - `is_stream`: 是否为流式请求
+    """
     adapter = DashboardRecentRequestsAdapter(limit=limit)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -65,6 +105,17 @@ async def get_recent_requests(
 
 @router.get("/provider-status")
 async def get_provider_status(request: Request, db: Session = Depends(get_db)):
+    """
+    获取提供商状态
+
+    获取所有活跃提供商的状态和最近 24 小时的请求统计。
+
+    **返回字段**:
+    - `providers`: 提供商列表，每个提供商包含：
+      - `name`: 提供商名称
+      - `status`: 状态（active/inactive）
+      - `requests`: 最近 24 小时的请求数
+    """
     adapter = DashboardProviderStatusAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -75,6 +126,28 @@ async def get_daily_stats(
     days: int = Query(7, ge=1, le=30),
     db: Session = Depends(get_db),
 ):
+    """
+    获取每日统计数据
+
+    获取指定天数的每日使用统计数据，用于生成图表。
+
+    **查询参数**:
+    - `days`: 统计天数，默认 7 天，最大 30 天
+
+    **返回字段**:
+    - `daily_stats`: 每日统计数组，每天包含：
+      - `date`: 日期（ISO 格式）
+      - `requests`: 请求数
+      - `tokens`: Token 数量
+      - `cost`: 费用（USD）
+      - `avg_response_time`: 平均响应时间（秒）
+      - `unique_models`: 使用的模型数量（仅管理员）
+      - `unique_providers`: 使用的提供商数量（仅管理员）
+      - `fallback_count`: 故障转移次数（仅管理员）
+      - `model_breakdown`: 按模型分解的统计（仅管理员）
+    - `model_summary`: 模型使用汇总，按费用排序
+    - `period`: 统计周期信息（start_date, end_date, days）
+    """
     adapter = DashboardDailyStatsAdapter(days=days)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -693,7 +766,7 @@ class DashboardProviderStatusAdapter(DashboardAdapter):
         for provider in providers:
             count = (
                 db.query(func.count(Usage.id))
-                .filter(and_(Usage.provider == provider.name, Usage.created_at >= since))
+                .filter(and_(Usage.provider_name == provider.name, Usage.created_at >= since))
                 .scalar()
             )
             entries.append(
@@ -781,7 +854,7 @@ class DashboardDailyStatsAdapter(DashboardAdapter):
                     .scalar() or 0
                 )
                 today_unique_providers = (
-                    db.query(func.count(func.distinct(Usage.provider)))
+                    db.query(func.count(func.distinct(Usage.provider_name)))
                     .filter(Usage.created_at >= today)
                     .scalar() or 0
                 )

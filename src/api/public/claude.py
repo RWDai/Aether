@@ -29,7 +29,27 @@ async def create_message(
     http_request: Request,
     db: Session = Depends(get_db),
 ):
-    """统一入口：根据 x-app 自动在标准/Claude Code 之间切换。"""
+    """
+    Claude Messages API
+
+    兼容 Anthropic Claude Messages API 格式的代理接口。
+    根据请求头 `x-app` 自动在标准 API 和 Claude Code CLI 模式之间切换。
+
+    **认证方式**: x-api-key 请求头
+
+    **请求格式**:
+    ```json
+    {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 1024,
+        "messages": [{"role": "user", "content": "Hello"}]
+    }
+    ```
+
+    **必需请求头**:
+    - `x-api-key`: API 密钥
+    - `anthropic-version`: API 版本（如 2023-06-01）
+    """
     adapter = build_claude_adapter(http_request.headers.get("x-app", ""))
     return await pipeline.run(
         adapter=adapter,
@@ -45,6 +65,13 @@ async def count_tokens(
     http_request: Request,
     db: Session = Depends(get_db),
 ):
+    """
+    Claude Token Count API
+
+    计算消息的 Token 数量，用于预估请求成本。
+
+    **认证方式**: x-api-key 请求头
+    """
     adapter = ClaudeTokenCountAdapter()
     return await pipeline.run(
         adapter=adapter,

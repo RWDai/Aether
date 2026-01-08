@@ -10,7 +10,6 @@ from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from src.core.enums import ProviderBillingType
 from src.core.logger import logger
 from src.models.database import ApiKey, Provider, ProviderAPIKey, Usage, User, UserRole
 from src.services.model.cost import ModelCostService
@@ -309,7 +308,7 @@ class UsageService:
             "user_id": user.id if user else None,
             "api_key_id": api_key.id if api_key else None,
             "request_id": request_id,
-            "provider": provider,
+            "provider_name": provider,
             "model": model,
             "target_model": target_model,
             "provider_id": provider_id,
@@ -362,22 +361,12 @@ class UsageService:
         provider_api_key_id: Optional[str],
         provider_id: Optional[str],
     ) -> Tuple[float, bool]:
-        """获取费率倍数和是否免费套餐"""
-        actual_rate_multiplier = 1.0
-        if provider_api_key_id:
-            provider_key = (
-                db.query(ProviderAPIKey).filter(ProviderAPIKey.id == provider_api_key_id).first()
-            )
-            if provider_key and provider_key.rate_multiplier:
-                actual_rate_multiplier = provider_key.rate_multiplier
+        """获取费率倍数和是否免费套餐（使用缓存）"""
+        from src.services.cache.provider_cache import ProviderCacheService
 
-        is_free_tier = False
-        if provider_id:
-            provider_obj = db.query(Provider).filter(Provider.id == provider_id).first()
-            if provider_obj and provider_obj.billing_type == ProviderBillingType.FREE_TIER:
-                is_free_tier = True
-
-        return actual_rate_multiplier, is_free_tier
+        return await ProviderCacheService.get_rate_multiplier_and_free_tier(
+            db, provider_api_key_id, provider_id
+        )
 
     @classmethod
     async def _calculate_costs(
@@ -479,7 +468,7 @@ class UsageService:
     ) -> None:
         """更新已存在的 Usage 记录（内部方法）"""
         # 更新关键字段
-        existing_usage.provider = usage_params["provider"]
+        existing_usage.provider_name = usage_params["provider_name"]
         existing_usage.status = usage_params["status"]
         existing_usage.status_code = usage_params["status_code"]
         existing_usage.error_message = usage_params["error_message"]
@@ -1092,7 +1081,7 @@ class UsageService:
         # 汇总查询
         summary = db.query(
             date_func.label("period"),
-            Usage.provider,
+            Usage.provider_name,
             Usage.model,
             func.count(Usage.id).label("requests"),
             func.sum(Usage.input_tokens).label("input_tokens"),
@@ -1111,12 +1100,12 @@ class UsageService:
         if end_date:
             summary = summary.filter(Usage.created_at <= end_date)
 
-        summary = summary.group_by(date_func, Usage.provider, Usage.model).all()
+        summary = summary.group_by(date_func, Usage.provider_name, Usage.model).all()
 
         return [
             {
                 "period": row.period,
-                "provider": row.provider,
+                "provider": row.provider_name,
                 "model": row.model,
                 "requests": row.requests,
                 "input_tokens": row.input_tokens,
@@ -1445,7 +1434,7 @@ class UsageService:
             user_id=user.id if user else None,
             api_key_id=api_key.id if api_key else None,
             request_id=request_id,
-            provider="pending",  # 尚未确定 provider
+            provider_name="pending",  # 尚未确定 provider
             model=model,
             input_tokens=0,
             output_tokens=0,
@@ -1508,12 +1497,12 @@ class UsageService:
         if error_message:
             usage.error_message = error_message
         if provider:
-            usage.provider = provider
-        elif status == "streaming" and usage.provider == "pending":
-            # 状态变为 streaming 但 provider 仍为 pending，记录警告
+            usage.provider_name = provider
+        elif status == "streaming" and usage.provider_name == "pending":
+            # 状态变为 streaming 但 provider_name 仍为 pending，记录警告
             logger.warning(
-                f"状态更新为 streaming 但 provider 为空: request_id={request_id}, "
-                f"当前 provider={usage.provider}"
+                f"状态更新为 streaming 但 provider_name 为空: request_id={request_id}, "
+                f"当前 provider_name={usage.provider_name}"
             )
         if target_model:
             usage.target_model = target_model
@@ -1679,7 +1668,7 @@ class UsageService:
             from src.models.database import ProviderAPIKey
 
             query = query.add_columns(
-                Usage.provider,
+                Usage.provider_name,
                 ProviderAPIKey.name.label("api_key_name"),
             ).outerjoin(ProviderAPIKey, Usage.provider_api_key_id == ProviderAPIKey.id)
 
@@ -1731,7 +1720,7 @@ class UsageService:
                 "first_byte_time_ms": r.first_byte_time_ms,  # 首字时间 (TTFB)
             }
             if include_admin_fields:
-                item["provider"] = r.provider
+                item["provider"] = r.provider_name
                 item["api_key_name"] = r.api_key_name
             result.append(item)
 

@@ -2,12 +2,16 @@
 认证服务
 """
 
+from __future__ import annotations
+
 import hashlib
 import secrets
 import time
 import uuid
+from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from threading import Lock
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 import jwt
 from fastapi import HTTPException, status
@@ -18,11 +22,52 @@ from sqlalchemy.orm import Session, joinedload
 from src.config import config
 from src.core.logger import logger
 from src.core.enums import AuthSource
+
+if TYPE_CHECKING:
+    from src.models.database import ManagementToken
 from src.models.database import ApiKey, User, UserRole
 from src.services.auth.jwt_blacklist import JWTBlacklistService
 from src.services.auth.ldap import LDAPService
 from src.services.cache.user_cache import UserCacheService
 from src.services.user.apikey import ApiKeyService
+
+
+# API Key last_used_at 更新节流配置
+# 同一个 API Key 在此时间间隔内只会更新一次 last_used_at
+_LAST_USED_UPDATE_INTERVAL = 60  # 秒
+_LAST_USED_CACHE_MAX_SIZE = 10000  # LRU 缓存最大条目数
+
+# 进程内缓存：记录每个 API Key 最后一次更新 last_used_at 的时间
+# 使用 OrderedDict 实现 LRU，避免内存无限增长
+_api_key_last_update_times: OrderedDict[str, float] = OrderedDict()
+_last_update_lock = Lock()
+
+
+def _should_update_last_used(api_key_id: str) -> bool:
+    """判断是否应该更新 API Key 的 last_used_at
+
+    使用节流策略，同一个 Key 在指定间隔内只更新一次。
+    线程安全，使用 LRU 策略限制缓存大小。
+
+    Returns:
+        True 表示应该更新，False 表示跳过
+    """
+    now = time.time()
+
+    with _last_update_lock:
+        last_update = _api_key_last_update_times.get(api_key_id, 0)
+
+        if now - last_update >= _LAST_USED_UPDATE_INTERVAL:
+            _api_key_last_update_times[api_key_id] = now
+            # LRU: 移到末尾（最近使用）
+            _api_key_last_update_times.move_to_end(api_key_id)
+
+            # 超过最大容量时，移除最旧的条目
+            while len(_api_key_last_update_times) > _LAST_USED_CACHE_MAX_SIZE:
+                _api_key_last_update_times.popitem(last=False)
+
+            return True
+        return False
 
 
 # JWT配置从config读取
@@ -362,9 +407,10 @@ class AuthService:
             logger.warning(f"API认证失败 - 用户已禁用: {user.email}")
             return None
 
-        # 更新最后使用时间
-        key_record.last_used_at = datetime.now(timezone.utc)
-        db.commit()  # 立即提交事务,释放数据库锁,避免阻塞后续请求
+        # 更新最后使用时间（使用节流策略，减少数据库写入）
+        if _should_update_last_used(key_record.id):
+            key_record.last_used_at = datetime.now(timezone.utc)
+            db.commit()  # 立即提交事务,释放数据库锁,避免阻塞后续请求
 
         api_key_fp = hashlib.sha256(api_key.encode()).hexdigest()[:12]
         logger.debug("API认证成功: 用户 {} (api_key_fp={})", user.email, api_key_fp)
@@ -478,3 +524,137 @@ class AuthService:
         except Exception as e:
             logger.error(f"撤销 Token 失败: {e}")
             return False
+
+    @staticmethod
+    async def authenticate_management_token(
+        db: Session, raw_token: str, client_ip: str
+    ) -> Optional[tuple[User, "ManagementToken"]]:
+        """Management Token 认证
+
+        Args:
+            db: 数据库会话
+            raw_token: Management Token 字符串
+            client_ip: 客户端 IP
+
+        Returns:
+            (User, ManagementToken) 元组，认证失败返回 None
+
+        Raises:
+            RateLimitException: 超过速率限制时抛出（用于返回 429）
+        """
+        from src.core.exceptions import RateLimitException
+        from src.models.database import AuditEventType, ManagementToken
+        from src.services.rate_limit.ip_limiter import IPRateLimiter
+        from src.services.system.audit import AuditService
+
+        # 速率限制检查（防止暴力破解）
+        allowed, remaining, ttl = await IPRateLimiter.check_limit(
+            client_ip,
+            endpoint_type="management_token",
+            limit=config.management_token_rate_limit,
+        )
+        if not allowed:
+            logger.warning(f"Management Token 认证 - IP {client_ip} 超过速率限制")
+            raise RateLimitException(limit=config.management_token_rate_limit, window="分钟")
+
+        # 检查 Token 格式
+        if not raw_token.startswith(ManagementToken.TOKEN_PREFIX):
+            logger.warning("Management Token 认证失败 - 格式错误")
+            return None
+
+        # 哈希查找
+        token_hash = ManagementToken.hash_token(raw_token)
+        token_record = (
+            db.query(ManagementToken)
+            .options(joinedload(ManagementToken.user))
+            .filter(ManagementToken.token_hash == token_hash)
+            .first()
+        )
+
+        if not token_record:
+            logger.warning("Management Token 认证失败 - Token 不存在")
+            return None
+
+        # 注意：数据库查询已通过 token_hash 索引匹配，此处不再需要额外的常量时间比较
+        # Token 的 62^40 熵（约 238 位）加上速率限制已足够防止暴力破解
+
+        # 检查状态
+        if not token_record.is_active:
+            logger.warning(f"Management Token 认证失败 - Token 已禁用: {token_record.id}")
+            return None
+
+        # 检查过期（使用属性方法，确保时区安全）
+        if token_record.is_expired:
+            logger.warning(f"Management Token 认证失败 - Token 已过期: {token_record.id}")
+            AuditService.log_event(
+                db=db,
+                event_type=AuditEventType.MANAGEMENT_TOKEN_EXPIRED,
+                description=f"Management Token 已过期: {token_record.name}",
+                user_id=token_record.user_id,
+                ip_address=client_ip,
+                metadata={
+                    "token_id": token_record.id,
+                    "token_name": token_record.name,
+                    "expired_at": (
+                        token_record.expires_at.isoformat() if token_record.expires_at else None
+                    ),
+                },
+            )
+            return None
+
+        # 检查 IP 白名单
+        if not token_record.is_ip_allowed(client_ip):
+            logger.warning(
+                f"Management Token IP 限制 - Token: {token_record.id}, IP: {client_ip}"
+            )
+            AuditService.log_event(
+                db=db,
+                event_type=AuditEventType.MANAGEMENT_TOKEN_IP_BLOCKED,
+                description=f"Management Token IP 被拒绝: {token_record.name}",
+                user_id=token_record.user_id,
+                ip_address=client_ip,
+                metadata={
+                    "token_id": token_record.id,
+                    "token_name": token_record.name,
+                    "blocked_ip": client_ip,
+                    # 不记录 allowed_ips 以防信息泄露
+                },
+            )
+            return None
+
+        # 获取用户
+        user = token_record.user
+        if not user or not user.is_active:
+            logger.warning("Management Token 认证失败 - 用户不存在或已禁用")
+            return None
+
+        # 使用 SQL 原子操作更新使用统计
+        from sqlalchemy import func
+
+        db.query(ManagementToken).filter(ManagementToken.id == token_record.id).update(
+            {
+                ManagementToken.last_used_at: func.now(),  # 使用数据库时间确保一致性
+                ManagementToken.last_used_ip: client_ip,
+                ManagementToken.usage_count: ManagementToken.usage_count + 1,
+                ManagementToken.updated_at: func.now(),  # 显式更新，因为原子 SQL 绕过 ORM
+            },
+            synchronize_session=False,
+        )
+
+        # 记录 Token 使用审计日志
+        AuditService.log_event(
+            db=db,
+            event_type=AuditEventType.MANAGEMENT_TOKEN_USED,
+            description=f"Management Token 认证成功: {token_record.name}",
+            user_id=user.id,
+            ip_address=client_ip,
+            metadata={
+                "token_id": token_record.id,
+                "token_name": token_record.name,
+            },
+        )
+
+        db.commit()
+
+        logger.debug(f"Management Token 认证成功: user={user.email}, token={token_record.id}")
+        return user, token_record

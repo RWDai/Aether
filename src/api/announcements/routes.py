@@ -35,7 +35,32 @@ async def list_announcements(
     offset: int = Query(0, description="偏移量"),
     db: Session = Depends(get_db),
 ):
-    """获取公告列表（包含已读状态）"""
+    """
+    获取公告列表
+
+    获取公告列表，支持分页和筛选。如果用户已登录，返回包含已读状态。
+
+    **查询参数**:
+    - `active_only`: 是否只返回有效公告，默认 true
+    - `limit`: 返回数量限制，默认 50
+    - `offset`: 分页偏移量，默认 0
+
+    **返回字段**:
+    - `items`: 公告列表，每条公告包含：
+      - `id`: 公告 ID
+      - `title`: 标题
+      - `content`: 内容
+      - `type`: 类型（info/warning/error/success）
+      - `priority`: 优先级
+      - `is_pinned`: 是否置顶
+      - `is_read`: 是否已读（仅登录用户）
+      - `author`: 作者信息
+      - `start_time`: 生效开始时间
+      - `end_time`: 生效结束时间
+      - `created_at`: 创建时间
+    - `total`: 总数
+    - `unread_count`: 未读数量（仅登录用户）
+    """
     adapter = ListAnnouncementsAdapter(active_only=active_only, limit=limit, offset=offset)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -45,7 +70,16 @@ async def get_active_announcements(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    """获取当前有效的公告（首页展示）"""
+    """
+    获取当前有效的公告
+
+    获取当前时间范围内有效的公告列表，用于首页展示。
+
+    **返回字段**:
+    - `items`: 有效公告列表
+    - `total`: 有效公告总数
+    - `unread_count`: 未读数量（仅登录用户）
+    """
     adapter = GetActiveAnnouncementsAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -56,7 +90,27 @@ async def get_announcement(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    """获取单个公告详情"""
+    """
+    获取单个公告详情
+
+    获取指定公告的详细信息。
+
+    **路径参数**:
+    - `announcement_id`: 公告 ID（UUID）
+
+    **返回字段**:
+    - `id`: 公告 ID
+    - `title`: 标题
+    - `content`: 内容
+    - `type`: 类型（info/warning/error/success）
+    - `priority`: 优先级
+    - `is_pinned`: 是否置顶
+    - `author`: 作者信息（id, username）
+    - `start_time`: 生效开始时间
+    - `end_time`: 生效结束时间
+    - `created_at`: 创建时间
+    - `updated_at`: 更新时间
+    """
     adapter = GetAnnouncementAdapter(announcement_id=announcement_id)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -67,7 +121,17 @@ async def mark_announcement_as_read(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    """Mark announcement as read"""
+    """
+    标记公告为已读
+
+    将指定公告标记为当前用户已读。需要登录。
+
+    **路径参数**:
+    - `announcement_id`: 公告 ID（UUID）
+
+    **返回字段**:
+    - `message`: 操作结果信息
+    """
     adapter = MarkAnnouncementReadAdapter(announcement_id=announcement_id)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -80,7 +144,25 @@ async def create_announcement(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    """创建公告（管理员权限）"""
+    """
+    创建公告
+
+    创建新的系统公告。需要管理员权限。
+
+    **请求体字段**:
+    - `title`: 公告标题（必填）
+    - `content`: 公告内容（必填）
+    - `type`: 公告类型（info/warning/error/success），默认 info
+    - `priority`: 优先级（0-100），默认 0
+    - `is_pinned`: 是否置顶，默认 false
+    - `start_time`: 生效开始时间（可选）
+    - `end_time`: 生效结束时间（可选）
+
+    **返回字段**:
+    - `id`: 新创建的公告 ID
+    - `title`: 公告标题
+    - `message`: 操作结果信息
+    """
     adapter = CreateAnnouncementAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -91,7 +173,27 @@ async def update_announcement(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    """更新公告（管理员权限）"""
+    """
+    更新公告
+
+    更新指定公告的信息。需要管理员权限。
+
+    **路径参数**:
+    - `announcement_id`: 公告 ID（UUID）
+
+    **请求体字段（均为可选）**:
+    - `title`: 公告标题
+    - `content`: 公告内容
+    - `type`: 公告类型（info/warning/error/success）
+    - `priority`: 优先级（0-100）
+    - `is_active`: 是否启用
+    - `is_pinned`: 是否置顶
+    - `start_time`: 生效开始时间
+    - `end_time`: 生效结束时间
+
+    **返回字段**:
+    - `message`: 操作结果信息
+    """
     adapter = UpdateAnnouncementAdapter(announcement_id=announcement_id)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -102,7 +204,17 @@ async def delete_announcement(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    """删除公告（管理员权限）"""
+    """
+    删除公告
+
+    删除指定的公告。需要管理员权限。
+
+    **路径参数**:
+    - `announcement_id`: 公告 ID（UUID）
+
+    **返回字段**:
+    - `message`: 操作结果信息
+    """
     adapter = DeleteAnnouncementAdapter(announcement_id=announcement_id)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -115,7 +227,14 @@ async def get_my_unread_announcement_count(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    """获取我的未读公告数量"""
+    """
+    获取我的未读公告数量
+
+    获取当前用户的未读公告数量。需要登录。
+
+    **返回字段**:
+    - `unread_count`: 未读公告数量
+    """
     adapter = UnreadAnnouncementCountAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 

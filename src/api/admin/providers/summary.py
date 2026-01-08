@@ -40,7 +40,41 @@ async def get_providers_summary(
     request: Request,
     db: Session = Depends(get_db),
 ) -> List[ProviderWithEndpointsSummary]:
-    """获取所有 Providers 的摘要信息(包含 Endpoints 和 Keys 统计)"""
+    """
+    获取所有提供商摘要信息
+
+    获取所有提供商的详细摘要信息，包含端点、密钥、模型统计和健康状态。
+
+    **返回字段**（数组，每项包含）:
+    - `id`: 提供商 ID
+    - `name`: 提供商名称
+    - `display_name`: 显示名称
+    - `description`: 描述信息
+    - `website`: 官网地址
+    - `provider_priority`: 优先级
+    - `is_active`: 是否启用
+    - `billing_type`: 计费类型
+    - `monthly_quota_usd`: 月度配额（美元）
+    - `monthly_used_usd`: 本月已使用金额（美元）
+    - `quota_reset_day`: 配额重置日期
+    - `quota_last_reset_at`: 上次配额重置时间
+    - `quota_expires_at`: 配额过期时间
+    - `rpm_limit`: RPM 限制
+    - `rpm_used`: 已使用 RPM
+    - `rpm_reset_at`: RPM 重置时间
+    - `total_endpoints`: 端点总数
+    - `active_endpoints`: 活跃端点数
+    - `total_keys`: 密钥总数
+    - `active_keys`: 活跃密钥数
+    - `total_models`: 模型总数
+    - `active_models`: 活跃模型数
+    - `avg_health_score`: 平均健康分数（0-1）
+    - `unhealthy_endpoints`: 不健康端点数（健康分数 < 0.5）
+    - `api_formats`: 支持的 API 格式列表
+    - `endpoint_health_details`: 端点健康详情（包含 api_format, health_score, is_active, active_keys）
+    - `created_at`: 创建时间
+    - `updated_at`: 更新时间
+    """
     adapter = AdminProviderSummaryAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -51,7 +85,44 @@ async def get_provider_summary(
     request: Request,
     db: Session = Depends(get_db),
 ) -> ProviderWithEndpointsSummary:
-    """获取单个 Provider 的摘要信息(包含 Endpoints 和 Keys 统计)"""
+    """
+    获取单个提供商摘要信息
+
+    获取指定提供商的详细摘要信息，包含端点、密钥、模型统计和健康状态。
+
+    **路径参数**:
+    - `provider_id`: 提供商 ID
+
+    **返回字段**:
+    - `id`: 提供商 ID
+    - `name`: 提供商名称
+    - `display_name`: 显示名称
+    - `description`: 描述信息
+    - `website`: 官网地址
+    - `provider_priority`: 优先级
+    - `is_active`: 是否启用
+    - `billing_type`: 计费类型
+    - `monthly_quota_usd`: 月度配额（美元）
+    - `monthly_used_usd`: 本月已使用金额（美元）
+    - `quota_reset_day`: 配额重置日期
+    - `quota_last_reset_at`: 上次配额重置时间
+    - `quota_expires_at`: 配额过期时间
+    - `rpm_limit`: RPM 限制
+    - `rpm_used`: 已使用 RPM
+    - `rpm_reset_at`: RPM 重置时间
+    - `total_endpoints`: 端点总数
+    - `active_endpoints`: 活跃端点数
+    - `total_keys`: 密钥总数
+    - `active_keys`: 活跃密钥数
+    - `total_models`: 模型总数
+    - `active_models`: 活跃模型数
+    - `avg_health_score`: 平均健康分数（0-1）
+    - `unhealthy_endpoints`: 不健康端点数（健康分数 < 0.5）
+    - `api_formats`: 支持的 API 格式列表
+    - `endpoint_health_details`: 端点健康详情（包含 api_format, health_score, is_active, active_keys）
+    - `created_at`: 创建时间
+    - `updated_at`: 更新时间
+    """
     provider = db.query(Provider).filter(Provider.id == provider_id).first()
     if not provider:
         raise NotFoundException(f"Provider {provider_id} not found")
@@ -67,7 +138,34 @@ async def get_provider_health_monitor(
     per_endpoint_limit: int = Query(48, ge=10, le=200, description="每个端点的事件数量"),
     db: Session = Depends(get_db),
 ) -> ProviderEndpointHealthMonitorResponse:
-    """获取 Provider 下所有端点的健康监控时间线"""
+    """
+    获取提供商健康监控数据
+
+    获取指定提供商下所有端点的健康监控时间线，包含请求成功率、延迟、错误信息等。
+
+    **路径参数**:
+    - `provider_id`: 提供商 ID
+
+    **查询参数**:
+    - `lookback_hours`: 回溯的小时数，范围 1-72，默认为 6
+    - `per_endpoint_limit`: 每个端点返回的事件数量，范围 10-200，默认为 48
+
+    **返回字段**:
+    - `provider_id`: 提供商 ID
+    - `provider_name`: 提供商名称
+    - `generated_at`: 生成时间
+    - `endpoints`: 端点健康监控数据数组，每项包含：
+      - `endpoint_id`: 端点 ID
+      - `api_format`: API 格式
+      - `is_active`: 是否活跃
+      - `total_attempts`: 总请求次数
+      - `success_count`: 成功次数
+      - `failed_count`: 失败次数
+      - `skipped_count`: 跳过次数
+      - `success_rate`: 成功率（0-1）
+      - `last_event_at`: 最后事件时间
+      - `events`: 事件详情数组（包含 timestamp, status, status_code, latency_ms, error_type, error_message）
+    """
 
     adapter = AdminProviderHealthMonitorAdapter(
         provider_id=provider_id,
@@ -84,7 +182,29 @@ async def update_provider_settings(
     request: Request,
     db: Session = Depends(get_db),
 ) -> ProviderWithEndpointsSummary:
-    """更新 Provider 基础配置（display_name, description, priority, weight 等）"""
+    """
+    更新提供商基础配置
+
+    更新提供商的基础配置信息，如显示名称、描述、优先级等。只需传入需要更新的字段。
+
+    **路径参数**:
+    - `provider_id`: 提供商 ID
+
+    **请求体字段**（所有字段可选）:
+    - `display_name`: 显示名称
+    - `description`: 描述信息
+    - `website`: 官网地址
+    - `provider_priority`: 优先级
+    - `is_active`: 是否启用
+    - `billing_type`: 计费类型
+    - `monthly_quota_usd`: 月度配额（美元）
+    - `quota_reset_day`: 配额重置日期
+    - `quota_last_reset_at`: 上次配额重置时间
+    - `quota_expires_at`: 配额过期时间
+    - `rpm_limit`: RPM 限制
+
+    **返回字段**: 返回更新后的提供商摘要信息（与 GET /summary 接口返回格式相同）
+    """
 
     adapter = AdminUpdateProviderSettingsAdapter(provider_id=provider_id, update_data=update_data)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)

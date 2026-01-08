@@ -28,12 +28,48 @@ async def get_my_audit_logs(
     offset: int = Query(0, ge=0, description="偏移量"),
     db: Session = Depends(get_db),
 ):
+    """
+    获取我的审计日志
+
+    获取当前用户的审计日志记录。需要登录。
+
+    **查询参数**:
+    - `event_type`: 可选，事件类型筛选
+    - `days`: 查询最近多少天的日志，默认 30 天
+    - `limit`: 返回数量限制，默认 50
+    - `offset`: 分页偏移量，默认 0
+
+    **返回字段**:
+    - `items`: 审计日志列表，每条日志包含：
+      - `id`: 日志 ID
+      - `event_type`: 事件类型
+      - `description`: 事件描述
+      - `ip_address`: IP 地址
+      - `status_code`: HTTP 状态码
+      - `created_at`: 创建时间
+    - `meta`: 分页元数据（total, limit, offset, count）
+    - `filters`: 筛选条件
+    """
     adapter = UserAuditLogsAdapter(event_type=event_type, days=days, limit=limit, offset=offset)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.get("/rate-limit-status")
 async def get_rate_limit_status(request: Request, db: Session = Depends(get_db)):
+    """
+    获取速率限制状态
+
+    获取当前用户所有活跃 API Key 的速率限制状态。需要登录。
+
+    **返回字段**:
+    - `user_id`: 用户 ID
+    - `api_keys`: API Key 限流状态列表，每个包含：
+      - `api_key_name`: API Key 名称
+      - `limit`: 速率限制上限
+      - `remaining`: 剩余可用次数
+      - `reset_time`: 限制重置时间
+      - `window`: 时间窗口
+    """
     adapter = UserRateLimitStatusAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 

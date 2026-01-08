@@ -35,6 +35,11 @@ const routes: RouteRecordRaw[] = [
         component: () => importWithRetry(() => import('@/views/user/MyApiKeys.vue'))
       },
       {
+        path: 'management-tokens',
+        name: 'ManagementTokens',
+        component: () => importWithRetry(() => import('@/views/user/ManagementTokens.vue'))
+      },
+      {
         path: 'announcements',
         name: 'Announcements',
         component: () => importWithRetry(() => import('@/views/user/Announcements.vue'))
@@ -80,6 +85,11 @@ const routes: RouteRecordRaw[] = [
         path: 'keys',
         name: 'ApiKeys',
         component: () => importWithRetry(() => import('@/views/admin/ApiKeys.vue'))
+      },
+      {
+        path: 'management-tokens',
+        name: 'AdminManagementTokens',
+        component: () => importWithRetry(() => import('@/views/user/ManagementTokens.vue'))
       },
       {
         path: 'providers',

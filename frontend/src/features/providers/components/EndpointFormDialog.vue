@@ -20,44 +20,8 @@
           API 配置
         </h3>
 
+        <!-- API URL 和自定义路径 -->
         <div class="grid grid-cols-2 gap-4">
-          <!-- API 格式 -->
-          <div class="space-y-2">
-            <Label for="api_format">API 格式 *</Label>
-            <template v-if="isEditMode">
-              <Input
-                id="api_format"
-                v-model="form.api_format"
-                disabled
-                class="bg-muted"
-              />
-              <p class="text-xs text-muted-foreground">
-                API 格式创建后不可修改
-              </p>
-            </template>
-            <template v-else>
-              <Select
-                v-model="form.api_format"
-                v-model:open="selectOpen"
-                required
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="请选择 API 格式" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem
-                    v-for="format in apiFormats"
-                    :key="format.value"
-                    :value="format.value"
-                  >
-                    {{ format.label }}
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-            </template>
-          </div>
-
-          <!-- API URL -->
           <div class="space-y-2">
             <Label for="base_url">API URL *</Label>
             <Input
@@ -67,16 +31,70 @@
               required
             />
           </div>
+
+          <div class="space-y-2">
+            <Label for="custom_path">自定义请求路径（可选）</Label>
+            <Input
+              id="custom_path"
+              v-model="form.custom_path"
+              :placeholder="isEditMode ? defaultPathPlaceholder : '留空使用各格式的默认路径'"
+            />
+          </div>
         </div>
 
-        <!-- 自定义路径 -->
+        <!-- API 格式 -->
         <div class="space-y-2">
-          <Label for="custom_path">自定义请求路径（可选）</Label>
-          <Input
-            id="custom_path"
-            v-model="form.custom_path"
-            :placeholder="defaultPathPlaceholder"
-          />
+          <Label for="api_format">API 格式 *</Label>
+          <template v-if="isEditMode">
+            <Input
+              id="api_format"
+              v-model="form.api_format"
+              disabled
+              class="bg-muted"
+            />
+            <p class="text-xs text-muted-foreground">
+              API 格式创建后不可修改
+            </p>
+          </template>
+          <template v-else>
+            <div class="grid grid-cols-3 grid-flow-col grid-rows-2 gap-2">
+              <label
+                v-for="format in sortedApiFormats"
+                :key="format.value"
+                class="flex items-center gap-2 rounded-md border px-3 py-2 cursor-pointer transition-all text-sm"
+                :class="selectedFormats.includes(format.value)
+                  ? 'border-primary bg-primary/10 text-primary font-medium'
+                  : 'border-border hover:border-primary/50 hover:bg-accent'"
+              >
+                <input
+                  type="checkbox"
+                  :value="format.value"
+                  v-model="selectedFormats"
+                  class="sr-only"
+                />
+                <span
+                  class="flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors"
+                  :class="selectedFormats.includes(format.value)
+                    ? 'border-primary bg-primary text-primary-foreground'
+                    : 'border-muted-foreground/30'"
+                >
+                  <svg
+                    v-if="selectedFormats.includes(format.value)"
+                    class="h-3 w-3"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="3"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                </span>
+                <span>{{ format.label }}</span>
+              </label>
+            </div>
+          </template>
         </div>
       </div>
 
@@ -86,7 +104,7 @@
           请求配置
         </h3>
 
-        <div class="grid grid-cols-3 gap-4">
+        <div class="grid grid-cols-4 gap-4">
           <div class="space-y-2">
             <Label for="timeout">超时（秒）</Label>
             <Input
@@ -117,11 +135,9 @@
               @update:model-value="(v) => form.max_concurrent = parseNumberInput(v)"
             />
           </div>
-        </div>
 
-        <div class="grid grid-cols-2 gap-4">
           <div class="space-y-2">
-            <Label for="rate_limit">速率限制（请求/分钟）</Label>
+            <Label for="rate_limit">速率限制（/分钟）</Label>
             <Input
               id="rate_limit"
               :model-value="form.rate_limit ?? ''"
@@ -217,10 +233,10 @@
         取消
       </Button>
       <Button
-        :disabled="loading || !form.base_url || (!isEditMode && !form.api_format)"
+        :disabled="loading || !form.base_url || (!isEditMode && selectedFormats.length === 0)"
         @click="handleSubmit()"
       >
-        {{ loading ? (isEditMode ? '保存中...' : '创建中...') : (isEditMode ? '保存修改' : '创建') }}
+        {{ loading ? (isEditMode ? '保存中...' : '创建中...') : (isEditMode ? '保存修改' : `创建 ${selectedFormats.length} 个端点`) }}
       </Button>
     </template>
   </Dialog>
@@ -245,11 +261,6 @@ import {
   Button,
   Input,
   Label,
-  Select,
-  SelectTrigger,
-  SelectValue,
-  SelectContent,
-  SelectItem,
   Switch,
 } from '@/components/ui'
 import AlertDialog from '@/components/common/AlertDialog.vue'
@@ -280,7 +291,6 @@ const emit = defineEmits<{
 
 const { success, error: showError } = useToast()
 const loading = ref(false)
-const selectOpen = ref(false)
 const proxyEnabled = ref(false)
 const showClearCredentialsDialog = ref(false)  // 确认清空凭据对话框
 
@@ -296,7 +306,7 @@ const form = ref({
   base_url: '',
   custom_path: '',
   timeout: 300,
-  max_retries: 3,
+  max_retries: 2,
   max_concurrent: undefined as number | undefined,
   rate_limit: undefined as number | undefined,
   is_active: true,
@@ -306,8 +316,27 @@ const form = ref({
   proxy_password: '',
 })
 
+// 选中的 API 格式（多选）
+const selectedFormats = ref<string[]>([])
+
 // API 格式列表
 const apiFormats = ref<Array<{ value: string; label: string; default_path: string; aliases: string[] }>>([])
+
+// 排序后的 API 格式：按列排列，每列是基础格式+CLI格式
+const sortedApiFormats = computed(() => {
+  const baseFormats = apiFormats.value.filter(f => !f.value.endsWith('_cli'))
+  const cliFormats = apiFormats.value.filter(f => f.value.endsWith('_cli'))
+  // 交错排列：base1, cli1, base2, cli2, base3, cli3
+  const result: typeof apiFormats.value = []
+  for (let i = 0; i < baseFormats.length; i++) {
+    result.push(baseFormats[i])
+    const cliFormat = cliFormats.find(f => f.value === baseFormats[i].value + '_cli')
+    if (cliFormat) {
+      result.push(cliFormat)
+    }
+  }
+  return result
+})
 
 // 加载API格式列表
 const loadApiFormats = async () => {
@@ -330,7 +359,7 @@ const defaultPath = computed(() => {
 
 // 动态 placeholder
 const defaultPathPlaceholder = computed(() => {
-  return `留空使用默认路径：${defaultPath.value}`
+  return defaultPath.value
 })
 
 // 检查是否有已保存的密码（后端返回 *** 表示有密码）
@@ -392,7 +421,7 @@ function resetForm() {
     base_url: '',
     custom_path: '',
     timeout: 300,
-    max_retries: 3,
+    max_retries: 2,
     max_concurrent: undefined,
     rate_limit: undefined,
     is_active: true,
@@ -400,6 +429,7 @@ function resetForm() {
     proxy_username: '',
     proxy_password: '',
   }
+  selectedFormats.value = []
   proxyEnabled.value = false
 }
 
@@ -479,6 +509,8 @@ const handleSubmit = async (skipCredentialCheck = false) => {
   }
 
   loading.value = true
+  let successCount = 0
+  
   try {
     const proxyConfig = buildProxyConfig()
 
@@ -497,27 +529,56 @@ const handleSubmit = async (skipCredentialCheck = false) => {
 
       success('端点已更新', '保存成功')
       emit('endpointUpdated')
+      emit('update:modelValue', false)
     } else if (props.provider) {
-      // 创建端点
-      await createEndpoint(props.provider.id, {
-        provider_id: props.provider.id,
-        api_format: form.value.api_format,
-        base_url: form.value.base_url,
-        custom_path: form.value.custom_path || undefined,
-        timeout: form.value.timeout,
-        max_retries: form.value.max_retries,
-        max_concurrent: form.value.max_concurrent,
-        rate_limit: form.value.rate_limit,
-        is_active: form.value.is_active,
-        proxy: proxyConfig,
+      // 批量创建端点 - 使用并发请求提升性能
+      const results = await Promise.allSettled(
+        selectedFormats.value.map(apiFormat =>
+          createEndpoint(props.provider!.id, {
+            provider_id: props.provider!.id,
+            api_format: apiFormat,
+            base_url: form.value.base_url,
+            custom_path: form.value.custom_path || undefined,
+            timeout: form.value.timeout,
+            max_retries: form.value.max_retries,
+            max_concurrent: form.value.max_concurrent,
+            rate_limit: form.value.rate_limit,
+            is_active: form.value.is_active,
+            proxy: proxyConfig,
+          })
+        )
+      )
+
+      // 统计结果
+      const errors: string[] = []
+      results.forEach((result, index) => {
+        if (result.status === 'fulfilled') {
+          successCount++
+        } else {
+          const apiFormat = selectedFormats.value[index]
+          const formatLabel = apiFormats.value.find((f: any) => f.value === apiFormat)?.label || apiFormat
+          const errorMsg = result.reason?.response?.data?.detail || '创建失败'
+          errors.push(`${formatLabel}: ${errorMsg}`)
+        }
       })
 
-      success('端点创建成功', '成功')
-      emit('endpointCreated')
-      resetForm()
-    }
+      const failCount = errors.length
 
-    emit('update:modelValue', false)
+      // 显示结果
+      if (successCount > 0 && failCount === 0) {
+        success(`成功创建 ${successCount} 个端点`, '创建成功')
+      } else if (successCount > 0 && failCount > 0) {
+        showError(`${failCount} 个端点创建失败:\n${errors.join('\n')}`, `${successCount} 个成功，${failCount} 个失败`)
+      } else {
+        showError(errors.join('\n') || '创建端点失败', '创建失败')
+      }
+
+      if (successCount > 0) {
+        emit('endpointCreated')
+        resetForm()
+        emit('update:modelValue', false)
+      }
+    }
   } catch (error: any) {
     const action = isEditMode.value ? '更新' : '创建'
     showError(error.response?.data?.detail || `${action}端点失败`, '错误')

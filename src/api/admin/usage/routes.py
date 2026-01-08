@@ -39,12 +39,21 @@ async def get_usage_aggregation(
     db: Session = Depends(get_db),
 ):
     """
-    Get usage aggregation by specified dimension.
+    获取使用情况聚合统计
 
-    - group_by=model: Aggregate by model
-    - group_by=user: Aggregate by user
-    - group_by=provider: Aggregate by provider
-    - group_by=api_format: Aggregate by API format
+    按指定维度聚合使用情况统计数据。
+
+    **查询参数**:
+    - `group_by`: 必需，聚合维度，可选值：model（按模型）、user（按用户）、provider（按提供商）、api_format（按 API 格式）
+    - `start_date`: 可选，开始日期（ISO 格式）
+    - `end_date`: 可选，结束日期（ISO 格式）
+    - `limit`: 返回数量限制，默认 20，最大 100
+
+    **返回字段**:
+    - 按模型聚合时：model, request_count, total_tokens, total_cost, actual_cost
+    - 按用户聚合时：user_id, email, username, request_count, total_tokens, total_cost
+    - 按提供商聚合时：provider_id, provider, request_count, total_tokens, total_cost, actual_cost, avg_response_time_ms, success_rate, error_count
+    - 按 API 格式聚合时：api_format, request_count, total_tokens, total_cost, actual_cost, avg_response_time_ms
     """
     if group_by == "model":
         adapter = AdminUsageByModelAdapter(start_date=start_date, end_date=end_date, limit=limit)
@@ -69,6 +78,25 @@ async def get_usage_stats(
     end_date: Optional[datetime] = None,
     db: Session = Depends(get_db),
 ):
+    """
+    获取使用情况总体统计
+
+    获取指定时间范围内的使用情况总体统计数据。
+
+    **查询参数**:
+    - `start_date`: 可选，开始日期（ISO 格式）
+    - `end_date`: 可选，结束日期（ISO 格式）
+
+    **返回字段**:
+    - `total_requests`: 总请求数
+    - `total_tokens`: 总 token 数
+    - `total_cost`: 总成本（美元）
+    - `total_actual_cost`: 实际总成本（美元）
+    - `avg_response_time`: 平均响应时间（秒）
+    - `error_count`: 错误请求数
+    - `error_rate`: 错误率（百分比）
+    - `cache_stats`: 缓存统计信息（cache_creation_tokens, cache_read_tokens, cache_creation_cost, cache_read_cost）
+    """
     adapter = AdminUsageStatsAdapter(start_date=start_date, end_date=end_date)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -79,9 +107,12 @@ async def get_activity_heatmap(
     db: Session = Depends(get_db),
 ):
     """
-    Get activity heatmap data for the past 365 days.
+    获取活动热力图数据
 
-    This endpoint is cached for 5 minutes to reduce database load.
+    获取过去 365 天的活动热力图数据。此接口缓存 5 分钟以减少数据库负载。
+
+    **返回字段**:
+    - 按日期聚合的请求数、token 数、成本等统计数据
     """
     adapter = AdminActivityHeatmapAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
@@ -102,6 +133,33 @@ async def get_usage_records(
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
 ):
+    """
+    获取使用记录列表
+
+    获取详细的使用记录列表，支持多种筛选条件。
+
+    **查询参数**:
+    - `start_date`: 可选，开始日期（ISO 格式）
+    - `end_date`: 可选，结束日期（ISO 格式）
+    - `search`: 可选，通用搜索关键词（支持用户名、密钥名、模型名、提供商名模糊搜索，多个关键词用空格分隔）
+    - `user_id`: 可选，用户 ID 筛选
+    - `username`: 可选，用户名模糊搜索
+    - `model`: 可选，模型名模糊搜索
+    - `provider`: 可选，提供商名称搜索
+    - `status`: 可选，状态筛选（stream: 流式请求，standard: 标准请求，error: 错误请求，pending: 等待中，streaming: 流式中，completed: 已完成，failed: 失败，active: 活跃请求）
+    - `limit`: 返回数量限制，默认 100，最大 500
+    - `offset`: 分页偏移量，默认 0
+
+    **返回字段**:
+    - `records`: 使用记录列表，包含 id, user_id, user_email, username, api_key, provider, model, target_model,
+      input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens, total_tokens,
+      cost, actual_cost, rate_multiplier, response_time_ms, first_byte_time_ms, created_at, is_stream,
+      input_price_per_1m, output_price_per_1m, cache_creation_price_per_1m, cache_read_price_per_1m,
+      status_code, error_message, status, has_fallback, api_format, api_key_name, request_metadata
+    - `total`: 符合条件的总记录数
+    - `limit`: 当前分页限制
+    - `offset`: 当前分页偏移量
+    """
     adapter = AdminUsageRecordsAdapter(
         start_date=start_date,
         end_date=end_date,
@@ -124,10 +182,19 @@ async def get_active_requests(
     db: Session = Depends(get_db),
 ):
     """
-    获取活跃请求的状态（轻量级接口，用于前端轮询）
+    获取活跃请求的状态
 
+    获取当前活跃（pending/streaming 状态）请求的状态信息。这是一个轻量级接口，适合前端轮询。
+
+    **查询参数**:
+    - `ids`: 可选，逗号分隔的请求 ID 列表，用于查询特定请求的状态
+
+    **行为说明**:
     - 如果提供 ids 参数，只返回这些 ID 对应请求的最新状态
     - 如果不提供 ids，返回所有 pending/streaming 状态的请求
+
+    **返回字段**:
+    - `requests`: 活跃请求列表，包含请求状态信息
     """
     adapter = AdminActiveRequestsAdapter(ids=ids)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
@@ -142,9 +209,48 @@ async def get_usage_detail(
     db: Session = Depends(get_db),
 ):
     """
-    Get detailed information of a specific usage record.
+    获取使用记录详情
 
-    Includes request/response headers and body.
+    获取指定使用记录的详细信息，包括请求/响应的头部和正文。
+
+    **路径参数**:
+    - `usage_id`: 使用记录 ID
+
+    **返回字段**:
+    - `id`: 记录 ID
+    - `request_id`: 请求 ID
+    - `user`: 用户信息（id, username, email）
+    - `api_key`: API Key 信息（id, name, display）
+    - `provider`: 提供商名称
+    - `api_format`: API 格式
+    - `model`: 请求的模型名称
+    - `target_model`: 映射后的目标模型名称
+    - `tokens`: Token 统计（input, output, total）
+    - `cost`: 成本统计（input, output, total）
+    - `cache_creation_input_tokens`: 缓存创建输入 token 数
+    - `cache_read_input_tokens`: 缓存读取输入 token 数
+    - `cache_creation_cost`: 缓存创建成本
+    - `cache_read_cost`: 缓存读取成本
+    - `request_cost`: 请求成本
+    - `input_price_per_1m`: 输入价格（每百万 token）
+    - `output_price_per_1m`: 输出价格（每百万 token）
+    - `cache_creation_price_per_1m`: 缓存创建价格（每百万 token）
+    - `cache_read_price_per_1m`: 缓存读取价格（每百万 token）
+    - `price_per_request`: 每请求价格
+    - `request_type`: 请求类型
+    - `is_stream`: 是否为流式请求
+    - `status_code`: HTTP 状态码
+    - `error_message`: 错误信息
+    - `response_time_ms`: 响应时间（毫秒）
+    - `first_byte_time_ms`: 首字节时间（TTFB，毫秒）
+    - `created_at`: 创建时间
+    - `request_headers`: 请求头
+    - `request_body`: 请求体
+    - `provider_request_headers`: 提供商请求头
+    - `response_headers`: 响应头
+    - `response_body`: 响应体
+    - `metadata`: 提供商响应元数据
+    - `tiered_pricing`: 阶梯计费信息（如适用）
     """
     adapter = AdminUsageDetailAdapter(usage_id=usage_id)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
@@ -247,8 +353,8 @@ class AdminUsageByModelAdapter(AdminApiAdapter):
         )
         # 过滤掉 pending/streaming 状态的请求（尚未完成的请求不应计入统计）
         query = query.filter(Usage.status.notin_(["pending", "streaming"]))
-        # 过滤掉 unknown/pending provider（请求未到达任何提供商）
-        query = query.filter(Usage.provider.notin_(["unknown", "pending"]))
+        # 过滤掉 unknown/pending provider_name（请求未到达任何提供商）
+        query = query.filter(Usage.provider_name.notin_(["unknown", "pending"]))
 
         if self.start_date:
             query = query.filter(Usage.created_at >= self.start_date)
@@ -459,8 +565,8 @@ class AdminUsageByApiFormatAdapter(AdminApiAdapter):
         )
         # 过滤掉 pending/streaming 状态的请求
         query = query.filter(Usage.status.notin_(["pending", "streaming"]))
-        # 过滤掉 unknown/pending provider
-        query = query.filter(Usage.provider.notin_(["unknown", "pending"]))
+        # 过滤掉 unknown/pending provider_name
+        query = query.filter(Usage.provider_name.notin_(["unknown", "pending"]))
         # 只统计有 api_format 的记录
         query = query.filter(Usage.api_format.isnot(None))
 
@@ -659,8 +765,8 @@ class AdminUsageRecordsAdapter(AdminApiAdapter):
                 float(usage.rate_multiplier) if usage.rate_multiplier is not None else 1.0
             )
 
-            # 提供商名称优先级：关联的 Provider 表 > usage.provider 字段
-            provider_name = usage.provider
+            # 提供商名称优先级：关联的 Provider 表 > usage.provider_name 字段
+            provider_name = usage.provider_name
             if usage.provider_id and str(usage.provider_id) in provider_map:
                 provider_name = provider_map[str(usage.provider_id)]
 
@@ -775,7 +881,7 @@ class AdminUsageDetailAdapter(AdminApiAdapter):
                 "name": api_key.name if api_key else None,
                 "display": api_key.get_display_key() if api_key else None,
             },
-            "provider": usage_record.provider,
+            "provider": usage_record.provider_name,
             "api_format": usage_record.api_format,
             "model": usage_record.model,
             "target_model": usage_record.target_model,
@@ -828,7 +934,7 @@ class AdminUsageDetailAdapter(AdminApiAdapter):
         # 尝试获取模型的阶梯配置（带来源信息）
         cost_service = ModelCostService(db)
         pricing_result = await cost_service.get_tiered_pricing_with_source_async(
-            usage_record.provider, usage_record.model
+            usage_record.provider_name, usage_record.model
         )
 
         if not pricing_result:

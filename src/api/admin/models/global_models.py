@@ -40,7 +40,27 @@ async def list_global_models(
     search: Optional[str] = Query(None),
     db: Session = Depends(get_db),
 ) -> GlobalModelListResponse:
-    """获取 GlobalModel 列表"""
+    """
+    获取 GlobalModel 列表
+
+    查询系统中的全局模型列表，支持分页、过滤和搜索功能。
+
+    **查询参数**:
+    - `skip`: 跳过记录数，用于分页（默认 0）
+    - `limit`: 返回记录数，用于分页（默认 100，最大 1000）
+    - `is_active`: 过滤活跃状态（true/false/null，null 表示不过滤）
+    - `search`: 搜索关键词，支持按名称或显示名称模糊搜索
+
+    **返回字段**:
+    - `models`: GlobalModel 列表，每个包含：
+      - `id`: GlobalModel ID
+      - `name`: 模型名称（唯一）
+      - `display_name`: 显示名称
+      - `is_active`: 是否活跃
+      - `provider_count`: 关联提供商数量
+      - 定价和能力配置等其他字段
+    - `total`: 返回的模型总数
+    """
     adapter = AdminListGlobalModelsAdapter(
         skip=skip,
         limit=limit,
@@ -56,7 +76,21 @@ async def get_global_model(
     global_model_id: str,
     db: Session = Depends(get_db),
 ) -> GlobalModelWithStats:
-    """获取单个 GlobalModel 详情（含统计信息）"""
+    """
+    获取单个 GlobalModel 详情
+
+    查询指定 GlobalModel 的详细信息，包含关联的提供商和价格统计数据。
+
+    **路径参数**:
+    - `global_model_id`: GlobalModel ID
+
+    **返回字段**:
+    - 基础字段：`id`, `name`, `display_name`, `is_active` 等
+    - 统计字段：
+      - `total_models`: 关联的 Model 实现数量
+      - `total_providers`: 关联的提供商数量
+      - `price_range`: 价格区间统计（最低/最高输入输出价格）
+    """
     adapter = AdminGetGlobalModelAdapter(global_model_id=global_model_id)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -67,7 +101,24 @@ async def create_global_model(
     payload: GlobalModelCreate,
     db: Session = Depends(get_db),
 ) -> GlobalModelResponse:
-    """创建 GlobalModel"""
+    """
+    创建 GlobalModel
+
+    创建一个新的全局模型定义，作为多个提供商实现的统一抽象。
+
+    **请求体字段**:
+    - `name`: 模型名称（唯一标识，如 "claude-3-5-sonnet-20241022"）
+    - `display_name`: 显示名称（如 "Claude 3.5 Sonnet"）
+    - `is_active`: 是否活跃（默认 true）
+    - `default_price_per_request`: 默认按次计费价格（可选）
+    - `default_tiered_pricing`: 默认阶梯定价配置（包含多个价格阶梯）
+    - `supported_capabilities`: 支持的能力标志（vision、function_calling、streaming）
+    - `config`: 额外配置（JSON 格式，如 description、context_window 等）
+
+    **返回字段**:
+    - `id`: 创建的 GlobalModel ID
+    - 其他请求体中的所有字段
+    """
     adapter = AdminCreateGlobalModelAdapter(payload=payload)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -79,7 +130,26 @@ async def update_global_model(
     payload: GlobalModelUpdate,
     db: Session = Depends(get_db),
 ) -> GlobalModelResponse:
-    """更新 GlobalModel"""
+    """
+    更新 GlobalModel
+
+    更新指定 GlobalModel 的配置信息，支持部分字段更新。
+    更新后会自动失效相关缓存。
+
+    **路径参数**:
+    - `global_model_id`: GlobalModel ID
+
+    **请求体字段**（均为可选）:
+    - `display_name`: 显示名称
+    - `is_active`: 是否活跃
+    - `default_price_per_request`: 默认按次计费价格
+    - `default_tiered_pricing`: 默认阶梯定价配置
+    - `supported_capabilities`: 支持的能力标志
+    - `config`: 额外配置
+
+    **返回字段**:
+    - 更新后的完整 GlobalModel 信息
+    """
     adapter = AdminUpdateGlobalModelAdapter(global_model_id=global_model_id, payload=payload)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -90,7 +160,18 @@ async def delete_global_model(
     global_model_id: str,
     db: Session = Depends(get_db),
 ):
-    """删除 GlobalModel（级联删除所有关联的 Provider 模型实现）"""
+    """
+    删除 GlobalModel
+
+    删除指定的 GlobalModel，会级联删除所有关联的 Provider 模型实现。
+    删除后会自动失效相关缓存。
+
+    **路径参数**:
+    - `global_model_id`: GlobalModel ID
+
+    **返回**:
+    - 成功删除返回 204 状态码，无响应体
+    """
     adapter = AdminDeleteGlobalModelAdapter(global_model_id=global_model_id)
     await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
     return None
@@ -105,7 +186,29 @@ async def batch_assign_to_providers(
     payload: BatchAssignToProvidersRequest,
     db: Session = Depends(get_db),
 ) -> BatchAssignToProvidersResponse:
-    """批量为多个 Provider 添加 GlobalModel 实现"""
+    """
+    批量为提供商添加模型实现
+
+    为指定的 GlobalModel 批量创建多个 Provider 的模型实现（Model 记录）。
+    用于快速将一个统一模型分配给多个提供商。
+
+    **路径参数**:
+    - `global_model_id`: GlobalModel ID
+
+    **请求体字段**:
+    - `provider_ids`: 提供商 ID 列表
+    - `create_models`: Model 创建配置列表，每个包含：
+      - `provider_id`: 提供商 ID
+      - `provider_model_name`: 提供商侧的模型名称（如 "claude-3-5-sonnet-20241022"）
+      - 其他可选字段（价格覆盖、能力覆盖等）
+
+    **返回字段**:
+    - `success`: 成功创建的 Model 列表
+    - `errors`: 失败的提供商及错误信息列表
+    - `total_requested`: 请求处理的总数
+    - `total_success`: 成功创建的数量
+    - `total_errors`: 失败的数量
+    """
     adapter = AdminBatchAssignToProvidersAdapter(global_model_id=global_model_id, payload=payload)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -116,7 +219,27 @@ async def get_global_model_providers(
     global_model_id: str,
     db: Session = Depends(get_db),
 ) -> GlobalModelProvidersResponse:
-    """获取 GlobalModel 的所有关联提供商（包括非活跃的）"""
+    """
+    获取 GlobalModel 的关联提供商
+
+    查询指定 GlobalModel 的所有关联提供商及其模型实现详情，包括非活跃的提供商。
+    用于查看某个统一模型在各个提供商上的具体配置。
+
+    **路径参数**:
+    - `global_model_id`: GlobalModel ID
+
+    **返回字段**:
+    - `providers`: 提供商列表，每个包含：
+      - `provider_id`: 提供商 ID
+      - `provider_name`: 提供商名称
+      - `provider_display_name`: 提供商显示名称
+      - `model_id`: Model 实现 ID
+      - `target_model`: 提供商侧的模型名称
+      - 价格信息（input_price_per_1m、output_price_per_1m 等）
+      - 能力标志（supports_vision、supports_function_calling、supports_streaming）
+      - `is_active`: 是否活跃
+    - `total`: 关联提供商总数
+    """
     adapter = AdminGetGlobalModelProvidersAdapter(global_model_id=global_model_id)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 

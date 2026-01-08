@@ -95,72 +95,142 @@ pipeline = ApiRequestPipeline()
 # API端点
 @router.get("/registration-settings", response_model=RegistrationSettingsResponse)
 async def registration_settings(request: Request, db: Session = Depends(get_db)):
-    """公开获取注册相关配置"""
+    """
+    获取注册相关配置
+
+    返回系统注册配置，包括是否开放注册、是否需要邮箱验证等。
+    此接口为公开接口，无需认证。
+    """
     adapter = AuthRegistrationSettingsAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.get("/settings")
 async def auth_settings(request: Request, db: Session = Depends(get_db)):
-    """公开获取认证设置（用于前端判断显示哪些登录选项）"""
+    """
+    获取认证设置
+
+    返回系统支持的认证方式，如本地认证、LDAP 认证等。
+    前端据此判断显示哪些登录选项。此接口为公开接口，无需认证。
+    """
     adapter = AuthSettingsAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.post("/login", response_model=LoginResponse)
 async def login(request: Request, db: Session = Depends(get_db)):
+    """
+    用户登录
+
+    使用邮箱和密码登录，成功后返回 JWT access_token 和 refresh_token。
+
+    - **access_token**: 用于后续 API 调用，有效期 24 小时
+    - **refresh_token**: 用于刷新 access_token
+
+    速率限制: 5次/分钟/IP
+    """
     adapter = AuthLoginAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.post("/refresh", response_model=RefreshTokenResponse)
 async def refresh_token(request: Request, db: Session = Depends(get_db)):
+    """
+    刷新访问令牌
+
+    使用 refresh_token 获取新的 access_token 和 refresh_token。
+    原 refresh_token 刷新后失效。
+    """
     adapter = AuthRefreshAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.post("/register", response_model=RegisterResponse)
 async def register(request: Request, db: Session = Depends(get_db)):
+    """
+    用户注册
+
+    创建新用户账号。需要系统开放注册功能。
+    如果系统开启了邮箱验证，需先通过 /send-verification-code 和 /verify-email 完成邮箱验证。
+
+    速率限制: 3次/分钟/IP
+    """
     adapter = AuthRegisterAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.get("/me")
 async def get_current_user_info(request: Request, db: Session = Depends(get_db)):
+    """
+    获取当前用户信息
+
+    返回当前登录用户的基本信息，包括邮箱、用户名、角色、配额等。
+    需要 Bearer Token 认证。
+    """
     adapter = AuthCurrentUserAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.patch("/password")
 async def change_password(request: Request, db: Session = Depends(get_db)):
-    """Change current user's password"""
+    """
+    修改密码
+
+    修改当前用户的登录密码，需提供旧密码验证。
+    密码长度至少 6 位。
+    """
     adapter = AuthChangePasswordAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.post("/logout", response_model=LogoutResponse)
 async def logout(request: Request, db: Session = Depends(get_db)):
+    """
+    用户登出
+
+    将当前 Token 加入黑名单，使其失效。
+    """
     adapter = AuthLogoutAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.post("/send-verification-code", response_model=SendVerificationCodeResponse)
 async def send_verification_code(request: Request, db: Session = Depends(get_db)):
-    """发送邮箱验证码"""
+    """
+    发送邮箱验证码
+
+    向指定邮箱发送验证码，用于注册前的邮箱验证。
+    验证码有效期 5 分钟，同一邮箱 60 秒内只能发送一次。
+
+    速率限制: 3次/分钟/IP
+    """
     adapter = AuthSendVerificationCodeAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.post("/verify-email", response_model=VerifyEmailResponse)
 async def verify_email(request: Request, db: Session = Depends(get_db)):
-    """验证邮箱验证码"""
+    """
+    验证邮箱验证码
+
+    验证邮箱收到的验证码是否正确。
+    验证成功后，邮箱会被标记为已验证状态，可用于注册。
+
+    速率限制: 10次/分钟/IP
+    """
     adapter = AuthVerifyEmailAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.post("/verification-status", response_model=VerificationStatusResponse)
 async def verification_status(request: Request, db: Session = Depends(get_db)):
-    """查询邮箱验证状态"""
+    """
+    查询邮箱验证状态
+
+    查询指定邮箱的验证状态，包括是否有待验证的验证码、是否已验证等。
+
+    速率限制: 20次/分钟/IP
+    """
     adapter = AuthVerificationStatusAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -458,7 +528,7 @@ class AuthCurrentUserAdapter(AuthenticatedApiAdapter):
             "used_usd": user.used_usd,
             "total_usd": user.total_usd,
             "allowed_providers": user.allowed_providers,
-            "allowed_endpoints": user.allowed_endpoints,
+            "allowed_api_formats": user.allowed_api_formats,
             "allowed_models": user.allowed_models,
             "created_at": user.created_at.isoformat(),
             "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,

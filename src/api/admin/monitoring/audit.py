@@ -39,6 +39,34 @@ async def get_audit_logs(
     offset: int = Query(0, description="偏移量"),
     db: Session = Depends(get_db),
 ):
+    """
+    获取审计日志
+
+    获取系统审计日志列表，支持按用户、事件类型、时间范围筛选。需要管理员权限。
+
+    **查询参数**:
+    - `user_id`: 可选，用户 ID 筛选（UUID 格式）
+    - `event_type`: 可选，事件类型筛选
+    - `days`: 查询最近多少天的日志，默认 7 天
+    - `limit`: 返回数量限制，默认 100
+    - `offset`: 分页偏移量，默认 0
+
+    **返回字段**:
+    - `items`: 审计日志列表，每条日志包含：
+      - `id`: 日志 ID
+      - `event_type`: 事件类型
+      - `user_id`: 用户 ID
+      - `user_email`: 用户邮箱
+      - `user_username`: 用户名
+      - `description`: 事件描述
+      - `ip_address`: IP 地址
+      - `status_code`: HTTP 状态码
+      - `error_message`: 错误信息
+      - `metadata`: 事件元数据
+      - `created_at`: 创建时间
+    - `meta`: 分页元数据（total, limit, offset, count）
+    - `filters`: 筛选条件
+    """
     adapter = AdminGetAuditLogsAdapter(
         user_id=user_id,
         event_type=event_type,
@@ -51,6 +79,19 @@ async def get_audit_logs(
 
 @router.get("/system-status")
 async def get_system_status(request: Request, db: Session = Depends(get_db)):
+    """
+    获取系统状态
+
+    获取系统当前的运行状态和关键指标。需要管理员权限。
+
+    **返回字段**:
+    - `timestamp`: 当前时间戳
+    - `users`: 用户统计（total: 总用户数, active: 活跃用户数）
+    - `providers`: 提供商统计（total: 总提供商数, active: 活跃提供商数）
+    - `api_keys`: API Key 统计（total: 总数, active: 活跃数）
+    - `today_stats`: 今日统计（requests: 请求数, tokens: token 数, cost_usd: 成本）
+    - `recent_errors`: 最近 1 小时内的错误数
+    """
     adapter = AdminSystemStatusAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -61,6 +102,26 @@ async def get_suspicious_activities(
     hours: int = Query(24, description="时间范围（小时）"),
     db: Session = Depends(get_db),
 ):
+    """
+    获取可疑活动记录
+
+    获取系统检测到的可疑活动记录。需要管理员权限。
+
+    **查询参数**:
+    - `hours`: 时间范围（小时），默认 24 小时
+
+    **返回字段**:
+    - `activities`: 可疑活动列表，每条记录包含：
+      - `id`: 记录 ID
+      - `event_type`: 事件类型
+      - `user_id`: 用户 ID
+      - `description`: 事件描述
+      - `ip_address`: IP 地址
+      - `metadata`: 事件元数据
+      - `created_at`: 创建时间
+    - `count`: 活动总数
+    - `time_range_hours`: 查询的时间范围（小时）
+    """
     adapter = AdminSuspiciousActivitiesAdapter(hours=hours)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -72,19 +133,56 @@ async def analyze_user_behavior(
     days: int = Query(30, description="分析天数"),
     db: Session = Depends(get_db),
 ):
+    """
+    分析用户行为
+
+    分析指定用户的行为模式和使用情况。需要管理员权限。
+
+    **路径参数**:
+    - `user_id`: 用户 ID
+
+    **查询参数**:
+    - `days`: 分析最近多少天的数据，默认 30 天
+
+    **返回字段**:
+    - 用户行为分析结果，包括活动频率、使用模式、异常行为等
+    """
     adapter = AdminUserBehaviorAdapter(user_id=user_id, days=days)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.get("/resilience-status")
 async def get_resilience_status(request: Request, db: Session = Depends(get_db)):
+    """
+    获取韧性系统状态
+
+    获取系统韧性管理的当前状态，包括错误统计、熔断器状态等。需要管理员权限。
+
+    **返回字段**:
+    - `timestamp`: 当前时间戳
+    - `health_score`: 健康评分（0-100）
+    - `status`: 系统状态（healthy: 健康，degraded: 降级，critical: 严重）
+    - `error_statistics`: 错误统计信息
+    - `recent_errors`: 最近的错误列表（最多 10 条）
+    - `recommendations`: 系统建议
+    """
     adapter = AdminResilienceStatusAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.delete("/resilience/error-stats")
 async def reset_error_stats(request: Request, db: Session = Depends(get_db)):
-    """Reset resilience error statistics"""
+    """
+    重置错误统计
+
+    重置韧性系统的错误统计数据。需要管理员权限。
+
+    **返回字段**:
+    - `message`: 操作结果信息
+    - `previous_stats`: 重置前的统计数据
+    - `reset_by`: 执行重置的管理员邮箱
+    - `reset_at`: 重置时间
+    """
     adapter = AdminResetErrorStatsAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -95,6 +193,18 @@ async def get_circuit_history(
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
 ):
+    """
+    获取熔断器历史记录
+
+    获取熔断器的状态变更历史记录。需要管理员权限。
+
+    **查询参数**:
+    - `limit`: 返回数量限制，默认 50，最大 200
+
+    **返回字段**:
+    - `items`: 熔断器历史记录列表
+    - `count`: 记录总数
+    """
     adapter = AdminCircuitHistoryAdapter(limit=limit)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 

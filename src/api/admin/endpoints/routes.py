@@ -45,7 +45,36 @@ async def list_provider_endpoints(
     limit: int = Query(100, ge=1, le=1000, description="返回的最大记录数"),
     db: Session = Depends(get_db),
 ) -> List[ProviderEndpointResponse]:
-    """获取指定 Provider 的所有 Endpoints"""
+    """
+    获取指定 Provider 的所有 Endpoints
+
+    获取指定 Provider 下的所有 Endpoint 列表，包括配置、统计信息等。
+    结果按创建时间倒序排列。
+
+    **路径参数**:
+    - `provider_id`: Provider ID
+
+    **查询参数**:
+    - `skip`: 跳过的记录数，用于分页（默认 0）
+    - `limit`: 返回的最大记录数（1-1000，默认 100）
+
+    **返回字段**:
+    - `id`: Endpoint ID
+    - `provider_id`: Provider ID
+    - `provider_name`: Provider 名称
+    - `api_format`: API 格式
+    - `base_url`: 基础 URL
+    - `custom_path`: 自定义路径
+    - `timeout`: 超时时间（秒）
+    - `max_retries`: 最大重试次数
+    - `max_concurrent`: 最大并发数
+    - `rate_limit`: 速率限制
+    - `is_active`: 是否活跃
+    - `total_keys`: Key 总数
+    - `active_keys`: 活跃 Key 数量
+    - `proxy`: 代理配置（密码已脱敏）
+    - 其他配置字段
+    """
     adapter = AdminListProviderEndpointsAdapter(
         provider_id=provider_id,
         skip=skip,
@@ -61,7 +90,31 @@ async def create_provider_endpoint(
     request: Request,
     db: Session = Depends(get_db),
 ) -> ProviderEndpointResponse:
-    """为 Provider 创建新的 Endpoint"""
+    """
+    为 Provider 创建新的 Endpoint
+
+    为指定 Provider 创建新的 Endpoint，每个 Provider 的每种 API 格式
+    只能创建一个 Endpoint。
+
+    **路径参数**:
+    - `provider_id`: Provider ID
+
+    **请求体字段**:
+    - `provider_id`: Provider ID（必须与路径参数一致）
+    - `api_format`: API 格式（如 claude、openai、gemini 等）
+    - `base_url`: 基础 URL
+    - `custom_path`: 自定义路径（可选）
+    - `headers`: 自定义请求头（可选）
+    - `timeout`: 超时时间（秒，默认 300）
+    - `max_retries`: 最大重试次数（默认 2）
+    - `max_concurrent`: 最大并发数（可选）
+    - `rate_limit`: 速率限制（可选）
+    - `config`: 额外配置（可选）
+    - `proxy`: 代理配置（可选）
+
+    **返回字段**:
+    - 包含完整的 Endpoint 信息
+    """
     adapter = AdminCreateProviderEndpointAdapter(
         provider_id=provider_id,
         endpoint_data=endpoint_data,
@@ -75,7 +128,31 @@ async def get_endpoint(
     request: Request,
     db: Session = Depends(get_db),
 ) -> ProviderEndpointResponse:
-    """获取 Endpoint 详情"""
+    """
+    获取 Endpoint 详情
+
+    获取指定 Endpoint 的详细信息，包括配置、统计信息等。
+
+    **路径参数**:
+    - `endpoint_id`: Endpoint ID
+
+    **返回字段**:
+    - `id`: Endpoint ID
+    - `provider_id`: Provider ID
+    - `provider_name`: Provider 名称
+    - `api_format`: API 格式
+    - `base_url`: 基础 URL
+    - `custom_path`: 自定义路径
+    - `timeout`: 超时时间（秒）
+    - `max_retries`: 最大重试次数
+    - `max_concurrent`: 最大并发数
+    - `rate_limit`: 速率限制
+    - `is_active`: 是否活跃
+    - `total_keys`: Key 总数
+    - `active_keys`: 活跃 Key 数量
+    - `proxy`: 代理配置（密码已脱敏）
+    - 其他配置字段
+    """
     adapter = AdminGetProviderEndpointAdapter(endpoint_id=endpoint_id)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -87,7 +164,29 @@ async def update_endpoint(
     request: Request,
     db: Session = Depends(get_db),
 ) -> ProviderEndpointResponse:
-    """更新 Endpoint"""
+    """
+    更新 Endpoint
+
+    更新指定 Endpoint 的配置。支持部分更新。
+
+    **路径参数**:
+    - `endpoint_id`: Endpoint ID
+
+    **请求体字段**（均为可选）:
+    - `base_url`: 基础 URL
+    - `custom_path`: 自定义路径
+    - `headers`: 自定义请求头
+    - `timeout`: 超时时间（秒）
+    - `max_retries`: 最大重试次数
+    - `max_concurrent`: 最大并发数
+    - `rate_limit`: 速率限制
+    - `is_active`: 是否活跃
+    - `config`: 额外配置
+    - `proxy`: 代理配置（设置为 null 可清除代理）
+
+    **返回字段**:
+    - 包含更新后的完整 Endpoint 信息
+    """
     adapter = AdminUpdateProviderEndpointAdapter(
         endpoint_id=endpoint_id,
         endpoint_data=endpoint_data,
@@ -101,7 +200,19 @@ async def delete_endpoint(
     request: Request,
     db: Session = Depends(get_db),
 ) -> dict:
-    """删除 Endpoint（级联删除所有关联的 Keys）"""
+    """
+    删除 Endpoint
+
+    删除指定的 Endpoint，同时级联删除所有关联的 API Keys。
+    此操作不可逆，请谨慎使用。
+
+    **路径参数**:
+    - `endpoint_id`: Endpoint ID
+
+    **返回字段**:
+    - `message`: 操作结果消息
+    - `deleted_keys_count`: 同时删除的 Key 数量
+    """
     adapter = AdminDeleteProviderEndpointAdapter(endpoint_id=endpoint_id)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 

@@ -82,9 +82,21 @@ def _mark_official_providers(data: dict[str, Any]) -> dict[str, Any]:
 @router.get("/external")
 async def get_external_models(_: User = Depends(require_admin)) -> JSONResponse:
     """
-    获取 models.dev 的模型数据（代理请求，解决跨域问题）
-    数据缓存 15 分钟（使用 Redis，多 worker 共享）
-    每个提供商会标记 official 字段，前端可据此过滤
+    获取外部模型数据
+
+    从 models.dev 获取第三方模型数据，用于导入新模型或参考定价信息。
+    该接口作为代理请求解决跨域问题，并提供缓存优化。
+
+    **功能特性**:
+    - 代理 models.dev API，解决前端跨域问题
+    - 使用 Redis 缓存 15 分钟，多 worker 共享缓存
+    - 自动标记官方提供商（official 字段），前端可据此过滤第三方转售商
+
+    **返回字段**:
+    - 键为提供商 ID（如 "anthropic"、"openai"）
+    - 值为提供商详细信息，包含：
+      - `official`: 是否为官方提供商（true/false）
+      - 其他 models.dev 提供的原始字段（模型列表、定价等）
     """
     # 检查缓存
     cached = await _get_cached_data()
@@ -130,7 +142,16 @@ async def get_external_models(_: User = Depends(require_admin)) -> JSONResponse:
 
 @router.delete("/external/cache")
 async def clear_external_models_cache(_: User = Depends(require_admin)) -> dict:
-    """清除 models.dev 缓存"""
+    """
+    清除外部模型数据缓存
+
+    手动清除 models.dev 的 Redis 缓存，强制下次请求重新获取最新数据。
+    通常用于需要立即更新外部模型数据的场景。
+
+    **返回字段**:
+    - `cleared`: 是否成功清除缓存（true/false）
+    - `message`: 提示信息（仅在 Redis 未启用时返回）
+    """
     redis = await get_redis_client()
     if redis is None:
         return {"cleared": False, "message": "Redis 未启用"}

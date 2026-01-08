@@ -32,7 +32,10 @@
 
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div>
-            <Label for="server-url" class="block text-sm font-medium">
+            <Label
+              for="server-url"
+              class="block text-sm font-medium"
+            >
               服务器地址
             </Label>
             <Input
@@ -48,7 +51,10 @@
           </div>
 
           <div>
-            <Label for="bind-dn" class="block text-sm font-medium">
+            <Label
+              for="bind-dn"
+              class="block text-sm font-medium"
+            >
               绑定 DN
             </Label>
             <Input
@@ -64,7 +70,10 @@
           </div>
 
           <div>
-            <Label for="bind-password" class="block text-sm font-medium">
+            <Label
+              for="bind-password"
+              class="block text-sm font-medium"
+            >
               绑定密码
             </Label>
             <div class="relative mt-1">
@@ -80,10 +89,30 @@
                 v-if="hasPassword || ldapConfig.bind_password"
                 type="button"
                 class="absolute right-3 top-1/2 -translate-y-1/2 p-1 rounded-full text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/50 transition-colors"
-                @click="handleClearPassword"
                 title="清除密码"
+                @click="handleClearPassword"
               >
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                ><line
+                  x1="18"
+                  y1="6"
+                  x2="6"
+                  y2="18"
+                /><line
+                  x1="6"
+                  y1="6"
+                  x2="18"
+                  y2="18"
+                /></svg>
               </button>
             </div>
             <p class="mt-1 text-xs text-muted-foreground">
@@ -92,7 +121,10 @@
           </div>
 
           <div>
-            <Label for="base-dn" class="block text-sm font-medium">
+            <Label
+              for="base-dn"
+              class="block text-sm font-medium"
+            >
               基础 DN
             </Label>
             <Input
@@ -108,7 +140,10 @@
           </div>
 
           <div>
-            <Label for="user-search-filter" class="block text-sm font-medium">
+            <Label
+              for="user-search-filter"
+              class="block text-sm font-medium"
+            >
               用户搜索过滤器
             </Label>
             <Input
@@ -124,7 +159,10 @@
           </div>
 
           <div>
-            <Label for="username-attr" class="block text-sm font-medium">
+            <Label
+              for="username-attr"
+              class="block text-sm font-medium"
+            >
               用户名属性
             </Label>
             <Input
@@ -140,7 +178,10 @@
           </div>
 
           <div>
-            <Label for="email-attr" class="block text-sm font-medium">
+            <Label
+              for="email-attr"
+              class="block text-sm font-medium"
+            >
               邮箱属性
             </Label>
             <Input
@@ -153,7 +194,10 @@
           </div>
 
           <div>
-            <Label for="display-name-attr" class="block text-sm font-medium">
+            <Label
+              for="display-name-attr"
+              class="block text-sm font-medium"
+            >
               显示名称属性
             </Label>
             <Input
@@ -166,7 +210,10 @@
           </div>
 
           <div>
-            <Label for="connect-timeout" class="block text-sm font-medium">
+            <Label
+              for="connect-timeout"
+              class="block text-sm font-medium"
+            >
               连接超时 (秒)
             </Label>
             <Input

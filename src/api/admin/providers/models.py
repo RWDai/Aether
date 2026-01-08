@@ -49,7 +49,36 @@ async def list_provider_models(
     limit: int = 100,
     db: Session = Depends(get_db),
 ) -> List[ModelResponse]:
-    """获取提供商的所有模型（管理员）"""
+    """
+    获取提供商的所有模型
+
+    获取指定提供商的模型列表，支持分页和状态过滤。
+
+    **路径参数**:
+    - `provider_id`: 提供商 ID
+
+    **查询参数**:
+    - `is_active`: 可选的活跃状态过滤，true 仅返回活跃模型，false 返回禁用模型，不传则返回全部
+    - `skip`: 跳过的记录数，默认为 0
+    - `limit`: 返回的最大记录数，默认为 100
+
+    **返回字段**（数组，每项包含）:
+    - `id`: 模型 ID
+    - `provider_id`: 提供商 ID
+    - `global_model_id`: 全局模型 ID
+    - `provider_model_name`: 提供商模型名称
+    - `is_active`: 是否启用
+    - `input_price_per_1m`: 输入价格（每百万 token）
+    - `output_price_per_1m`: 输出价格（每百万 token）
+    - `cache_creation_price_per_1m`: 缓存创建价格（每百万 token）
+    - `cache_read_price_per_1m`: 缓存读取价格（每百万 token）
+    - `price_per_request`: 每次请求价格
+    - `supports_vision`: 是否支持视觉
+    - `supports_function_calling`: 是否支持函数调用
+    - `supports_streaming`: 是否支持流式输出
+    - `created_at`: 创建时间
+    - `updated_at`: 更新时间
+    """
     adapter = AdminListProviderModelsAdapter(
         provider_id=provider_id,
         is_active=is_active,
@@ -66,7 +95,29 @@ async def create_provider_model(
     request: Request,
     db: Session = Depends(get_db),
 ) -> ModelResponse:
-    """创建模型（管理员）"""
+    """
+    创建模型
+
+    为指定提供商创建一个新的模型配置。
+
+    **路径参数**:
+    - `provider_id`: 提供商 ID
+
+    **请求体字段**:
+    - `provider_model_name`: 提供商模型名称（必填）
+    - `global_model_id`: 全局模型 ID（可选，关联到全局模型）
+    - `is_active`: 是否启用（默认 true）
+    - `input_price_per_1m`: 输入价格（每百万 token）（可选）
+    - `output_price_per_1m`: 输出价格（每百万 token）（可选）
+    - `cache_creation_price_per_1m`: 缓存创建价格（每百万 token）（可选）
+    - `cache_read_price_per_1m`: 缓存读取价格（每百万 token）（可选）
+    - `price_per_request`: 每次请求价格（可选）
+    - `supports_vision`: 是否支持视觉（可选）
+    - `supports_function_calling`: 是否支持函数调用（可选）
+    - `supports_streaming`: 是否支持流式输出（可选）
+
+    **返回字段**: 返回创建的模型详细信息（与 GET 单个模型接口返回格式相同）
+    """
     adapter = AdminCreateProviderModelAdapter(provider_id=provider_id, model_data=model_data)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -78,7 +129,32 @@ async def get_provider_model(
     request: Request,
     db: Session = Depends(get_db),
 ) -> ModelResponse:
-    """获取模型详情（管理员）"""
+    """
+    获取模型详情
+
+    获取指定模型的详细配置信息。
+
+    **路径参数**:
+    - `provider_id`: 提供商 ID
+    - `model_id`: 模型 ID
+
+    **返回字段**:
+    - `id`: 模型 ID
+    - `provider_id`: 提供商 ID
+    - `global_model_id`: 全局模型 ID
+    - `provider_model_name`: 提供商模型名称
+    - `is_active`: 是否启用
+    - `input_price_per_1m`: 输入价格（每百万 token）
+    - `output_price_per_1m`: 输出价格（每百万 token）
+    - `cache_creation_price_per_1m`: 缓存创建价格（每百万 token）
+    - `cache_read_price_per_1m`: 缓存读取价格（每百万 token）
+    - `price_per_request`: 每次请求价格
+    - `supports_vision`: 是否支持视觉
+    - `supports_function_calling`: 是否支持函数调用
+    - `supports_streaming`: 是否支持流式输出
+    - `created_at`: 创建时间
+    - `updated_at`: 更新时间
+    """
     adapter = AdminGetProviderModelAdapter(provider_id=provider_id, model_id=model_id)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -91,7 +167,30 @@ async def update_provider_model(
     request: Request,
     db: Session = Depends(get_db),
 ) -> ModelResponse:
-    """更新模型（管理员）"""
+    """
+    更新模型配置
+
+    更新指定模型的配置信息。只需传入需要更新的字段，未传入的字段保持不变。
+
+    **路径参数**:
+    - `provider_id`: 提供商 ID
+    - `model_id`: 模型 ID
+
+    **请求体字段**（所有字段可选）:
+    - `provider_model_name`: 提供商模型名称
+    - `global_model_id`: 全局模型 ID
+    - `is_active`: 是否启用
+    - `input_price_per_1m`: 输入价格（每百万 token）
+    - `output_price_per_1m`: 输出价格（每百万 token）
+    - `cache_creation_price_per_1m`: 缓存创建价格（每百万 token）
+    - `cache_read_price_per_1m`: 缓存读取价格（每百万 token）
+    - `price_per_request`: 每次请求价格
+    - `supports_vision`: 是否支持视觉
+    - `supports_function_calling`: 是否支持函数调用
+    - `supports_streaming`: 是否支持流式输出
+
+    **返回字段**: 返回更新后的模型详细信息（与 GET 单个模型接口返回格式相同）
+    """
     adapter = AdminUpdateProviderModelAdapter(
         provider_id=provider_id,
         model_id=model_id,
@@ -107,7 +206,18 @@ async def delete_provider_model(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    """删除模型（管理员）"""
+    """
+    删除模型
+
+    删除指定的模型配置。注意：此操作不可逆。
+
+    **路径参数**:
+    - `provider_id`: 提供商 ID
+    - `model_id`: 模型 ID
+
+    **返回字段**:
+    - `message`: 删除成功提示信息
+    """
     adapter = AdminDeleteProviderModelAdapter(provider_id=provider_id, model_id=model_id)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -119,7 +229,29 @@ async def batch_create_provider_models(
     request: Request,
     db: Session = Depends(get_db),
 ) -> List[ModelResponse]:
-    """批量创建模型（管理员）"""
+    """
+    批量创建模型
+
+    为指定提供商批量创建多个模型配置。
+
+    **路径参数**:
+    - `provider_id`: 提供商 ID
+
+    **请求体**: 模型数据数组，每项包含：
+    - `provider_model_name`: 提供商模型名称（必填）
+    - `global_model_id`: 全局模型 ID（可选）
+    - `is_active`: 是否启用（默认 true）
+    - `input_price_per_1m`: 输入价格（每百万 token）（可选）
+    - `output_price_per_1m`: 输出价格（每百万 token）（可选）
+    - `cache_creation_price_per_1m`: 缓存创建价格（每百万 token）（可选）
+    - `cache_read_price_per_1m`: 缓存读取价格（每百万 token）（可选）
+    - `price_per_request`: 每次请求价格（可选）
+    - `supports_vision`: 是否支持视觉（可选）
+    - `supports_function_calling`: 是否支持函数调用（可选）
+    - `supports_streaming`: 是否支持流式输出（可选）
+
+    **返回字段**: 返回创建的模型列表（与 GET 模型列表接口返回格式相同）
+    """
     adapter = AdminBatchCreateModelsAdapter(provider_id=provider_id, models_data=models_data)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -134,10 +266,23 @@ async def get_provider_available_source_models(
     db: Session = Depends(get_db),
 ):
     """
-    获取该 Provider 支持的所有统一模型名（source_model）
+    获取提供商支持的可用源模型
 
-    包括：
-    1. 直连模型（Model.provider_model_name 直接作为统一模型名）
+    获取该提供商支持的所有统一模型名（source_model），包含价格和能力信息。
+
+    **路径参数**:
+    - `provider_id`: 提供商 ID
+
+    **返回字段**:
+    - `models`: 可用源模型数组，每项包含：
+      - `global_model_name`: 全局模型名称
+      - `display_name`: 显示名称
+      - `provider_model_name`: 提供商模型名称
+      - `model_id`: 模型 ID
+      - `price`: 价格信息（包含 input_price_per_1m, output_price_per_1m, cache_creation_price_per_1m, cache_read_price_per_1m, price_per_request）
+      - `capabilities`: 能力信息（包含 supports_vision, supports_function_calling, supports_streaming）
+      - `is_active`: 是否启用
+    - `total`: 总数
     """
     adapter = AdminGetProviderAvailableSourceModelsAdapter(provider_id=provider_id)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
@@ -153,7 +298,27 @@ async def batch_assign_global_models_to_provider(
     request: Request,
     db: Session = Depends(get_db),
 ) -> BatchAssignModelsToProviderResponse:
-    """批量为 Provider 关联 GlobalModels（自动继承价格和能力配置）"""
+    """
+    批量关联全局模型
+
+    批量为提供商关联全局模型，自动继承全局模型的价格和能力配置。
+
+    **路径参数**:
+    - `provider_id`: 提供商 ID
+
+    **请求体字段**:
+    - `global_model_ids`: 全局模型 ID 数组（必填）
+
+    **返回字段**:
+    - `success`: 成功关联的模型数组，每项包含：
+      - `global_model_id`: 全局模型 ID
+      - `global_model_name`: 全局模型名称
+      - `model_id`: 新创建的模型 ID
+    - `errors`: 失败的模型数组，每项包含：
+      - `global_model_id`: 全局模型 ID
+      - `global_model_name`: 全局模型名称（如果可用）
+      - `error`: 错误信息
+    """
     adapter = AdminBatchAssignModelsToProviderAdapter(
         provider_id=provider_id, payload=payload
     )
@@ -173,10 +338,30 @@ async def import_models_from_upstream(
     """
     从上游提供商导入模型
 
-    流程：
+    从上游提供商导入模型列表。如果全局模型不存在，将自动创建。
+
+    **流程说明**:
     1. 根据 model_ids 检查全局模型是否存在（按 name 匹配）
-    2. 如不存在，自动创建新的 GlobalModel（使用默认配置）
+    2. 如不存在，自动创建新的 GlobalModel（使用默认免费配置）
     3. 创建 Model 关联到当前 Provider
+    4. 如模型已关联，则记录到成功列表中
+
+    **路径参数**:
+    - `provider_id`: 提供商 ID
+
+    **请求体字段**:
+    - `model_ids`: 模型 ID 数组（必填，每个 ID 长度 1-100 字符）
+
+    **返回字段**:
+    - `success`: 成功导入的模型数组，每项包含：
+      - `model_id`: 模型 ID
+      - `global_model_id`: 全局模型 ID
+      - `global_model_name`: 全局模型名称
+      - `provider_model_id`: 提供商模型 ID
+      - `created_global_model`: 是否新创建了全局模型
+    - `errors`: 失败的模型数组，每项包含：
+      - `model_id`: 模型 ID
+      - `error`: 错误信息
     """
     adapter = AdminImportFromUpstreamAdapter(provider_id=provider_id, payload=payload)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)

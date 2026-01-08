@@ -56,9 +56,23 @@ async def generate_content(
     db: Session = Depends(get_db),
 ):
     """
-    Gemini generateContent 端点
+    Gemini generateContent API
 
-    非流式生成内容请求
+    兼容 Google Gemini API 格式的代理接口（非流式）。
+
+    **认证方式**:
+    - `x-goog-api-key` 请求头，或
+    - `?key=` URL 参数
+
+    **请求格式**:
+    ```json
+    {
+        "contents": [{"parts": [{"text": "Hello"}]}]
+    }
+    ```
+
+    **路径参数**:
+    - `model`: 模型名称，如 gemini-2.0-flash
     """
     # 根据 user-agent 或 x-app header 选择适配器
     if _is_cli_request(http_request):
@@ -84,9 +98,16 @@ async def stream_generate_content(
     db: Session = Depends(get_db),
 ):
     """
-    Gemini streamGenerateContent 端点
+    Gemini streamGenerateContent API
 
-    流式生成内容请求
+    兼容 Google Gemini API 格式的代理接口（流式）。
+
+    **认证方式**:
+    - `x-goog-api-key` 请求头，或
+    - `?key=` URL 参数
+
+    **路径参数**:
+    - `model`: 模型名称，如 gemini-2.0-flash
 
     注意: Gemini API 通过 URL 端点区分流式/非流式，不需要在请求体中添加 stream 字段
     """
@@ -114,7 +135,11 @@ async def generate_content_v1(
     http_request: Request,
     db: Session = Depends(get_db),
 ):
-    """v1 兼容端点"""
+    """
+    Gemini generateContent API (v1 兼容)
+
+    v1 版本 API 端点，兼容部分使用旧版路径的 SDK。
+    """
     return await generate_content(model, http_request, db)
 
 
@@ -124,5 +149,9 @@ async def stream_generate_content_v1(
     http_request: Request,
     db: Session = Depends(get_db),
 ):
-    """v1 兼容端点"""
+    """
+    Gemini streamGenerateContent API (v1 兼容)
+
+    v1 版本流式 API 端点，兼容部分使用旧版路径的 SDK。
+    """
     return await stream_generate_content(model, http_request, db)

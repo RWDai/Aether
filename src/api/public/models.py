@@ -27,7 +27,7 @@ from src.database import get_db
 from src.models.database import ApiKey, User
 from src.services.auth.service import AuthService
 
-router = APIRouter(tags=["Models API"])
+router = APIRouter(tags=["System Catalog"])
 
 # 各格式对应的 API 格式列表
 # 注意: CLI 格式是透传格式，Models API 只返回非 CLI 格式的端点支持的模型
@@ -126,7 +126,9 @@ def _filter_formats_by_restrictions(
     """
     if restrictions.allowed_api_formats is None:
         return formats, None
-    filtered = [f for f in formats if f in restrictions.allowed_api_formats]
+    # 统一转为大写比较，兼容数据库中存储的大小写
+    allowed_upper = {f.upper() for f in restrictions.allowed_api_formats}
+    filtered = [f for f in formats if f.upper() in allowed_upper]
     if not filtered:
         logger.info(f"[Models] API Key 不允许访问格式 {api_format}")
         return [], _build_empty_list_response(api_format)
@@ -395,11 +397,65 @@ async def list_models(
     db: Session = Depends(get_db),
 ) -> Union[dict, JSONResponse]:
     """
-    List models - 根据请求头认证方式返回对应格式
+    列出可用模型（统一端点）
 
-    - x-api-key -> Claude 格式
-    - x-goog-api-key 或 ?key= -> Gemini 格式
-    - Authorization: Bearer -> OpenAI 格式
+    根据请求头中的认证方式自动检测 API 格式，并返回相应格式的模型列表。
+    此接口兼容 Claude、OpenAI 和 Gemini 三种 API 格式。
+
+    **格式检测规则**
+    - x-api-key + anthropic-version → Claude 格式
+    - x-goog-api-key 或 ?key= → Gemini 格式
+    - Authorization: Bearer → OpenAI 格式（默认）
+
+    **查询参数**
+
+    Claude 格式：
+    - before_id: 返回此 ID 之前的结果，用于向前分页
+    - after_id: 返回此 ID 之后的结果，用于向后分页
+    - limit: 返回数量限制，默认 20，范围 1-1000
+
+    Gemini 格式：
+    - pageSize: 每页数量，默认 50，范围 1-1000
+    - pageToken: 分页 token，用于获取下一页
+
+    **返回字段**
+
+    Claude 格式：
+    - data: 模型列表，每个模型包含：
+      - id: 模型标识符
+      - type: "model"
+      - display_name: 显示名称
+      - created_at: 创建时间（ISO 8601 格式）
+    - has_more: 是否有更多结果
+    - first_id: 当前页第一个模型 ID
+    - last_id: 当前页最后一个模型 ID
+
+    OpenAI 格式：
+    - object: "list"
+    - data: 模型列表，每个模型包含：
+      - id: 模型标识符
+      - object: "model"
+      - created: Unix 时间戳
+      - owned_by: 提供商名称
+
+    Gemini 格式：
+    - models: 模型列表，每个模型包含：
+      - name: 模型资源名称（如 models/gemini-pro）
+      - baseModelId: 基础模型 ID
+      - version: 版本号
+      - displayName: 显示名称
+      - description: 描述信息
+      - inputTokenLimit: 输入 token 上限
+      - outputTokenLimit: 输出 token 上限
+      - supportedGenerationMethods: 支持的生成方法
+      - temperature: 默认温度参数
+      - maxTemperature: 最大温度参数
+      - topP: Top-P 参数
+      - topK: Top-K 参数
+    - nextPageToken: 下一页的 token（如果有更多结果）
+
+    **错误响应**
+    401: API Key 无效或未提供（格式根据检测到的 API 格式返回）
     """
     api_format, api_key = _detect_api_format_and_key(request)
     logger.info(f"[Models] GET /v1/models | format={api_format}")
@@ -440,7 +496,50 @@ async def retrieve_model(
     db: Session = Depends(get_db),
 ) -> Union[dict, JSONResponse]:
     """
-    Retrieve model - 根据请求头认证方式返回对应格式
+    获取单个模型详情（统一端点）
+
+    根据请求头中的认证方式自动检测 API 格式，并返回相应格式的模型详情。
+    此接口兼容 Claude、OpenAI 和 Gemini 三种 API 格式。
+
+    **格式检测规则**
+    - x-api-key + anthropic-version → Claude 格式
+    - x-goog-api-key 或 ?key= → Gemini 格式
+    - Authorization: Bearer → OpenAI 格式（默认）
+
+    **路径参数**
+    - model_id: 模型标识符（Gemini 格式支持 models/ 前缀，会自动移除）
+
+    **返回字段**
+
+    Claude 格式：
+    - id: 模型标识符
+    - type: "model"
+    - display_name: 显示名称
+    - created_at: 创建时间（ISO 8601 格式）
+
+    OpenAI 格式：
+    - id: 模型标识符
+    - object: "model"
+    - created: Unix 时间戳
+    - owned_by: 提供商名称
+
+    Gemini 格式：
+    - name: 模型资源名称（如 models/gemini-pro）
+    - baseModelId: 基础模型 ID
+    - version: 版本号
+    - displayName: 显示名称
+    - description: 描述信息
+    - inputTokenLimit: 输入 token 上限
+    - outputTokenLimit: 输出 token 上限
+    - supportedGenerationMethods: 支持的生成方法
+    - temperature: 默认温度参数
+    - maxTemperature: 最大温度参数
+    - topP: Top-P 参数
+    - topK: Top-K 参数
+
+    **错误响应**
+    401: API Key 无效或未提供
+    404: 模型不存在或不可访问
     """
     api_format, api_key = _detect_api_format_and_key(request)
 
@@ -486,7 +585,35 @@ async def list_models_gemini(
     page_token: Optional[str] = Query(None, alias="pageToken"),
     db: Session = Depends(get_db),
 ) -> Union[dict, JSONResponse]:
-    """List models (Gemini v1beta 端点)"""
+    """
+    列出可用模型（Gemini v1beta 专用端点）
+
+    Gemini API 的专用模型列表端点，使用 x-goog-api-key 或 ?key= 参数进行认证。
+    返回 Gemini 格式的模型列表。
+
+    **查询参数**
+    - pageSize: 每页数量，默认 50，范围 1-1000
+    - pageToken: 分页 token，用于获取下一页
+
+    **返回字段**
+    - models: 模型列表，每个模型包含：
+      - name: 模型资源名称（如 models/gemini-pro）
+      - baseModelId: 基础模型 ID
+      - version: 版本号
+      - displayName: 显示名称
+      - description: 描述信息
+      - inputTokenLimit: 输入 token 上限
+      - outputTokenLimit: 输出 token 上限
+      - supportedGenerationMethods: 支持的生成方法列表
+      - temperature: 默认温度参数
+      - maxTemperature: 最大温度参数
+      - topP: Top-P 参数
+      - topK: Top-K 参数
+    - nextPageToken: 下一页的 token（如果有更多结果）
+
+    **错误响应**
+    401: API Key 无效或未提供
+    """
     logger.info("[Models] GET /v1beta/models | format=gemini")
 
     # 从 x-goog-api-key 或 ?key= 提取 API Key
@@ -525,7 +652,33 @@ async def get_model_gemini(
     model_name: str,
     db: Session = Depends(get_db),
 ) -> Union[dict, JSONResponse]:
-    """Get model (Gemini v1beta 端点)"""
+    """
+    获取单个模型详情（Gemini v1beta 专用端点）
+
+    Gemini API 的专用模型详情端点，使用 x-goog-api-key 或 ?key= 参数进行认证。
+    返回 Gemini 格式的模型详情。
+
+    **路径参数**
+    - model_name: 模型名称或资源路径（支持 models/ 前缀，会自动移除）
+
+    **返回字段**
+    - name: 模型资源名称（如 models/gemini-pro）
+    - baseModelId: 基础模型 ID
+    - version: 版本号
+    - displayName: 显示名称
+    - description: 描述信息
+    - inputTokenLimit: 输入 token 上限
+    - outputTokenLimit: 输出 token 上限
+    - supportedGenerationMethods: 支持的生成方法列表
+    - temperature: 默认温度参数
+    - maxTemperature: 最大温度参数
+    - topP: Top-P 参数
+    - topK: Top-K 参数
+
+    **错误响应**
+    401: API Key 无效或未提供
+    404: 模型不存在或不可访问
+    """
     # 移除 "models/" 前缀（如果有）
     model_id = model_name[7:] if model_name.startswith("models/") else model_name
     logger.info(f"[Models] GET /v1beta/models/{model_id} | format=gemini")

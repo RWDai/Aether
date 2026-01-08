@@ -54,7 +54,7 @@ const fieldNameMap: Record<string, string> = {
  */
 const errorTypeMap: Record<string, (error: ValidationError) => string> = {
   'string_too_short': (error) => {
-    const minLength = error.ctx?.min_length || 10
+    const minLength = error.ctx?.min_length || 3
     return `长度不能少于 ${minLength} 个字符`
   },
   'string_too_long': (error) => {

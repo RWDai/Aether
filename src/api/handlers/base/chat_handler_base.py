@@ -19,6 +19,7 @@ Chat Handler Base - Chat API 格式的通用基类
 - StreamTelemetryRecorder: 统计记录（Usage、Audit、Candidate）
 """
 
+import asyncio
 from abc import ABC, abstractmethod
 from typing import Any, AsyncGenerator, Callable, Dict, Optional
 
@@ -55,7 +56,6 @@ from src.models.database import (
 from src.services.provider.transport import build_provider_url
 
 
-
 class ChatHandlerBase(BaseMessageHandler, ABC):
     """
     Chat Handler 基类
@@ -89,7 +89,9 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
         user_agent: str,
         start_time: float,
         allowed_api_formats: Optional[list] = None,
-        adapter_detector: Optional[Callable[[Dict[str, str], Optional[Dict[str, Any]]], Dict[str, bool]]] = None,
+        adapter_detector: Optional[
+            Callable[[Dict[str, str], Optional[Dict[str, Any]]], Dict[str, bool]]
+        ] = None,
     ):
         allowed = allowed_api_formats or [self.FORMAT_ID]
         super().__init__(
@@ -459,13 +461,18 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             f"模型={ctx.model} -> {mapped_model or '无映射'}"
         )
 
-        # 发送请求（使用配置中的超时设置）
+        # 配置 HTTP 超时
+        # 注意：read timeout 用于检测连接断开，不是整体请求超时
+        # 整体请求超时由 asyncio.wait_for 控制，使用 endpoint.timeout
         timeout_config = httpx.Timeout(
             connect=config.http_connect_timeout,
-            read=float(endpoint.timeout),
+            read=config.http_read_timeout,  # 使用全局配置，用于检测连接断开
             write=config.http_write_timeout,
             pool=config.http_pool_timeout,
         )
+
+        # endpoint.timeout 作为整体请求超时（建立连接 + 获取首字节）
+        request_timeout = float(endpoint.timeout or 300)
 
         # 创建 HTTP 客户端（支持代理配置）
         from src.clients.http_client import HTTPClientPool
@@ -474,7 +481,15 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             proxy_config=endpoint.proxy,
             timeout=timeout_config,
         )
-        try:
+
+        # 用于存储内部函数的结果（必须在函数定义前声明，供 nonlocal 使用）
+        byte_iterator: Any = None
+        prefetched_chunks: Any = None
+        response_ctx: Any = None
+
+        async def _connect_and_prefetch() -> None:
+            """建立连接并预读首字节（受整体超时控制）"""
+            nonlocal byte_iterator, prefetched_chunks, response_ctx
             response_ctx = http_client.stream(
                 "POST", url, json=provider_payload, headers=provider_headers
             )
@@ -497,6 +512,28 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
                 max_prefetch_lines=config.stream_prefetch_lines,
             )
 
+        try:
+            # 使用 asyncio.wait_for 包裹整个"建立连接 + 获取首字节"阶段
+            # endpoint.timeout 控制整体超时，避免上游长时间无响应
+            await asyncio.wait_for(_connect_and_prefetch(), timeout=request_timeout)
+
+        except asyncio.TimeoutError:
+            # 整体请求超时（建立连接 + 获取首字节）
+            # 清理可能已建立的连接上下文
+            if response_ctx is not None:
+                try:
+                    await response_ctx.__aexit__(None, None, None)
+                except Exception:
+                    pass
+            await http_client.aclose()
+            logger.warning(
+                f"  [{self.request_id}] 请求超时: Provider={provider.name}, timeout={request_timeout}s"
+            )
+            raise ProviderTimeoutException(
+                provider_name=str(provider.name),
+                timeout=int(request_timeout),
+            )
+
         except httpx.HTTPStatusError as e:
             error_text = await self._extract_error_text(e)
             logger.error(f"Provider 返回错误: {e.response.status_code}\n  Response: {error_text}")
@@ -507,7 +544,8 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
 
         except EmbeddedErrorException:
             try:
-                await response_ctx.__aexit__(None, None, None)
+                if response_ctx is not None:
+                    await response_ctx.__aexit__(None, None, None)
             except Exception:
                 pass
             await http_client.aclose()
@@ -516,6 +554,11 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
         except Exception:
             await http_client.aclose()
             raise
+
+        # 类型断言：成功执行后这些变量不会为 None
+        assert byte_iterator is not None
+        assert prefetched_chunks is not None
+        assert response_ctx is not None
 
         # 创建流生成器（传入字节流迭代器）
         return stream_processor.create_response_stream(
@@ -639,63 +682,79 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
                 is_stream=False,
             )
 
-            logger.info(f"  [{self.request_id}] 发送非流式请求: Provider={provider.name}, "
-                f"模型={model} -> {mapped_model or '无映射'}")
+            logger.info(
+                f"  [{self.request_id}] 发送非流式请求: Provider={provider.name}, "
+                f"模型={model} -> {mapped_model or '无映射'}"
+            )
             logger.debug(f"  [{self.request_id}] 请求URL: {url}")
-            logger.debug(f"  [{self.request_id}] 请求体stream字段: {provider_payload.get('stream', 'N/A')}")
+            logger.debug(
+                f"  [{self.request_id}] 请求体stream字段: {provider_payload.get('stream', 'N/A')}"
+            )
 
-            # 创建 HTTP 客户端（支持代理配置）
+            # 获取复用的 HTTP 客户端（支持代理配置）
+            # 注意：使用 get_proxy_client 复用连接池，不再每次创建新客户端
             from src.clients.http_client import HTTPClientPool
 
-            http_client = HTTPClientPool.create_client_with_proxy(
+            request_timeout = float(endpoint.timeout or 300)
+            http_client = await HTTPClientPool.get_proxy_client(
                 proxy_config=endpoint.proxy,
-                timeout=httpx.Timeout(float(endpoint.timeout)),
             )
-            async with http_client:
-                resp = await http_client.post(url, json=provider_payload, headers=provider_hdrs)
 
-                status_code = resp.status_code
-                response_headers = dict(resp.headers)
+            # 注意：不使用 async with，因为复用的客户端不应该被关闭
+            # 超时通过 timeout 参数控制
+            resp = await http_client.post(
+                url,
+                json=provider_payload,
+                headers=provider_hdrs,
+                timeout=httpx.Timeout(request_timeout),
+            )
 
-                if resp.status_code == 401:
-                    raise ProviderAuthException(f"提供商认证失败: {provider.name}")
-                elif resp.status_code == 429:
-                    raise ProviderRateLimitException(
-                        f"提供商速率限制: {provider.name}",
-                        provider_name=str(provider.name),
-                        response_headers=response_headers,
-                    )
-                elif resp.status_code >= 500:
-                    # 记录响应体以便调试
-                    error_body = ""
-                    try:
-                        error_body = resp.text[:1000]
-                        logger.error(f"  [{self.request_id}] 上游返回5xx错误: status={resp.status_code}, body={error_body[:500]}")
-                    except Exception:
-                        pass
-                    raise ProviderNotAvailableException(
-                        f"提供商服务不可用: {provider.name}",
-                        provider_name=str(provider.name),
-                        upstream_status=resp.status_code,
-                        upstream_response=error_body,
-                    )
-                elif resp.status_code != 200:
-                    # 记录非200响应以便调试
-                    error_body = ""
-                    try:
-                        error_body = resp.text[:1000]
-                        logger.warning(f"  [{self.request_id}] 上游返回非200: status={resp.status_code}, body={error_body[:500]}")
-                    except Exception:
-                        pass
-                    raise ProviderNotAvailableException(
-                        f"提供商返回错误: {provider.name}, 状态: {resp.status_code}",
-                        provider_name=str(provider.name),
-                        upstream_status=resp.status_code,
-                        upstream_response=error_body,
-                    )
+            status_code = resp.status_code
+            response_headers = dict(resp.headers)
 
-                response_json = resp.json()
-                return response_json if isinstance(response_json, dict) else {}
+            if resp.status_code == 401:
+                raise ProviderAuthException(f"提供商认证失败: {provider.name}")
+            elif resp.status_code == 429:
+                raise ProviderRateLimitException(
+                    f"提供商速率限制: {provider.name}",
+                    provider_name=str(provider.name),
+                    response_headers=response_headers,
+                )
+            elif resp.status_code >= 500:
+                # 记录响应体以便调试
+                error_body = ""
+                try:
+                    error_body = resp.text[:1000]
+                    logger.error(
+                        f"  [{self.request_id}] 上游返回5xx错误: status={resp.status_code}, body={error_body[:500]}"
+                    )
+                except Exception:
+                    pass
+                raise ProviderNotAvailableException(
+                    f"提供商服务不可用: {provider.name}",
+                    provider_name=str(provider.name),
+                    upstream_status=resp.status_code,
+                    upstream_response=error_body,
+                )
+            elif resp.status_code != 200:
+                # 记录非200响应以便调试
+                error_body = ""
+                try:
+                    error_body = resp.text[:1000]
+                    logger.warning(
+                        f"  [{self.request_id}] 上游返回非200: status={resp.status_code}, body={error_body[:500]}"
+                    )
+                except Exception:
+                    pass
+                raise ProviderNotAvailableException(
+                    f"提供商返回错误: {provider.name}, 状态: {resp.status_code}",
+                    provider_name=str(provider.name),
+                    upstream_status=resp.status_code,
+                    upstream_response=error_body,
+                )
+
+            response_json = resp.json()
+            return response_json if isinstance(response_json, dict) else {}
 
         try:
             # 解析能力需求
@@ -765,8 +824,10 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             logger.debug(f"{self.FORMAT_ID} 非流式响应完成")
 
             # 简洁的请求完成摘要
-            logger.info(f"[OK] {self.request_id[:8]} | {model} | {provider_name or 'unknown'} | {response_time_ms}ms | "
-                f"in:{input_tokens or 0} out:{output_tokens or 0}")
+            logger.info(
+                f"[OK] {self.request_id[:8]} | {model} | {provider_name or 'unknown'} | {response_time_ms}ms | "
+                f"in:{input_tokens or 0} out:{output_tokens or 0}"
+            )
 
             return JSONResponse(status_code=status_code, content=response_json)
 
@@ -807,8 +868,6 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
                 error_bytes = await e.response.aread()
                 return error_bytes.decode("utf-8", errors="replace")
             else:
-                return (
-                    e.response.text if hasattr(e.response, "_content") else "Unable to read"
-                )
+                return e.response.text if hasattr(e.response, "_content") else "Unable to read"
         except Exception as decode_error:
             return f"Unable to read error: {decode_error}"

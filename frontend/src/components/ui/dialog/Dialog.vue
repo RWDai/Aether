@@ -18,7 +18,7 @@
           v-if="isOpen"
           class="fixed inset-0 bg-black/40 backdrop-blur-sm transition-opacity pointer-events-auto"
           :style="{ zIndex: backdropZIndex }"
-          @click="handleClose"
+          @click="handleBackdropClick"
         />
       </Transition>
 
@@ -106,6 +106,7 @@ const props = defineProps<{
   iconClass?: string // Custom icon color class
   zIndex?: number // Custom z-index for nested dialogs (default: 60)
   noPadding?: boolean // Disable default content padding
+  persistent?: boolean // Prevent closing on backdrop click
 }>()
 
 // Emits 定义
@@ -138,6 +139,13 @@ function handleClose() {
   }
 }
 
+// 处理背景点击
+function handleBackdropClick() {
+  if (!props.persistent) {
+    handleClose()
+  }
+}
+
 const maxWidthClass = computed(() => {
   const sizeValue = props.maxWidth || props.size || 'md'
   const sizes = {
@@ -162,7 +170,7 @@ const contentZIndex = computed(() => (props.zIndex || 60) + 10)
 
 // 添加 ESC 键监听
 useEscapeKey(() => {
-  if (isOpen.value) {
+  if (isOpen.value && !props.persistent) {
     handleClose()
     return true  // 阻止其他监听器（如父级抽屉的 ESC 监听器）
   }

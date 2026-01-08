@@ -14,6 +14,7 @@ from sqlalchemy import (
     JSON,
     BigInteger,
     Boolean,
+    CheckConstraint,
     Column,
     DateTime,
     Enum,
@@ -71,7 +72,7 @@ class User(Base):
 
     # 访问限制（NULL 表示不限制，允许访问所有资源）
     allowed_providers = Column(JSON, nullable=True)  # 允许使用的提供商 ID 列表
-    allowed_endpoints = Column(JSON, nullable=True)  # 允许使用的端点 ID 列表
+    allowed_api_formats = Column(JSON, nullable=True)  # 允许使用的 API 格式列表
     allowed_models = Column(JSON, nullable=True)  # 允许使用的模型名称列表
 
     # Key 能力配置
@@ -101,6 +102,9 @@ class User(Base):
 
     # 关系 - CASCADE delete: 让数据库处理级联删除
     api_keys = relationship("ApiKey", back_populates="user", cascade="all, delete-orphan")
+    management_tokens = relationship(
+        "ManagementToken", back_populates="user", cascade="all, delete-orphan"
+    )
     preferences = relationship(
         "UserPreference", back_populates="user", cascade="all, delete-orphan", passive_deletes=True
     )
@@ -161,7 +165,6 @@ class ApiKey(Base):
 
     # 访问限制（NULL 表示不限制，允许访问所有资源）
     allowed_providers = Column(JSON, nullable=True)  # 允许使用的提供商 ID 列表
-    allowed_endpoints = Column(JSON, nullable=True)  # 允许使用的端点 ID 列表
     allowed_api_formats = Column(JSON, nullable=True)  # 允许使用的 API 格式列表
     allowed_models = Column(JSON, nullable=True)  # 允许使用的模型名称列表
     rate_limit = Column(Integer, default=None, nullable=True)  # 每分钟请求限制，None = 无限制
@@ -268,7 +271,7 @@ class Usage(Base):
 
     # 请求信息
     request_id = Column(String(100), unique=True, index=True, nullable=False)
-    provider = Column(String(100), nullable=False)
+    provider_name = Column(String(100), nullable=False)  # Provider 名称（非外键）
     model = Column(String(100), nullable=False)
     target_model = Column(String(100), nullable=True, comment="映射后的目标模型名（若无映射则为空）")
 
@@ -550,7 +553,6 @@ class Provider(Base):
     is_active = Column(Boolean, default=True, nullable=False)
 
     # 限制
-    rate_limit = Column(Integer, nullable=True)  # 每分钟请求限制
     concurrent_limit = Column(Integer, nullable=True)  # 并发请求限制
 
     # 配置
@@ -595,7 +597,7 @@ class ProviderEndpoint(Base):
     # 请求配置
     headers = Column(JSON, nullable=True)  # 额外请求头
     timeout = Column(Integer, default=300)  # 超时（秒）
-    max_retries = Column(Integer, default=3)  # 最大重试次数
+    max_retries = Column(Integer, default=2)  # 最大重试次数
 
     # 限制
     max_concurrent = Column(
@@ -1228,6 +1230,192 @@ class AuditEventType(PyEnum):
     UNAUTHORIZED_ACCESS = "unauthorized_access"
     DATA_EXPORT = "data_export"
     CONFIG_CHANGED = "config_changed"
+
+    # Management Token 相关
+    MANAGEMENT_TOKEN_CREATED = "management_token_created"
+    MANAGEMENT_TOKEN_UPDATED = "management_token_updated"
+    MANAGEMENT_TOKEN_DELETED = "management_token_deleted"
+    MANAGEMENT_TOKEN_USED = "management_token_used"
+    MANAGEMENT_TOKEN_EXPIRED = "management_token_expired"
+    MANAGEMENT_TOKEN_IP_BLOCKED = "management_token_ip_blocked"
+
+
+class ManagementToken(Base):
+    """Management Token 模型 - 用于程序化管理 API 调用"""
+
+    __tablename__ = "management_tokens"
+
+    # Token 格式常量
+    TOKEN_PREFIX = "ae_"
+    TOKEN_RANDOM_LENGTH = 40
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
+    user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+
+    # Token 信息
+    token_hash = Column(String(64), unique=True, index=True, nullable=False)  # SHA256 哈希
+    token_prefix = Column(String(12), nullable=True)  # Token 前缀用于显示（如 ae_xxxxxxxx）
+    name = Column(String(100), nullable=False)  # Token 名称
+    description = Column(Text, nullable=True)  # 描述
+
+    # IP 白名单（可选）
+    allowed_ips = Column(JSON, nullable=True)  # 允许的 IP 列表，NULL = 不限制
+    # 格式: ["192.168.1.1", "10.0.0.0/24"]
+
+    # 有效期
+    expires_at = Column(DateTime(timezone=True), nullable=True)  # NULL = 永不过期
+
+    # 使用统计
+    last_used_at = Column(DateTime(timezone=True), nullable=True)
+    last_used_ip = Column(String(45), nullable=True)
+    usage_count = Column(Integer, default=0)  # 使用次数
+
+    # 状态
+    is_active = Column(Boolean, default=True, nullable=False)
+
+    # 时间戳
+    created_at = Column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    # 关系
+    user = relationship("User", back_populates="management_tokens")
+
+    # 索引和约束
+    __table_args__ = (
+        Index("idx_management_tokens_user_id", "user_id"),
+        Index("idx_management_tokens_is_active", "is_active"),
+        UniqueConstraint("user_id", "name", name="uq_management_tokens_user_name"),
+        # IP 白名单必须为 NULL（不限制）或非空数组，禁止空数组
+        # 注意：JSON 类型的 NULL 可能被序列化为 JSON 'null'，需要同时处理
+        CheckConstraint(
+            "allowed_ips IS NULL OR allowed_ips::text = 'null' OR json_array_length(allowed_ips) > 0",
+            name="check_allowed_ips_not_empty",
+        ),
+    )
+
+    @staticmethod
+    def generate_token() -> str:
+        """生成 Management Token（使用加密安全的随机数）"""
+        import string
+
+        alphabet = string.ascii_letters + string.digits
+        random_part = "".join(
+            secrets.choice(alphabet) for _ in range(ManagementToken.TOKEN_RANDOM_LENGTH)
+        )
+        return f"{ManagementToken.TOKEN_PREFIX}{random_part}"
+
+    @staticmethod
+    def hash_token(token: str) -> str:
+        """对 Token 进行 SHA256 哈希
+
+        安全性说明（当前方案是安全的）：
+        - Token 熵为 62^40（约 2^238），暴力破解在计算上不可行
+        - 结合速率限制（默认 30 次/分钟/IP），在线攻击不可行
+        - 不需要盐值：盐值用于防止彩虹表攻击，但 Token 是高熵随机值，
+          不存在可预计算的"常见值"，因此彩虹表攻击不适用
+        """
+        return hashlib.sha256(token.encode()).hexdigest()
+
+    def set_token(self, token: str) -> None:
+        """设置 Token（只存储哈希和前缀用于显示）"""
+        self.token_hash = self.hash_token(token)
+        # 存储前缀用于显示（ae_ + 4 个字符，共 7 个字符）
+        self.token_prefix = token[:7] if len(token) > 7 else token
+
+    def get_display_token(self) -> str:
+        """获取用于显示的脱敏 Token（显示前缀 + 掩码）"""
+        if self.token_prefix:
+            return f"{self.token_prefix}...****"
+        return "ae_****"
+
+    def is_ip_allowed(self, client_ip: str) -> bool:
+        """检查 IP 是否在白名单中
+
+        安全策略：
+        - None 或不设置表示不限制（允许所有 IP）
+        - 非空列表表示只允许列表中的 IP
+        - 无效的白名单条目会被记录并跳过
+        - 无效的客户端 IP 直接拒绝
+        - 支持 IPv4 映射的 IPv6 地址规范化
+        """
+        if self.allowed_ips is None:
+            return True  # 未设置白名单，不限制
+
+        import ipaddress
+
+        from src.core.logger import logger
+
+        # 防御性检查：空列表应该在数据库层被拒绝，但这里再检查一次
+        if not self.allowed_ips:
+            logger.critical(f"Management Token {self.id} - allowed_ips 为空列表（违反数据库约束）")
+            return False  # fail-safe
+
+        def normalize_ip(ip_str: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+            """规范化 IP 地址，将 IPv4 映射的 IPv6 转换为 IPv4"""
+            try:
+                ip = ipaddress.ip_address(ip_str)
+                if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+                    return ip.ipv4_mapped
+                return ip
+            except ValueError:
+                return None
+
+        # 规范化客户端 IP
+        client = normalize_ip(client_ip)
+        if client is None:
+            logger.error(f"Management Token {self.id} - 拒绝无效的客户端 IP: {client_ip}")
+            return False
+
+        valid_entries = 0
+        for allowed in self.allowed_ips:
+            try:
+                if "/" in allowed:
+                    # CIDR 格式
+                    network = ipaddress.ip_network(allowed, strict=False)
+                    valid_entries += 1
+                    if client in network:
+                        return True
+                else:
+                    # 精确 IP
+                    allowed_ip = normalize_ip(allowed)
+                    if allowed_ip is None:
+                        logger.error(f"Management Token {self.id} - 白名单包含无效条目: {allowed}")
+                        continue
+                    valid_entries += 1
+                    if client == allowed_ip:
+                        return True
+            except ValueError:
+                logger.error(f"Management Token {self.id} - 白名单包含无效条目: {allowed}")
+                continue
+
+        # 如果白名单全部无效，记录严重错误并拒绝
+        if valid_entries == 0:
+            logger.critical(f"Management Token {self.id} - 白名单全部无效，拒绝所有访问")
+
+        return False
+
+    @property
+    def is_expired(self) -> bool:
+        """检查 Token 是否已过期（时区安全）"""
+        if not self.expires_at:
+            return False
+
+        expires = self.expires_at
+        if expires.tzinfo is None:
+            # 数据库中的时间应该有时区信息，如果没有则表示数据完整性问题
+            from src.core.logger import logger
+
+            logger.error(f"Management Token {self.id} expires_at 缺少时区信息（数据完整性问题）")
+            expires = expires.replace(tzinfo=timezone.utc)
+
+        return expires < datetime.now(timezone.utc)
 
 
 class AuditLog(Base):

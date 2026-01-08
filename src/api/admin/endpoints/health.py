@@ -36,7 +36,20 @@ async def get_health_summary(
     request: Request,
     db: Session = Depends(get_db),
 ) -> HealthSummaryResponse:
-    """获取健康状态摘要"""
+    """
+    获取健康状态摘要
+
+    获取系统整体健康状态摘要，包括所有 Provider、Endpoint 和 Key 的健康状态统计。
+
+    **返回字段**:
+    - `total_providers`: Provider 总数
+    - `active_providers`: 活跃 Provider 数量
+    - `total_endpoints`: Endpoint 总数
+    - `active_endpoints`: 活跃 Endpoint 数量
+    - `total_keys`: Key 总数
+    - `active_keys`: 活跃 Key 数量
+    - `circuit_breaker_open_keys`: 熔断的 Key 数量
+    """
     adapter = AdminHealthSummaryAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -50,9 +63,21 @@ async def get_endpoint_health_status(
     """
     获取端点健康状态（简化视图，与用户端点统一）
 
+    获取按 API 格式聚合的端点健康状态时间线，基于 Usage 表统计，
+    返回 50 个时间段的聚合状态，适用于快速查看整体健康趋势。
+
     与 /health/api-formats 的区别：
     - /health/status: 返回聚合的时间线状态（50个时间段），基于 Usage 表
     - /health/api-formats: 返回详细的事件列表，基于 RequestCandidate 表
+
+    **查询参数**:
+    - `lookback_hours`: 回溯的小时数（1-72），默认 6
+
+    **返回字段**:
+    - `api_format`: API 格式名称
+    - `timeline`: 时间线数据（50个时间段）
+    - `time_range_start`: 时间范围起始
+    - `time_range_end`: 时间范围结束
     """
     adapter = AdminEndpointHealthStatusAdapter(lookback_hours=lookback_hours)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
@@ -65,7 +90,33 @@ async def get_api_format_health_monitor(
     per_format_limit: int = Query(60, ge=10, le=200, description="每个 API 格式的事件数量"),
     db: Session = Depends(get_db),
 ) -> ApiFormatHealthMonitorResponse:
-    """获取按 API 格式聚合的健康监控时间线（详细事件列表）"""
+    """
+    获取按 API 格式聚合的健康监控时间线（详细事件列表）
+
+    获取每个 API 格式的详细健康监控数据，包括请求事件列表、成功率统计、
+    时间线数据等，基于 RequestCandidate 表查询，适用于详细分析。
+
+    **查询参数**:
+    - `lookback_hours`: 回溯的小时数（1-72），默认 6
+    - `per_format_limit`: 每个 API 格式返回的事件数量（10-200），默认 60
+
+    **返回字段**:
+    - `generated_at`: 数据生成时间
+    - `formats`: API 格式健康监控数据列表
+      - `api_format`: API 格式名称
+      - `total_attempts`: 总请求数
+      - `success_count`: 成功请求数
+      - `failed_count`: 失败请求数
+      - `skipped_count`: 跳过请求数
+      - `success_rate`: 成功率
+      - `provider_count`: Provider 数量
+      - `key_count`: Key 数量
+      - `last_event_at`: 最后事件时间
+      - `events`: 事件列表
+      - `timeline`: 时间线数据
+      - `time_range_start`: 时间范围起始
+      - `time_range_end`: 时间范围结束
+    """
     adapter = AdminApiFormatHealthMonitorAdapter(
         lookback_hours=lookback_hours,
         per_format_limit=per_format_limit,
@@ -79,7 +130,26 @@ async def get_key_health(
     request: Request,
     db: Session = Depends(get_db),
 ) -> HealthStatusResponse:
-    """获取 Key 健康状态"""
+    """
+    获取 Key 健康状态
+
+    获取指定 API Key 的健康状态详情，包括健康分数、连续失败次数、
+    熔断器状态等信息。
+
+    **路径参数**:
+    - `key_id`: API Key ID
+
+    **返回字段**:
+    - `key_id`: API Key ID
+    - `key_health_score`: 健康分数（0.0-1.0）
+    - `key_consecutive_failures`: 连续失败次数
+    - `key_last_failure_at`: 最后失败时间
+    - `key_is_active`: 是否活跃
+    - `key_statistics`: 统计信息
+    - `circuit_breaker_open`: 熔断器是否打开
+    - `circuit_breaker_open_at`: 熔断器打开时间
+    - `next_probe_at`: 下次探测时间
+    """
     adapter = AdminKeyHealthAdapter(key_id=key_id)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -91,13 +161,20 @@ async def recover_key_health(
     db: Session = Depends(get_db),
 ) -> dict:
     """
-    Recover key health status
+    恢复 Key 健康状态
 
-    Resets health_score to 1.0, closes circuit breaker,
-    cancels auto-disable, and resets all failure counts.
+    手动恢复指定 Key 的健康状态，将健康分数重置为 1.0，关闭熔断器，
+    取消自动禁用，并重置所有失败计数。
 
-    Parameters:
-    - key_id: Key ID (path parameter)
+    **路径参数**:
+    - `key_id`: API Key ID
+
+    **返回字段**:
+    - `message`: 操作结果消息
+    - `details`: 详细信息
+      - `health_score`: 健康分数
+      - `circuit_breaker_open`: 熔断器状态
+      - `is_active`: 是否活跃
     """
     adapter = AdminRecoverKeyHealthAdapter(key_id=key_id)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
@@ -109,12 +186,21 @@ async def recover_all_keys_health(
     db: Session = Depends(get_db),
 ) -> dict:
     """
-    Batch recover all circuit-broken keys
+    批量恢复所有熔断 Key 的健康状态
 
-    Finds all keys with circuit_breaker_open=True and:
-    1. Resets health_score to 1.0
-    2. Closes circuit breaker
-    3. Resets failure counts
+    查找所有处于熔断状态的 Key（circuit_breaker_open=True），
+    并批量执行以下操作：
+    1. 将健康分数重置为 1.0
+    2. 关闭熔断器
+    3. 重置失败计数
+
+    **返回字段**:
+    - `message`: 操作结果消息
+    - `recovered_count`: 恢复的 Key 数量
+    - `recovered_keys`: 恢复的 Key 列表
+      - `key_id`: Key ID
+      - `key_name`: Key 名称
+      - `endpoint_id`: Endpoint ID
     """
     adapter = AdminRecoverAllKeysHealthAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)

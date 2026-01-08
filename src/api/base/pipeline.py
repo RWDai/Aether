@@ -2,18 +2,22 @@ from __future__ import annotations
 
 import time
 from enum import Enum
-from typing import Any, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Optional, Tuple
 
 from fastapi import HTTPException, Request
 from sqlalchemy.orm import Session
 
 from src.config.settings import config
+from src.core.enums import UserRole
 from src.core.exceptions import QuotaExceededException
 from src.core.logger import logger
-from src.models.database import ApiKey, AuditEventType, User, UserRole
+from src.models.database import ApiKey, AuditEventType, User
 from src.services.auth.service import AuthService
 from src.services.system.audit import AuditService
 from src.services.usage.service import UsageService
+
+if TYPE_CHECKING:
+    from src.models.database import ManagementToken
 
 from .adapter import ApiAdapter, ApiMode
 from .context import ApiRequestContext
@@ -47,17 +51,22 @@ class ApiRequestPipeline:
         logger.debug(f"[Pipeline] Running with mode={mode}, adapter={adapter.__class__.__name__}, "
             f"adapter.mode={adapter.mode}, path={http_request.url.path}")
         if mode == ApiMode.ADMIN:
-            user = await self._authenticate_admin(http_request, db)
+            user, management_token = await self._authenticate_admin(http_request, db)
             api_key = None
         elif mode == ApiMode.USER:
-            user = await self._authenticate_user(http_request, db)
+            user, management_token = await self._authenticate_user(http_request, db)
             api_key = None
         elif mode == ApiMode.PUBLIC:
             user = None
             api_key = None
+            management_token = None
+        elif mode == ApiMode.MANAGEMENT:
+            user, management_token = await self._authenticate_management(http_request, db)
+            api_key = None
         else:
             logger.debug("[Pipeline] 调用 _authenticate_client")
             user, api_key = self._authenticate_client(http_request, db, adapter)
+            management_token = None
             logger.debug(f"[Pipeline] 认证完成 | user={user.username if user else None}")
 
         raw_body = None
@@ -90,6 +99,9 @@ class ApiRequestPipeline:
             api_format_hint=api_format_hint,
             path_params=path_params,
         )
+        # 存储 management_token 到 context（用于权限检查）
+        if management_token:
+            context.management_token = management_token
         logger.debug(f"[Pipeline] Context构建完成 | adapter={adapter.name} | request_id={context.request_id}")
 
         if mode != ApiMode.ADMIN and user:
@@ -177,12 +189,41 @@ class ApiRequestPipeline:
 
         return user, api_key
 
-    async def _authenticate_admin(self, request: Request, db: Session) -> User:
+    async def _authenticate_admin(
+        self, request: Request, db: Session
+    ) -> Tuple[User, Optional["ManagementToken"]]:
+        """管理员认证，支持 JWT 和 Management Token 两种方式"""
+        from src.models.database import ManagementToken
+        from src.utils.request_utils import get_client_ip
+
         authorization = request.headers.get("authorization")
         if not authorization or not authorization.lower().startswith("bearer "):
             raise HTTPException(status_code=401, detail="缺少管理员凭证")
 
         token = authorization[7:].strip()
+
+        # 检查是否为 Management Token（ae_ 前缀）
+        if token.startswith(ManagementToken.TOKEN_PREFIX):
+            client_ip = get_client_ip(request)
+            result = await self.auth_service.authenticate_management_token(db, token, client_ip)
+
+            if not result:
+                raise HTTPException(status_code=401, detail="无效或过期的 Management Token")
+
+            user, management_token = result
+
+            # 检查管理员权限
+            if user.role != UserRole.ADMIN:
+                logger.warning(f"非管理员尝试通过 Management Token 访问管理端点: {user.email}")
+                raise HTTPException(status_code=403, detail="需要管理员权限")
+
+            # 存储到 request.state
+            request.state.user_id = user.id
+            request.state.management_token_id = management_token.id
+
+            return user, management_token
+
+        # JWT 认证
         try:
             payload = await self.auth_service.verify_token(token, token_type="access")
         except HTTPException:
@@ -200,16 +241,43 @@ class ApiRequestPipeline:
         if not user or not user.is_active:
             raise HTTPException(status_code=403, detail="用户不存在或已禁用")
 
-        request.state.user_id = user.id
-        return user
+        # 检查管理员权限
+        if user.role != UserRole.ADMIN:
+            logger.warning(f"非管理员尝试通过 JWT 访问管理端点: {user.email}")
+            raise HTTPException(status_code=403, detail="需要管理员权限")
 
-    async def _authenticate_user(self, request: Request, db: Session) -> User:
-        """JWT 认证普通用户（不要求管理员权限）"""
+        request.state.user_id = user.id
+        return user, None
+
+    async def _authenticate_user(
+        self, request: Request, db: Session
+    ) -> Tuple[User, Optional["ManagementToken"]]:
+        """用户认证，支持 JWT 和 Management Token 两种方式"""
+        from src.models.database import ManagementToken
+        from src.utils.request_utils import get_client_ip
+
         authorization = request.headers.get("authorization")
         if not authorization or not authorization.lower().startswith("bearer "):
             raise HTTPException(status_code=401, detail="缺少用户凭证")
 
         token = authorization[7:].strip()
+
+        # 检查是否为 Management Token（ae_ 前缀）
+        if token.startswith(ManagementToken.TOKEN_PREFIX):
+            client_ip = get_client_ip(request)
+            result = await self.auth_service.authenticate_management_token(db, token, client_ip)
+
+            if not result:
+                raise HTTPException(status_code=401, detail="无效或过期的 Management Token")
+
+            user, management_token = result
+
+            request.state.user_id = user.id
+            request.state.management_token_id = management_token.id
+
+            return user, management_token
+
+        # JWT 认证
         try:
             payload = await self.auth_service.verify_token(token, token_type="access")
         except HTTPException:
@@ -222,13 +290,47 @@ class ApiRequestPipeline:
         if not user_id:
             raise HTTPException(status_code=401, detail="无效的用户令牌")
 
-        # 直接查询数据库，确保返回的是当前 Session 绑定的对象
         user = db.query(User).filter(User.id == user_id).first()
         if not user or not user.is_active:
             raise HTTPException(status_code=403, detail="用户不存在或已禁用")
 
         request.state.user_id = user.id
-        return user
+        return user, None
+
+    async def _authenticate_management(
+        self, request: Request, db: Session
+    ) -> Tuple[User, "ManagementToken"]:
+        """Management Token 认证"""
+        from src.models.database import ManagementToken
+        from src.utils.request_utils import get_client_ip
+
+        authorization = request.headers.get("authorization")
+        if not authorization or not authorization.lower().startswith("bearer "):
+            raise HTTPException(status_code=401, detail="缺少 Management Token")
+
+        token = authorization[7:].strip()
+
+        # 检查是否为 Management Token 格式
+        if not token.startswith(ManagementToken.TOKEN_PREFIX):
+            raise HTTPException(
+                status_code=401,
+                detail=f"无效的 Token 格式，需要 Management Token ({ManagementToken.TOKEN_PREFIX}xxx)",
+            )
+
+        client_ip = get_client_ip(request)
+
+        result = await self.auth_service.authenticate_management_token(db, token, client_ip)
+
+        if not result:
+            raise HTTPException(status_code=401, detail="无效或过期的 Management Token")
+
+        user, management_token = result
+
+        # 存储到 request.state
+        request.state.user_id = user.id
+        request.state.management_token_id = management_token.id
+
+        return user, management_token
 
     def _calculate_quota_remaining(self, user: Optional[User]) -> Optional[float]:
         if not user:

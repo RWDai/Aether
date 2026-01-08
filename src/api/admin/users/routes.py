@@ -26,6 +26,18 @@ pipeline = ApiRequestPipeline()
 # 管理员端点
 @router.post("")
 async def create_user_endpoint(request: Request, db: Session = Depends(get_db)):
+    """
+    创建用户
+
+    创建新用户账号（管理员专用）。
+
+    **请求体**:
+    - `email`: 邮箱地址
+    - `username`: 用户名
+    - `password`: 密码
+    - `role`: 角色（user/admin）
+    - `quota_usd`: 配额（USD）
+    """
     adapter = AdminCreateUserAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -33,18 +45,33 @@ async def create_user_endpoint(request: Request, db: Session = Depends(get_db)):
 @router.get("")
 async def list_users(
     request: Request,
-    skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=1000),
-    role: Optional[str] = None,
-    is_active: Optional[bool] = None,
+    skip: int = Query(0, ge=0, description="跳过记录数"),
+    limit: int = Query(100, ge=1, le=1000, description="返回记录数"),
+    role: Optional[str] = Query(None, description="按角色筛选（user/admin）"),
+    is_active: Optional[bool] = Query(None, description="按状态筛选"),
     db: Session = Depends(get_db),
 ):
+    """
+    获取用户列表
+
+    分页获取用户列表，支持按角色和状态筛选。
+
+    **返回字段**: id, email, username, role, quota_usd, used_usd, is_active, created_at 等
+    """
     adapter = AdminListUsersAdapter(skip=skip, limit=limit, role=role, is_active=is_active)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.get("/{user_id}")
-async def get_user(user_id: str, request: Request, db: Session = Depends(get_db)):  # UUID
+async def get_user(user_id: str, request: Request, db: Session = Depends(get_db)):
+    """
+    获取用户详情
+
+    获取指定用户的详细信息。
+
+    **路径参数**:
+    - `user_id`: 用户 ID (UUID)
+    """
     adapter = AdminGetUserAdapter(user_id=user_id)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -55,19 +82,51 @@ async def update_user(
     request: Request,
     db: Session = Depends(get_db),
 ):
+    """
+    更新用户信息
+
+    更新指定用户的信息，包括角色、配额、权限等。
+
+    **路径参数**:
+    - `user_id`: 用户 ID (UUID)
+
+    **请求体** (均为可选):
+    - `email`: 邮箱地址
+    - `username`: 用户名
+    - `role`: 角色
+    - `quota_usd`: 配额
+    - `is_active`: 是否启用
+    - `allowed_providers`: 允许的提供商列表
+    - `allowed_models`: 允许的模型列表
+    """
     adapter = AdminUpdateUserAdapter(user_id=user_id)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.delete("/{user_id}")
-async def delete_user(user_id: str, request: Request, db: Session = Depends(get_db)):  # UUID
+async def delete_user(user_id: str, request: Request, db: Session = Depends(get_db)):
+    """
+    删除用户
+
+    永久删除指定用户。不能删除最后一个管理员账户。
+
+    **路径参数**:
+    - `user_id`: 用户 ID (UUID)
+    """
     adapter = AdminDeleteUserAdapter(user_id=user_id)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.patch("/{user_id}/quota")
 async def reset_user_quota(user_id: str, request: Request, db: Session = Depends(get_db)):
-    """Reset user quota (set used_usd to 0)"""
+    """
+    重置用户配额
+
+    将用户的已用配额（used_usd）重置为 0。
+
+    **路径参数**:
+    - `user_id`: 用户 ID (UUID)
+    """
     adapter = AdminResetUserQuotaAdapter(user_id=user_id)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -76,10 +135,17 @@ async def reset_user_quota(user_id: str, request: Request, db: Session = Depends
 async def get_user_api_keys(
     user_id: str,
     request: Request,
-    is_active: Optional[bool] = None,
+    is_active: Optional[bool] = Query(None, description="按状态筛选"),
     db: Session = Depends(get_db),
 ):
-    """获取用户的所有API Keys（不包括独立Keys）"""
+    """
+    获取用户的 API 密钥列表
+
+    获取指定用户的所有 API 密钥（不包括独立密钥）。
+
+    **路径参数**:
+    - `user_id`: 用户 ID (UUID)
+    """
     adapter = AdminGetUserKeysAdapter(user_id=user_id, is_active=is_active)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -90,7 +156,23 @@ async def create_user_api_key(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    """为用户创建API Key"""
+    """
+    为用户创建 API 密钥
+
+    为指定用户创建新的 API 密钥。
+
+    **路径参数**:
+    - `user_id`: 用户 ID (UUID)
+
+    **请求体**:
+    - `name`: 密钥名称
+    - `allowed_providers`: 允许的提供商（可选）
+    - `allowed_models`: 允许的模型（可选）
+    - `rate_limit`: 速率限制（可选）
+    - `expire_days`: 过期天数（可选）
+
+    **返回**: 包含完整密钥值的响应（仅此一次显示）
+    """
     adapter = AdminCreateUserKeyAdapter(user_id=user_id)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -102,7 +184,15 @@ async def delete_user_api_key(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    """删除用户的API Key"""
+    """
+    删除用户的 API 密钥
+
+    删除指定用户的指定 API 密钥。
+
+    **路径参数**:
+    - `user_id`: 用户 ID (UUID)
+    - `key_id`: 密钥 ID
+    """
     adapter = AdminDeleteUserKeyAdapter(user_id=user_id, key_id=key_id)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -156,7 +246,7 @@ class AdminCreateUserAdapter(AdminApiAdapter):
             "username": user.username,
             "role": user.role.value,
             "allowed_providers": user.allowed_providers,
-            "allowed_endpoints": user.allowed_endpoints,
+            "allowed_api_formats": user.allowed_api_formats,
             "allowed_models": user.allowed_models,
             "quota_usd": user.quota_usd,
             "used_usd": user.used_usd,
@@ -183,6 +273,9 @@ class AdminListUsersAdapter(AdminApiAdapter):
                 "email": u.email,
                 "username": u.username,
                 "role": u.role.value,
+                "allowed_providers": u.allowed_providers,
+                "allowed_api_formats": u.allowed_api_formats,
+                "allowed_models": u.allowed_models,
                 "quota_usd": u.quota_usd,
                 "used_usd": u.used_usd,
                 "total_usd": getattr(u, "total_usd", 0),
@@ -216,7 +309,7 @@ class AdminGetUserAdapter(AdminApiAdapter):
             "username": user.username,
             "role": user.role.value,
             "allowed_providers": user.allowed_providers,
-            "allowed_endpoints": user.allowed_endpoints,
+            "allowed_api_formats": user.allowed_api_formats,
             "allowed_models": user.allowed_models,
             "quota_usd": user.quota_usd,
             "used_usd": user.used_usd,
@@ -282,7 +375,7 @@ class AdminUpdateUserAdapter(AdminApiAdapter):
             "username": user.username,
             "role": user.role.value,
             "allowed_providers": user.allowed_providers,
-            "allowed_endpoints": user.allowed_endpoints,
+            "allowed_api_formats": user.allowed_api_formats,
             "allowed_models": user.allowed_models,
             "quota_usd": user.quota_usd,
             "used_usd": user.used_usd,

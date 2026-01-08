@@ -73,7 +73,26 @@ async def list_standalone_api_keys(
     is_active: Optional[bool] = None,
     db: Session = Depends(get_db),
 ):
-    """列出所有独立余额API Keys"""
+    """
+    列出所有独立余额 API Keys
+
+    获取系统中所有独立余额 API Key 的列表。独立余额 Key 不关联用户配额，
+    有独立的余额限制，主要用于给非注册用户使用。
+
+    **查询参数**:
+    - `skip`: 跳过的记录数（分页偏移量），默认 0
+    - `limit`: 返回的记录数（分页限制），默认 100，最大 500
+    - `is_active`: 可选，根据启用状态筛选（true/false）
+
+    **返回字段**:
+    - `api_keys`: API Key 列表，包含 id, name, key_display, is_active, current_balance_usd,
+      balance_used_usd, total_requests, total_cost_usd, rate_limit, allowed_providers,
+      allowed_api_formats, allowed_models, last_used_at, expires_at, created_at, updated_at,
+      auto_delete_on_expiry 等字段
+    - `total`: 符合条件的总记录数
+    - `limit`: 当前分页限制
+    - `skip`: 当前分页偏移量
+    """
     adapter = AdminListStandaloneKeysAdapter(skip=skip, limit=limit, is_active=is_active)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -84,7 +103,35 @@ async def create_standalone_api_key(
     key_data: CreateApiKeyRequest,
     db: Session = Depends(get_db),
 ):
-    """创建独立余额API Key（必须设置余额限制）"""
+    """
+    创建独立余额 API Key
+
+    创建一个新的独立余额 API Key。独立余额 Key 必须设置初始余额限制。
+
+    **请求体字段**:
+    - `name`: API Key 的名称
+    - `initial_balance_usd`: 必需，初始余额（美元），必须大于 0
+    - `allowed_providers`: 可选，允许使用的提供商列表
+    - `allowed_api_formats`: 可选，允许使用的 API 格式列表
+    - `allowed_models`: 可选，允许使用的模型列表
+    - `rate_limit`: 可选，速率限制配置（请求数/秒）
+    - `expire_days`: 可选，过期天数（兼容旧版）
+    - `expires_at`: 可选，过期时间（ISO 格式或 YYYY-MM-DD 格式，优先级高于 expire_days）
+    - `auto_delete_on_expiry`: 可选，过期后是否自动删除
+
+    **返回字段**:
+    - `id`: API Key ID
+    - `key`: 完整的 API Key（仅在创建时返回一次）
+    - `name`: API Key 名称
+    - `key_display`: 脱敏显示的 Key
+    - `is_standalone`: 是否为独立余额 Key（始终为 true）
+    - `current_balance_usd`: 当前余额
+    - `balance_used_usd`: 已使用余额
+    - `rate_limit`: 速率限制配置
+    - `expires_at`: 过期时间
+    - `created_at`: 创建时间
+    - `message`: 提示信息
+    """
     adapter = AdminCreateStandaloneKeyAdapter(key_data=key_data)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -93,20 +140,72 @@ async def create_standalone_api_key(
 async def update_api_key(
     key_id: str, request: Request, key_data: CreateApiKeyRequest, db: Session = Depends(get_db)
 ):
-    """更新独立余额Key（可修改名称、过期时间、余额限制等）"""
+    """
+    更新独立余额 API Key
+
+    更新指定 ID 的独立余额 API Key 的配置信息。
+
+    **路径参数**:
+    - `key_id`: API Key ID
+
+    **请求体字段**:
+    - `name`: 可选，API Key 的名称
+    - `rate_limit`: 可选，速率限制配置（null 表示无限制）
+    - `allowed_providers`: 可选，允许使用的提供商列表
+    - `allowed_api_formats`: 可选，允许使用的 API 格式列表
+    - `allowed_models`: 可选，允许使用的模型列表
+    - `expire_days`: 可选，过期天数（兼容旧版）
+    - `expires_at`: 可选，过期时间（ISO 格式或 YYYY-MM-DD 格式，优先级高于 expire_days，null 或空字符串表示永不过期）
+    - `auto_delete_on_expiry`: 可选，过期后是否自动删除
+
+    **返回字段**:
+    - `id`: API Key ID
+    - `name`: API Key 名称
+    - `key_display`: 脱敏显示的 Key
+    - `is_active`: 是否启用
+    - `current_balance_usd`: 当前余额
+    - `balance_used_usd`: 已使用余额
+    - `rate_limit`: 速率限制配置
+    - `expires_at`: 过期时间
+    - `updated_at`: 更新时间
+    - `message`: 提示信息
+    """
     adapter = AdminUpdateApiKeyAdapter(key_id=key_id, key_data=key_data)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.patch("/{key_id}")
 async def toggle_api_key(key_id: str, request: Request, db: Session = Depends(get_db)):
-    """Toggle API key active status (PATCH with is_active in body)"""
+    """
+    切换 API Key 启用状态
+
+    切换指定 API Key 的启用/禁用状态。
+
+    **路径参数**:
+    - `key_id`: API Key ID
+
+    **返回字段**:
+    - `id`: API Key ID
+    - `is_active`: 新的启用状态
+    - `message`: 提示信息
+    """
     adapter = AdminToggleApiKeyAdapter(key_id=key_id)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.delete("/{key_id}")
 async def delete_api_key(key_id: str, request: Request, db: Session = Depends(get_db)):
+    """
+    删除 API Key
+
+    删除指定的 API Key。此操作不可逆。
+
+    **路径参数**:
+    - `key_id`: API Key ID
+
+    **返回字段**:
+    - `message`: 提示信息
+    """
     adapter = AdminDeleteApiKeyAdapter(key_id=key_id)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -117,7 +216,24 @@ async def add_balance_to_key(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    """Adjust balance for standalone API key (positive to add, negative to deduct)"""
+    """
+    调整独立余额 API Key 的余额
+
+    为指定的独立余额 API Key 增加或扣除余额。
+
+    **路径参数**:
+    - `key_id`: API Key ID
+
+    **请求体字段**:
+    - `amount_usd`: 调整金额（美元），正数为充值，负数为扣除
+
+    **返回字段**:
+    - `id`: API Key ID
+    - `name`: API Key 名称
+    - `current_balance_usd`: 调整后的当前余额
+    - `balance_used_usd`: 已使用余额
+    - `message`: 提示信息
+    """
     # 从请求体获取调整金额
     body = await request.json()
     amount_usd = body.get("amount_usd")
@@ -162,7 +278,24 @@ async def get_api_key_detail(
     include_key: bool = Query(False, description="Include full decrypted key in response"),
     db: Session = Depends(get_db),
 ):
-    """Get API key detail, optionally include full key"""
+    """
+    获取 API Key 详情
+
+    获取指定 API Key 的详细信息。可选择是否返回完整的解密密钥。
+
+    **路径参数**:
+    - `key_id`: API Key ID
+
+    **查询参数**:
+    - `include_key`: 是否包含完整的解密密钥，默认 false
+
+    **返回字段**:
+    - 当 include_key=false 时，返回基本信息：id, user_id, name, key_display, is_active,
+      is_standalone, current_balance_usd, balance_used_usd, total_requests, total_cost_usd,
+      rate_limit, allowed_providers, allowed_api_formats, allowed_models, last_used_at,
+      expires_at, created_at, updated_at
+    - 当 include_key=true 时，返回完整密钥：key
+    """
     if include_key:
         adapter = AdminGetFullKeyAdapter(key_id=key_id)
     else:

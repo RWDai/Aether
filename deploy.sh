@@ -256,7 +256,9 @@ if [ "$1" = "--rebuild-hub" ]; then
     exit 0
 fi
 
-echo ">>> Local-only mode: skip git pull."
+# 拉取最新代码
+echo ">>> Pulling latest code..."
+git pull
 
 # 标记是否需要重启
 NEED_RESTART=false

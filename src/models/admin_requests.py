@@ -396,6 +396,10 @@ class CreateProviderRequest(BaseModel):
     provider_priority: int | None = Field(
         100, ge=0, le=10000, description="提供商优先级（数字越小越优先）"
     )
+    keep_priority_on_conversion: bool = Field(
+        False,
+        description="格式转换时是否保持优先级（True=保持原优先级，False=需要转换时降级）",
+    )
     is_active: bool | None = Field(True, description="是否启用")
     concurrent_limit: int | None = Field(None, ge=0, description="并发限制")
     # 请求配置（从 Endpoint 迁移）
@@ -506,6 +510,10 @@ class UpdateProviderRequest(BaseModel):
     quota_last_reset_at: datetime | None = None
     quota_expires_at: datetime | None = None
     provider_priority: int | None = Field(None, ge=0, le=10000)
+    keep_priority_on_conversion: bool | None = Field(
+        None,
+        description="格式转换时是否保持优先级（True=保持原优先级，False=需要转换时降级）",
+    )
     is_active: bool | None = None
     concurrent_limit: int | None = Field(None, ge=0)
     # 请求配置（从 Endpoint 迁移）

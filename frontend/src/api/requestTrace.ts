@@ -60,7 +60,7 @@ export const requestTraceApi = {
     requestId: string,
     options: { attemptedOnly?: boolean } = {},
   ): Promise<RequestTrace> {
-    const attemptedOnly = options.attemptedOnly ?? true
+    const attemptedOnly = options.attemptedOnly ?? false
     const response = await apiClient.get<RequestTrace>(`/api/admin/monitoring/trace/${requestId}`, {
       params: { attempted_only: attemptedOnly },
     })

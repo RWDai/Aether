@@ -1950,7 +1950,7 @@ class VideoTask(Base):
     api_key_name = Column(String(200), nullable=True, comment="API Key 名称快照")
     provider_id = Column(String(36), ForeignKey("providers.id"), index=True)
     endpoint_id = Column(String(36), ForeignKey("provider_endpoints.id"), index=True)
-    key_id = Column(String(36), ForeignKey("provider_api_keys.id"), index=True)
+    key_id = Column(String(36), ForeignKey("provider_api_keys.id", ondelete="SET NULL"), index=True)
 
     # 格式转换追踪
     client_api_format = Column(String(50), nullable=False)

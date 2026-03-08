@@ -585,7 +585,6 @@ async function pollDeleteTask(
   const deadline = Date.now() + DELETE_POLL_MAX_MS
   let consecutiveFailures = 0
   while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, DELETE_POLL_INTERVAL_MS))
     try {
       const task = await getPoolBatchDeleteTask(providerId, taskId)
       consecutiveFailures = 0
@@ -599,6 +598,7 @@ async function pollDeleteTask(
         return { status: 'failed', deleted: 0 }
       }
     }
+    await new Promise((r) => setTimeout(r, DELETE_POLL_INTERVAL_MS))
   }
   return { status: 'failed', deleted: 0 }
 }

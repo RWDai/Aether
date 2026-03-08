@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import Coroutine, Generator
 from concurrent.futures import Future
 from contextlib import contextmanager
+from types import SimpleNamespace
 
 import pytest
 
@@ -96,3 +97,65 @@ async def test_run_batch_delete_waits_for_progress_updates_before_completion(
             "message": "1 keys deleted",
         },
     ]
+
+
+def test_sync_delete_reports_progress_after_each_batch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeColumn:
+        def __eq__(self, other: object) -> tuple[str, object]:  # type: ignore[override]
+            return ("eq", other)
+
+        def in_(self, values: list[str]) -> tuple[str, tuple[str, ...]]:
+            return ("in", tuple(values))
+
+    class _FakeProviderAPIKey:
+        provider_id = _FakeColumn()
+        id = _FakeColumn()
+
+    class _FakeDeleteStatement:
+        def where(self, *_conditions: object) -> "_FakeDeleteStatement":
+            return self
+
+    class _FakeSession:
+        def __init__(self) -> None:
+            self.rowcounts = [2, 1]
+            self.commits = 0
+            self.closed = False
+
+        def execute(self, _statement: object) -> SimpleNamespace:
+            # SET LOCAL statement_timeout 不消耗 rowcount
+            if hasattr(_statement, "text"):
+                return SimpleNamespace(rowcount=0)
+            return SimpleNamespace(rowcount=self.rowcounts.pop(0))
+
+        def commit(self) -> None:
+            self.commits += 1
+
+        def rollback(self) -> None:
+            raise AssertionError("rollback should not be called")
+
+        def close(self) -> None:
+            self.closed = True
+
+    session = _FakeSession()
+    progress_updates: list[int] = []
+
+    monkeypatch.setattr(taskmod, "_CLEANUP_BATCH_SIZE", 2)
+    monkeypatch.setattr("src.database.create_session", lambda: session)
+    monkeypatch.setattr(
+        "src.models.database.ProviderAPIKey",
+        _FakeProviderAPIKey,
+    )
+    monkeypatch.setattr(taskmod, "sa_delete", lambda _model: _FakeDeleteStatement())
+
+    affected = taskmod._sync_delete(
+        "provider-1",
+        ["key-1", "key-2", "key-3"],
+        progress_updates.append,
+    )
+
+    assert affected == 3
+    assert progress_updates == [2, 3]
+    assert session.commits == 2
+    assert session.closed is True

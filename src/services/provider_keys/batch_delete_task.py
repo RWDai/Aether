@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 import uuid
 from collections.abc import Callable
 from concurrent.futures import Future
 
 import redis.asyncio as aioredis
 from sqlalchemy import delete as sa_delete
+from sqlalchemy import text
 
 from src.clients.redis_client import get_redis_client
 from src.core.logger import logger
@@ -29,6 +31,12 @@ _TASK_RETAIN_SECONDS = 600
 
 # 批量删除时每个独立事务处理的 key 数量
 _CLEANUP_BATCH_SIZE = 50
+
+# 单个批次的数据库 statement 超时（秒）
+_BATCH_STATEMENT_TIMEOUT_S = 30
+
+# 整个任务的最大执行时间（秒）
+_TASK_TIMEOUT_S = 600
 
 # Redis key 前缀
 _REDIS_KEY_PREFIX = "batch_delete_task"
@@ -175,23 +183,35 @@ def _sync_delete(
 ) -> int:
     """在线程中执行的同步删除逻辑，避免阻塞事件循环。
 
-    按小批次（_CLEANUP_BATCH_SIZE）清理关联表并删除 key，
-    每个批次独立事务，单批失败跳过并继续，确保进度条持续推进。
+    按小批次（_CLEANUP_BATCH_SIZE）直接删除 key，依赖数据库 CASCADE/SET NULL 自动清理关联表。
+    每个批次独立事务，单批失败跳过并继续。
     """
     from src.database import create_session
     from src.models.database import ProviderAPIKey
-    from src.services.provider_keys.key_side_effects import cleanup_key_references
 
     db = create_session()
     try:
         affected = 0
         total_batches = (len(key_ids) + _CLEANUP_BATCH_SIZE - 1) // _CLEANUP_BATCH_SIZE
         batch_idx = 0
+        task_start = time.monotonic()
         for i in range(0, len(key_ids), _CLEANUP_BATCH_SIZE):
+            # 整体超时保护
+            if time.monotonic() - task_start > _TASK_TIMEOUT_S:
+                logger.warning(
+                    "[BATCH_DELETE] task timeout after {}s, deleted {}/{}",
+                    _TASK_TIMEOUT_S,
+                    affected,
+                    len(key_ids),
+                )
+                break
+
             batch = key_ids[i : i + _CLEANUP_BATCH_SIZE]
             batch_idx += 1
             try:
-                cleanup_key_references(db, batch)
+                # 设置 statement_timeout，防止单条 SQL 无限等锁
+                timeout_ms = _BATCH_STATEMENT_TIMEOUT_S * 1000
+                db.execute(text(f"SET LOCAL statement_timeout = '{timeout_ms}'"))
                 result = db.execute(
                     sa_delete(ProviderAPIKey).where(
                         ProviderAPIKey.provider_id == provider_id,
@@ -203,7 +223,9 @@ def _sync_delete(
                 db.commit()
             except Exception as exc:
                 logger.warning(
-                    "[BATCH_DELETE] batch failed (keys {}-{}): {}",
+                    "[BATCH_DELETE] batch {}/{} failed (keys {}-{}): {}",
+                    batch_idx,
+                    total_batches,
                     i,
                     i + len(batch),
                     exc,
@@ -212,9 +234,16 @@ def _sync_delete(
                     db.rollback()
                 except Exception:
                     pass
-            # 每 5 个批次或最后一个批次上报进度，避免过于频繁写 Redis
-            if progress_callback is not None and (batch_idx % 5 == 0 or batch_idx == total_batches):
+            # 每个批次都上报一次进度
+            if progress_callback is not None:
                 progress_callback(affected)
+        logger.info(
+            "[BATCH_DELETE] sync delete finished: deleted={}/{} batches={} elapsed={:.1f}s",
+            affected,
+            len(key_ids),
+            total_batches,
+            time.monotonic() - task_start,
+        )
         return affected
     finally:
         try:
@@ -230,6 +259,12 @@ async def _run_batch_delete(
 ) -> None:
     r = await get_redis_client(require_redis=False)
     await _update_task_field(task_id, r=r, status=STATUS_RUNNING)
+    logger.info(
+        "[BATCH_DELETE_TASK] started task={} provider={} total={}",
+        task_id,
+        provider_id[:8],
+        len(key_ids),
+    )
 
     # 从工作线程安全地触发 Redis 进度更新
     loop = asyncio.get_running_loop()
@@ -245,7 +280,10 @@ async def _run_batch_delete(
             pass
 
     try:
-        affected = await asyncio.to_thread(_sync_delete, provider_id, key_ids, on_progress)
+        affected = await asyncio.wait_for(
+            asyncio.to_thread(_sync_delete, provider_id, key_ids, on_progress),
+            timeout=_TASK_TIMEOUT_S + 30,  # 留一点余量给 _sync_delete 内部超时
+        )
 
         if progress_futures:
             results = await asyncio.gather(
@@ -292,6 +330,15 @@ async def _run_batch_delete(
             affected,
         )
 
+    except asyncio.TimeoutError:
+        msg = f"task timeout after {_TASK_TIMEOUT_S + 30}s"
+        await _update_task_field(task_id, r=r, status=STATUS_FAILED, message=msg)
+        logger.error(
+            "[BATCH_DELETE_TASK] {} task={} provider={}",
+            msg,
+            task_id,
+            provider_id[:8],
+        )
     except asyncio.CancelledError:
         await _update_task_field(
             task_id,

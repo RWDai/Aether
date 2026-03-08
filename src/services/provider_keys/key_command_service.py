@@ -31,7 +31,6 @@ from src.services.provider.fingerprint import generate_fingerprint, normalize_fi
 from src.services.provider_keys.auth_type import normalize_auth_type
 from src.services.provider_keys.duplicate_check import check_duplicate_key
 from src.services.provider_keys.key_side_effects import (
-    cleanup_key_references,
     run_create_key_side_effects,
     run_delete_key_side_effects,
     run_update_key_side_effects,
@@ -519,12 +518,10 @@ async def batch_delete_endpoint_keys_response(db: Session, key_ids: list[str]) -
     # 收集受影响的 provider_id
     affected_provider_ids = {key.provider_id for key in keys if key.provider_id}
 
-    # 批量 SQL DELETE，一次提交
+    # 批量 SQL DELETE，依赖数据库 CASCADE/SET NULL 自动清理关联表
     success_count = 0
     try:
         found_id_list = list(found_ids)
-        # 先清理关联表，避免 CASCADE 级联删除超时
-        cleanup_key_references(db, found_id_list)
         db.execute(sa_delete(ProviderAPIKey).where(ProviderAPIKey.id.in_(found_id_list)))
         db.commit()
         success_count = len(found_ids)

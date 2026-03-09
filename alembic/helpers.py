@@ -167,6 +167,18 @@ def index_exists(index_name: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _numeric_max(type_spec: str) -> float | None:
+    """Parse NUMERIC(p,s) and return the maximum absolute value, or None."""
+    # e.g. "NUMERIC(20,8)" -> precision=20, scale=8 -> max = 10^(20-8) - 10^(-8)
+    import re
+
+    m = re.match(r"NUMERIC\((\d+),(\d+)\)", type_spec, re.IGNORECASE)
+    if not m:
+        return None
+    precision, scale = int(m.group(1)), int(m.group(2))
+    return 10 ** (precision - scale) - 10 ** (-scale)
+
+
 def batch_alter_type(
     cache: _SchemaCache,
     columns: list[tuple[str, str, bool, str | None]],
@@ -177,6 +189,9 @@ def batch_alter_type(
 
     Skips columns that don't exist.  Each tuple is
     ``(table_name, column_name, nullable, server_default)``.
+
+    When converting to NUMERIC(p,s), values exceeding the target precision
+    are clamped before the type cast to prevent overflow errors.
     """
     by_table: dict[str, list[tuple[str, str]]] = defaultdict(list)
     for table, col, _nullable, _default in columns:
@@ -186,6 +201,17 @@ def batch_alter_type(
 
     bind = op.get_bind()
     for table, col_types in by_table.items():
+        # Clamp out-of-range values before ALTER TYPE
+        for col, target in col_types:
+            cap = _numeric_max(target)
+            if cap is not None:
+                bind.execute(
+                    sa.text(
+                        f"UPDATE {table} SET {col} = :cap "
+                        f"WHERE {col} IS NOT NULL AND abs({col}) > :cap"
+                    ),
+                    {"cap": cap},
+                )
         parts = [
             f"ALTER COLUMN {col} TYPE {target} USING {col}::{cast_suffix}"
             for col, target in col_types

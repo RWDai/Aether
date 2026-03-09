@@ -125,8 +125,6 @@ export interface PoolKeyDetail {
   cost_window_usage: number
   cost_limit: number | null
   request_count: number
-  total_tokens: number
-  total_cost_usd: number
   sticky_sessions: number
   lru_score: number | null
   created_at: string | null

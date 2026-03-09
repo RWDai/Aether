@@ -29,7 +29,7 @@ from src.core.crypto import crypto_service
 from src.core.exceptions import NotFoundException
 from src.core.logger import logger
 from src.database import get_db
-from src.models.database import Provider, ProviderAPIKey, Usage
+from src.models.database import Provider, ProviderAPIKey
 from src.services.provider.fingerprint import generate_fingerprint
 from src.services.provider.pool import redis_ops as pool_redis
 from src.services.provider.pool.account_state import resolve_pool_account_state
@@ -634,7 +634,6 @@ class AdminListPoolKeysAdapter(AdminApiAdapter):
         count_query_ms = 0.0
         keys_query_ms = 0.0
         redis_state_ms = 0.0
-        usage_stats_ms = 0.0
         serialize_ms = 0.0
 
         db = context.db
@@ -782,37 +781,6 @@ class AdminListPoolKeysAdapter(AdminApiAdapter):
                 {},
             )
 
-        usage_stats_by_key: dict[str, dict[str, Any]] = {}
-        if key_ids:
-            usage_stats_started_at = time.perf_counter()
-            usage_rows = (
-                db.query(
-                    Usage.provider_api_key_id.label("key_id"),
-                    func.count(Usage.id).label("request_count"),
-                    func.coalesce(func.sum(Usage.total_tokens), 0).label("total_tokens"),
-                    func.coalesce(func.sum(Usage.total_cost_usd), 0.0).label("total_cost_usd"),
-                    func.max(Usage.created_at).label("last_used_at"),
-                )
-                .filter(
-                    Usage.provider_id == pid,
-                    Usage.provider_api_key_id.in_(key_ids),
-                    Usage.status.notin_(["pending", "streaming"]),
-                )
-                .group_by(Usage.provider_api_key_id)
-                .all()
-            )
-            usage_stats_ms = (time.perf_counter() - usage_stats_started_at) * 1000.0
-            usage_stats_by_key = {
-                str(row.key_id): {
-                    "request_count": int(row.request_count or 0),
-                    "total_tokens": int(row.total_tokens or 0),
-                    "total_cost_usd": float(row.total_cost_usd or 0.0),
-                    "last_used_at": getattr(row, "last_used_at", None),
-                }
-                for row in usage_rows
-                if getattr(row, "key_id", None)
-            }
-
         key_details: list[PoolKeyDetail] = []
         serialize_started_at = time.perf_counter()
         for k in keys:
@@ -895,15 +863,8 @@ class AdminListPoolKeysAdapter(AdminApiAdapter):
                 if isinstance(getattr(k, "api_formats", None), list)
                 else []
             )
-            key_usage_stats = usage_stats_by_key.get(kid, {})
-            key_request_count = int(
-                key_usage_stats.get("request_count") or getattr(k, "request_count", 0) or 0
-            )
-            key_total_tokens = int(key_usage_stats.get("total_tokens") or 0)
-            key_total_cost_usd = float(key_usage_stats.get("total_cost_usd") or 0.0)
-            key_last_used_at = getattr(k, "last_used_at", None) or key_usage_stats.get(
-                "last_used_at"
-            )
+            key_request_count = int(getattr(k, "request_count", 0) or 0)
+            key_last_used_at = getattr(k, "last_used_at", None)
             oauth_auth_config = _extract_oauth_auth_config(k)
 
             key_details.append(
@@ -962,8 +923,6 @@ class AdminListPoolKeysAdapter(AdminApiAdapter):
                     cost_window_usage=cost_usage,
                     cost_limit=cost_limit,
                     request_count=key_request_count,
-                    total_tokens=key_total_tokens,
-                    total_cost_usd=key_total_cost_usd,
                     sticky_sessions=sticky_counts.get(kid, 0),
                     lru_score=lru_scores.get(kid),
                     created_at=(
@@ -980,7 +939,7 @@ class AdminListPoolKeysAdapter(AdminApiAdapter):
 
         total_ms = (time.perf_counter() - started_at) * 1000.0
         logger.info(
-            "[POOL_KEYS_TIMING] provider={} page={} page_size={} status={} search={} total={} count_ms={:.2f} fetch_ms={:.2f} redis_ms={:.2f} usage_ms={:.2f} serialize_ms={:.2f} total_ms={:.2f}",
+            "[POOL_KEYS_TIMING] provider={} page={} page_size={} status={} search={} total={} count_ms={:.2f} fetch_ms={:.2f} redis_ms={:.2f} serialize_ms={:.2f} total_ms={:.2f}",
             pid[:8],
             self.page,
             self.page_size,
@@ -990,7 +949,6 @@ class AdminListPoolKeysAdapter(AdminApiAdapter):
             count_query_ms,
             keys_query_ms,
             redis_state_ms,
-            usage_stats_ms,
             serialize_ms,
             total_ms,
         )

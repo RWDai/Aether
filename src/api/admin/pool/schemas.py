@@ -103,8 +103,6 @@ class PoolKeyDetail(BaseModel):
     cost_window_usage: int = 0
     cost_limit: int | None = None
     request_count: int = 0
-    total_tokens: int = 0
-    total_cost_usd: float = 0.0
     sticky_sessions: int = 0
     lru_score: float | None = None
     created_at: str | None = None

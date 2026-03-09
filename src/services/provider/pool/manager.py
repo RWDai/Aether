@@ -121,7 +121,9 @@ class PoolManager:
         all_key_ids = [str(c.key.id) for c in candidates]
 
         # Fire independent Redis queries concurrently.
-        _cooldown_coro = redis_ops.batch_get_cooldowns(pid, all_key_ids, include_ttl=True)
+        # Only fetch reason (no TTL) on the scheduling hot path -- TTL is only
+        # used for trace display and costs an extra pipeline command per key.
+        _cooldown_coro = redis_ops.batch_get_cooldowns(pid, all_key_ids, include_ttl=False)
         _cost_coro = (
             redis_ops.batch_get_cost_totals(pid, all_key_ids, self.config.cost_window_seconds)
             if (
@@ -154,17 +156,7 @@ class PoolManager:
 
         gathered = await asyncio.gather(*coros)
 
-        cooldowns_raw = gathered[0]
-        # cooldowns_raw: dict[str, tuple[str | None, int | None]]
-        cooldowns: dict[str, str | None] = {}
-        cooldown_ttls: dict[str, int | None] = {}
-        for kid, val in cooldowns_raw.items():
-            if isinstance(val, tuple):
-                cooldowns[kid] = val[0]
-                cooldown_ttls[kid] = val[1]
-            else:
-                cooldowns[kid] = val
-                cooldown_ttls[kid] = None
+        cooldowns: dict[str, str | None] = gathered[0]
 
         # Cost check
         cost_exhausted: set[str] = set()
@@ -225,6 +217,17 @@ class PoolManager:
                         pass
 
         # --- 3. Classify candidates -----------------------------------
+        # Pre-compute account states to avoid repeated dict parsing inside loop.
+        account_states: dict[str, Any] = {}
+        for c in candidates:
+            kid = str(c.key.id)
+            if kid not in account_states:
+                account_states[kid] = resolve_pool_account_state(
+                    provider_type=provider_type,
+                    upstream_metadata=getattr(c.key, "upstream_metadata", None),
+                    oauth_invalid_reason=getattr(c.key, "oauth_invalid_reason", None),
+                )
+
         sticky_candidate: ProviderCandidate | None = None
         available: list[ProviderCandidate] = []
         skipped: list[ProviderCandidate] = []
@@ -246,12 +249,8 @@ class PoolManager:
                 trace.candidate_traces[kid] = ct
                 continue
 
-            # Cooldown?
-            account_state = resolve_pool_account_state(
-                provider_type=provider_type,
-                upstream_metadata=getattr(c.key, "upstream_metadata", None),
-                oauth_invalid_reason=getattr(c.key, "oauth_invalid_reason", None),
-            )
+            # Account blocked?
+            account_state = account_states[kid]
             if account_state.blocked:
                 c.is_skipped = True
                 skip_reason = account_state.reason or account_state.label or "account blocked"
@@ -274,7 +273,7 @@ class PoolManager:
                 ct.skipped = True
                 ct.skip_type = "cooldown"
                 ct.cooldown_reason = cd_reason
-                ct.cooldown_ttl = cooldown_ttls.get(kid)
+                ct.cooldown_ttl = None  # TTL skipped on hot path for perf
                 _attach_pool_extra(c, ct)
                 trace.candidate_traces[kid] = ct
                 continue
@@ -578,18 +577,24 @@ class PoolManager:
                         pass
 
         # --- 3. Classify keys -------------------------------------------------
+        # Pre-compute account states to avoid repeated dict parsing inside loop.
+        account_states_sk: dict[str, Any] = {}
+        for k in keys:
+            kid = str(k.id)
+            if kid not in account_states_sk:
+                account_states_sk[kid] = resolve_pool_account_state(
+                    provider_type=self.provider_type,
+                    upstream_metadata=getattr(k, "upstream_metadata", None),
+                    oauth_invalid_reason=getattr(k, "oauth_invalid_reason", None),
+                )
+
         sticky_key: ProviderAPIKey | None = None
         available: list[ProviderAPIKey] = []
 
         for k in keys:
             kid = str(k.id)
 
-            account_state = resolve_pool_account_state(
-                provider_type=self.provider_type,
-                upstream_metadata=getattr(k, "upstream_metadata", None),
-                oauth_invalid_reason=getattr(k, "oauth_invalid_reason", None),
-            )
-            if account_state.blocked:
+            if account_states_sk[kid].blocked:
                 continue
 
             if cooldowns.get(kid) is not None:

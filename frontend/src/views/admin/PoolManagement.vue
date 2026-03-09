@@ -543,23 +543,11 @@
                   >-</span>
                 </TableCell>
                 <TableCell class="py-3 px-2 align-middle">
-                  <div class="grid grid-rows-3 gap-0.5 w-[136px] mx-auto text-[10px] leading-4">
+                  <div class="w-[136px] mx-auto text-[10px] leading-4">
                     <div class="flex items-center justify-between gap-2">
                       <span class="text-muted-foreground">请求</span>
                       <span class="tabular-nums text-foreground/90">
                         {{ formatStatInteger(key.request_count) }}
-                      </span>
-                    </div>
-                    <div class="flex items-center justify-between gap-2">
-                      <span class="text-muted-foreground">Token</span>
-                      <span class="tabular-nums text-foreground/90">
-                        {{ formatTokenCount(key.total_tokens) }}
-                      </span>
-                    </div>
-                    <div class="flex items-center justify-between gap-2">
-                      <span class="text-muted-foreground">费用</span>
-                      <span class="tabular-nums text-foreground/90">
-                        {{ formatStatUsd(key.total_cost_usd) }}
                       </span>
                     </div>
                   </div>
@@ -924,18 +912,10 @@
                 <div class="text-muted-foreground mb-0.5">
                   统计
                 </div>
-                <div class="space-y-0.5 text-[10px]">
+                <div class="text-[10px]">
                   <div class="flex items-center justify-between gap-2">
                     <span class="text-muted-foreground">请求</span>
                     <span class="tabular-nums">{{ formatStatInteger(key.request_count) }}</span>
-                  </div>
-                  <div class="flex items-center justify-between gap-2">
-                    <span class="text-muted-foreground">Token</span>
-                    <span class="tabular-nums">{{ formatTokenCount(key.total_tokens) }}</span>
-                  </div>
-                  <div class="flex items-center justify-between gap-2">
-                    <span class="text-muted-foreground">费用</span>
-                    <span class="tabular-nums">{{ formatStatUsd(key.total_cost_usd) }}</span>
                   </div>
                 </div>
               </div>
@@ -2507,23 +2487,6 @@ function formatStatInteger(value: number | null | undefined): string {
   const n = Number(value ?? 0)
   if (!Number.isFinite(n) || n <= 0) return '0'
   return Math.round(n).toLocaleString('en-US')
-}
-
-function formatTokenCount(value: number | null | undefined): string {
-  const n = Number(value ?? 0)
-  if (!Number.isFinite(n) || n <= 0) return '0'
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
-  return String(Math.round(n))
-}
-
-function formatStatUsd(value: number | null | undefined): string {
-  const n = Number(value ?? 0)
-  if (!Number.isFinite(n) || n <= 0) return '$0.00'
-  if (n < 0.01) return `$${n.toFixed(4)}`
-  if (n < 1) return `$${n.toFixed(3)}`
-  if (n < 1000) return `$${n.toFixed(2)}`
-  return `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
 function formatRelativeTime(isoStr: string): string {

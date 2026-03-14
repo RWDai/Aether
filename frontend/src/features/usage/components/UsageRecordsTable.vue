@@ -283,43 +283,43 @@
     <Table class="hidden md:table">
       <TableHeader>
         <TableRow class="border-b border-border/60 hover:bg-transparent">
-          <TableHead class="h-12 font-semibold w-[68px]">
+          <TableHead class="h-12 font-semibold w-[70px]">
             时间
           </TableHead>
           <TableHead
             v-if="isAdmin"
-            class="h-12 font-semibold"
+            class="h-12 font-semibold w-[100px]"
           >
             用户
           </TableHead>
           <TableHead
             v-if="!isAdmin"
-            class="h-12 font-semibold"
+            class="h-12 font-semibold w-[100px]"
           >
             密钥
           </TableHead>
-          <TableHead class="h-12 font-semibold">
+          <TableHead class="h-12 font-semibold w-[140px]">
             模型
           </TableHead>
           <TableHead
             v-if="isAdmin"
-            class="h-12 font-semibold"
+            class="h-12 font-semibold w-[100px]"
           >
             提供商
           </TableHead>
           <TableHead class="h-12 font-semibold w-[120px]">
-            <div class="flex flex-col text-xs gap-0.5">
-              <span>格式</span>
-              <span class="text-muted-foreground font-normal">类型</span>
-            </div>
+            API格式
           </TableHead>
-          <TableHead class="h-12 font-semibold w-[110px] text-right">
+          <TableHead class="h-12 font-semibold w-[70px] text-center">
+            类型
+          </TableHead>
+          <TableHead class="h-12 font-semibold w-[140px] text-right">
             Tokens
           </TableHead>
-          <TableHead class="h-12 font-semibold w-[72px] text-right">
+          <TableHead class="h-12 font-semibold w-[100px] text-right">
             费用
           </TableHead>
-          <TableHead class="h-12 font-semibold w-[68px] text-right">
+          <TableHead class="h-12 font-semibold w-[70px] text-right">
             <div class="flex flex-col items-end text-xs gap-0.5">
               <span>首字</span>
               <span class="text-muted-foreground font-normal">总耗时</span>
@@ -330,7 +330,7 @@
       <TableBody>
         <TableRow v-if="records.length === 0">
           <TableCell
-            :colspan="isAdmin ? 8 : 7"
+            :colspan="isAdmin ? 9 : 8"
             class="text-center py-12 text-muted-foreground"
           >
             暂无请求记录
@@ -344,12 +344,12 @@
           @mousedown="handleMouseDown"
           @click="handleRowClick($event, record.id)"
         >
-          <TableCell class="text-xs py-4 w-[68px]">
+          <TableCell class="text-xs py-4 w-[70px]">
             {{ formatDateTime(record.created_at) }}
           </TableCell>
           <TableCell
             v-if="isAdmin"
-            class="py-4 truncate"
+            class="py-4 w-[100px] truncate"
             :title="record.username || record.user_email || (record.user_id ? `User ${record.user_id}` : '已删除用户')"
           >
             <div class="flex flex-col text-xs gap-0.5">
@@ -368,7 +368,7 @@
           <!-- 用户页面的密钥列 -->
           <TableCell
             v-if="!isAdmin"
-            class="py-4"
+            class="py-4 w-[100px]"
             :title="record.api_key?.name || '-'"
           >
             <div class="flex flex-col text-xs gap-0.5">
@@ -382,7 +382,7 @@
             </div>
           </TableCell>
           <TableCell
-            class="font-medium py-4"
+            class="font-medium py-4 w-[140px]"
             :title="getModelTooltip(record)"
           >
             <div
@@ -408,12 +408,12 @@
             </div>
             <span
               v-else
-              class="truncate block text-xs"
+              class="truncate block"
             >{{ record.model }}</span>
           </TableCell>
           <TableCell
             v-if="isAdmin"
-            class="py-4"
+            class="py-4 w-[60px]"
           >
             <div class="flex items-center gap-1">
               <div class="flex flex-col text-xs gap-0.5">
@@ -468,17 +468,16 @@
               </svg>
             </div>
           </TableCell>
-          <!-- 格式 + 类型（合并列） -->
           <TableCell
             class="py-4 w-[120px]"
             :title="getApiFormatTooltip(record)"
           >
-            <div class="flex flex-col text-xs gap-0.5">
-              <!-- 格式信息 -->
-              <div
-                v-if="shouldShowFormatConversion(record)"
-                class="flex items-center gap-1 whitespace-nowrap"
-              >
+            <!-- 有格式转换或同族格式差异：两行显示 -->
+            <div
+              v-if="shouldShowFormatConversion(record)"
+              class="flex flex-col text-xs gap-0.5"
+            >
+              <div class="flex items-center gap-1 whitespace-nowrap">
                 <span>{{ formatApiFormat(record.api_format!) }}</span>
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
@@ -492,64 +491,65 @@
                     clip-rule="evenodd"
                   />
                 </svg>
-                <span class="text-muted-foreground">{{ formatApiFormat(record.endpoint_api_format!) }}</span>
               </div>
-              <span
-                v-else-if="record.api_format"
-                class="whitespace-nowrap"
-              >{{ formatApiFormat(record.api_format) }}</span>
-              <span
-                v-else
-                class="text-muted-foreground"
-              >-</span>
-              <!-- 类型 badge -->
-              <div>
-                <Badge
-                  v-if="record.status === 'pending'"
-                  variant="outline"
-                  class="whitespace-nowrap animate-pulse border-muted-foreground/30 text-muted-foreground text-[10px] px-1.5 h-4"
-                >
-                  等待中
-                </Badge>
-                <Badge
-                  v-else-if="record.status === 'streaming'"
-                  variant="outline"
-                  class="whitespace-nowrap animate-pulse border-primary/50 text-primary text-[10px] px-1.5 h-4"
-                >
-                  传输中
-                </Badge>
-                <Badge
-                  v-else-if="record.status === 'failed' || (record.status_code && record.status_code >= 400) || record.error_message"
-                  variant="destructive"
-                  class="whitespace-nowrap text-[10px] px-1.5 h-4"
-                >
-                  失败
-                </Badge>
-                <Badge
-                  v-else-if="record.status === 'cancelled'"
-                  variant="outline"
-                  class="whitespace-nowrap border-amber-500/50 text-amber-600 dark:text-amber-400 text-[10px] px-1.5 h-4"
-                >
-                  已取消
-                </Badge>
-                <Badge
-                  v-else-if="record.is_stream"
-                  variant="secondary"
-                  class="whitespace-nowrap text-[10px] px-1.5 h-4"
-                >
-                  流式
-                </Badge>
-                <Badge
-                  v-else
-                  variant="outline"
-                  class="whitespace-nowrap border-border/60 text-muted-foreground text-[10px] px-1.5 h-4"
-                >
-                  标准
-                </Badge>
-              </div>
+              <span class="text-muted-foreground whitespace-nowrap">{{ formatApiFormat(record.endpoint_api_format!) }}</span>
             </div>
+            <!-- 无格式转换：单行显示 -->
+            <span
+              v-else-if="record.api_format"
+              class="text-xs whitespace-nowrap"
+            >{{ formatApiFormat(record.api_format) }}</span>
+            <span
+              v-else
+              class="text-muted-foreground text-xs"
+            >-</span>
           </TableCell>
-          <TableCell class="text-right py-4 w-[110px]">
+          <TableCell class="text-center py-4 w-[70px]">
+            <!-- 优先显示请求状态 -->
+            <Badge
+              v-if="record.status === 'pending'"
+              variant="outline"
+              class="whitespace-nowrap animate-pulse border-muted-foreground/30 text-muted-foreground"
+            >
+              等待中
+            </Badge>
+            <Badge
+              v-else-if="record.status === 'streaming'"
+              variant="outline"
+              class="whitespace-nowrap animate-pulse border-primary/50 text-primary"
+            >
+              传输中
+            </Badge>
+            <Badge
+              v-else-if="record.status === 'failed' || (record.status_code && record.status_code >= 400) || record.error_message"
+              variant="destructive"
+              class="whitespace-nowrap"
+            >
+              失败
+            </Badge>
+            <Badge
+              v-else-if="record.status === 'cancelled'"
+              variant="outline"
+              class="whitespace-nowrap border-amber-500/50 text-amber-600 dark:text-amber-400"
+            >
+              已取消
+            </Badge>
+            <Badge
+              v-else-if="record.is_stream"
+              variant="secondary"
+              class="whitespace-nowrap"
+            >
+              流式
+            </Badge>
+            <Badge
+              v-else
+              variant="outline"
+              class="whitespace-nowrap border-border/60 text-muted-foreground"
+            >
+              标准
+            </Badge>
+          </TableCell>
+          <TableCell class="text-right py-4 w-[140px]">
             <div class="flex flex-col items-end text-xs gap-0.5">
               <div class="flex items-center gap-1">
                 <span>{{ formatTokens(record.input_tokens || 0) }}</span>
@@ -563,7 +563,7 @@
               </div>
             </div>
           </TableCell>
-          <TableCell class="text-right py-4 w-[72px]">
+          <TableCell class="text-right py-4 w-[100px]">
             <div class="flex flex-col items-end text-xs gap-0.5">
               <span class="text-primary font-medium">{{ formatCurrency(record.cost || 0) }}</span>
               <span
@@ -574,7 +574,7 @@
               </span>
             </div>
           </TableCell>
-          <TableCell class="text-right py-4 w-[68px]">
+          <TableCell class="text-right py-4 w-[70px]">
             <!-- pending 状态：只显示增长的总时间 -->
             <div
               v-if="record.status === 'pending'"

@@ -549,6 +549,87 @@ def test_stream_openai_cli_function_call_done_without_delta_emits_full_args() ->
     assert collected_args == '{"filePath":"/tmp/demo.txt"}'
 
 
+def test_stream_openai_cli_uses_call_id_not_item_id_for_tool_deltas() -> None:
+    """Responses API 中 item.id 与 call_id 不同时，应统一映射到 call_id。"""
+    reg = _make_registry_with_cli()
+    state = StreamState()
+
+    cli_chunks: list[dict[str, Any]] = [
+        {
+            "type": "response.created",
+            "response": {
+                "id": "resp_call_alias",
+                "object": "response",
+                "model": "gpt-5.4",
+                "status": "in_progress",
+                "output": [],
+            },
+        },
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {
+                "type": "function_call",
+                "call_id": "call_CfAXHBAtvuxd1HEHGgHUUscU",
+                "id": "fc_080c89b8d042bd430169b6c420833481918c61ed6112e83344",
+                "name": "bash",
+                "status": "in_progress",
+                "arguments": "",
+            },
+        },
+        {
+            "type": "response.function_call_arguments.delta",
+            "output_index": 0,
+            "item_id": "fc_080c89b8d042bd430169b6c420833481918c61ed6112e83344",
+            "delta": '{"command":"find . -maxdepth 2 | sort","timeout":10}',
+        },
+        {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": {
+                "type": "function_call",
+                "call_id": "call_CfAXHBAtvuxd1HEHGgHUUscU",
+                "id": "fc_080c89b8d042bd430169b6c420833481918c61ed6112e83344",
+                "name": "bash",
+                "status": "completed",
+                "arguments": '{"command":"find . -maxdepth 2 | sort","timeout":10}',
+            },
+        },
+        {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_call_alias",
+                "object": "response",
+                "model": "gpt-5.4",
+                "status": "completed",
+                "output": [],
+                "usage": {"input_tokens": 8, "output_tokens": 4, "total_tokens": 12},
+            },
+        },
+    ]
+
+    all_events: list[dict[str, Any]] = []
+    for chunk in cli_chunks:
+        all_events.extend(reg.convert_stream_chunk(chunk, "openai:cli", "openai:chat", state=state))
+
+    tc_indices: list[int] = []
+    tc_ids: list[str] = []
+    collected_args = ""
+    for event in all_events:
+        for choice in event.get("choices", []):
+            for tc in choice.get("delta", {}).get("tool_calls") or []:
+                tc_indices.append(int(tc.get("index", -1)))
+                tc_ids.append(str(tc.get("id") or ""))
+                collected_args += str((tc.get("function") or {}).get("arguments") or "")
+
+    assert tc_indices
+    assert set(tc_indices) == {0}, f"expected a single tool_call index, got {tc_indices}"
+    assert set(tc_ids) == {"call_CfAXHBAtvuxd1HEHGgHUUscU"}, (
+        "tool deltas should use call_id, not raw item.id, " f"got ids={tc_ids}"
+    )
+    assert collected_args == '{"command":"find . -maxdepth 2 | sort","timeout":10}'
+
+
 def test_real_claude_cli_stream_response_conversion() -> None:
     """测试真实的 Claude CLI 流式响应转换（完整事件序列）
 

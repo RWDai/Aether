@@ -626,9 +626,17 @@ class OpenAICliNormalizer(FormatNormalizer):
         if isinstance(item, dict):
             item_type = item.get("type")
             if item_type == "function_call":
+                item_id = str(item.get("id") or "")
                 tool_id = str(item.get("call_id") or item.get("id") or "")
                 tool_name = str(item.get("name") or "")
                 block_index = int(ss.get("block_index", 0))
+
+                # 先注册别名，再 resolve，确保后续 delta 能正确映射
+                self._register_tool_alias(
+                    item_id=item_id,
+                    call_id=tool_id,
+                    ss=ss,
+                )
 
                 # 记录当前活跃的工具调用（支持并行）
                 active_tools = ss.setdefault("active_tool_blocks", {})
@@ -667,7 +675,12 @@ class OpenAICliNormalizer(FormatNormalizer):
         if isinstance(item, dict):
             item_type = item.get("type")
             if item_type == "function_call":
-                tool_id = str(item.get("call_id") or item.get("id") or "")
+                tool_id = self._resolve_tool_call_id(item.get("call_id") or item.get("id"), ss)
+                self._register_tool_alias(
+                    item_id=str(item.get("id") or ""),
+                    call_id=tool_id,
+                    ss=ss,
+                )
                 active_tools = ss.get("active_tool_blocks", {})
                 block_index = active_tools.pop(tool_id, ss.get("block_index", 1) - 1)
                 events.extend(
@@ -688,7 +701,10 @@ class OpenAICliNormalizer(FormatNormalizer):
         delta = chunk.get("delta") or ""
         if delta:
             # 确定当前工具调用的 block_index 和 tool_id
-            tool_id = str(chunk.get("item_id") or ss.get("current_tool_id", ""))
+            tool_id = self._resolve_tool_call_id(
+                chunk.get("item_id") or ss.get("current_tool_id", ""),
+                ss,
+            )
             active_tools = ss.get("active_tool_blocks", {})
             block_index = active_tools.get(tool_id, ss.get("block_index", 1) - 1)
 
@@ -709,7 +725,10 @@ class OpenAICliNormalizer(FormatNormalizer):
     def _handle_function_call_done(
         self, chunk: dict[str, Any], state: StreamState, ss: dict[str, Any]
     ) -> list[InternalStreamEvent]:
-        tool_id = str(chunk.get("item_id") or ss.get("current_tool_id", ""))
+        tool_id = self._resolve_tool_call_id(
+            chunk.get("item_id") or ss.get("current_tool_id", ""),
+            ss,
+        )
         active_tools = ss.get("active_tool_blocks", {})
         block_index = int(active_tools.get(tool_id, ss.get("block_index", 1) - 1))
         return self._sync_tool_arguments_snapshot(
@@ -790,6 +809,31 @@ class OpenAICliNormalizer(FormatNormalizer):
                 input_delta=delta,
             )
         ]
+
+    @staticmethod
+    def _register_tool_alias(
+        *,
+        item_id: str,
+        call_id: str,
+        ss: dict[str, Any],
+    ) -> None:
+        if not item_id or not call_id or item_id == call_id:
+            return
+        alias_map = ss.get("tool_item_to_call_id")
+        if not isinstance(alias_map, dict):
+            alias_map = {}
+            ss["tool_item_to_call_id"] = alias_map
+        alias_map[item_id] = call_id
+
+    @staticmethod
+    def _resolve_tool_call_id(tool_ref: Any, ss: dict[str, Any]) -> str:
+        raw = str(tool_ref or "")
+        if not raw:
+            return ""
+        alias_map = ss.get("tool_item_to_call_id")
+        if isinstance(alias_map, dict):
+            return str(alias_map.get(raw) or raw)
+        return raw
 
     def stream_event_from_internal(
         self,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import cast
 
 import jwt
 import pytest
@@ -12,6 +13,7 @@ from src.services.provider.adapters.codex.request_patching import (
     maybe_patch_request_for_codex,
     patch_openai_cli_request_for_codex,
 )
+from src.services.provider.envelope import ProviderEnvelope
 
 
 def test_patch_openai_cli_request_for_codex_is_passthrough_except_internal_sentinel() -> None:
@@ -146,6 +148,21 @@ def test_openai_cli_normalizer_request_from_internal_codex_variant_defaults_stor
     assert out["store"] is False
 
 
+def test_openai_cli_normalizer_codex_variant_keeps_instructions_missing_for_default_rule() -> None:
+    from src.api.handlers.base.request_builder import apply_body_rules
+    from src.core.api_format.conversion.normalizers.openai_cli import OpenAICliNormalizer
+    from src.core.api_format.metadata import CODEX_DEFAULT_BODY_RULES
+
+    normalizer = OpenAICliNormalizer()
+    internal = normalizer.request_to_internal({"model": "gpt-test", "input": []})
+    out = normalizer.request_from_internal(internal, target_variant="codex")
+
+    assert "instructions" not in out
+
+    patched = apply_body_rules(out, list(CODEX_DEFAULT_BODY_RULES))
+    assert patched["instructions"] == "You are GPT-5."
+
+
 def test_codex_envelope_extra_headers_does_not_inject_synthetic_headers() -> None:
     from src.services.provider.adapters.codex.envelope import codex_oauth_envelope
 
@@ -233,7 +250,7 @@ def test_codex_passthrough_builder_preserves_real_codex_headers() -> None:
         endpoint=endpoint,
         key=key,
         pre_computed_auth=("Authorization", "Bearer upstream-token"),
-        envelope=codex_oauth_envelope,
+        envelope=cast(ProviderEnvelope, codex_oauth_envelope),
     )
 
     assert headers["accept"] == "text/event-stream"

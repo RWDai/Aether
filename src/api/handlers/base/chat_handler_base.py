@@ -44,7 +44,11 @@ from src.api.handlers.base.chat_error_utils import (
     _resolve_dynamic_format,
 )
 from src.api.handlers.base.parsers import get_parser_for_format
-from src.api.handlers.base.request_builder import PassthroughRequestBuilder, get_provider_auth
+from src.api.handlers.base.request_builder import (
+    PassthroughRequestBuilder,
+    get_cache_sensitive_protected_body_keys,
+    get_provider_auth,
+)
 from src.api.handlers.base.response_parser import ResponseParser
 from src.api.handlers.base.stream_context import (
     StreamContext,
@@ -98,6 +102,7 @@ class ProviderRequestResult:
     mapped_model: str | None
     envelope: Any  # ProviderEnvelope | None
     extra_headers: dict[str, str] = field(default_factory=dict)
+    protected_body_keys: frozenset[str] = field(default_factory=frozenset)
     upstream_is_stream: bool = True
     needs_conversion: bool = False
     provider_api_format: str = ""
@@ -828,6 +833,7 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             mapped_model=mapped_model,
             envelope=envelope,
             extra_headers=extra_headers,
+            protected_body_keys=get_cache_sensitive_protected_body_keys(provider_api_format),
             upstream_is_stream=upstream_is_stream,
             needs_conversion=needs_conversion,
             provider_api_format=provider_api_format,
@@ -907,6 +913,8 @@ class ChatHandlerBase(BaseMessageHandler, ABC):
             extra_headers=prep.extra_headers if prep.extra_headers else None,
             pre_computed_auth=auth_info.as_tuple() if auth_info else None,
             envelope=envelope,
+            protected_body_keys=prep.protected_body_keys,
+            provider_api_format=prep.provider_api_format,
         )
         if upstream_is_stream:
             from src.core.api_format.headers import set_accept_if_absent

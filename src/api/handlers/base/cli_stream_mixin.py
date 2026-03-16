@@ -18,7 +18,10 @@ from src.api.handlers.base.base_handler import (
     wait_for_with_disconnect_detection,
 )
 from src.api.handlers.base.parsers import get_parser_for_format
-from src.api.handlers.base.request_builder import get_provider_auth
+from src.api.handlers.base.request_builder import (
+    get_cache_sensitive_protected_body_keys,
+    get_provider_auth,
+)
 from src.api.handlers.base.stream_context import StreamContext
 from src.api.handlers.base.utils import (
     build_sse_headers,
@@ -427,6 +430,8 @@ class CliStreamMixin:
             extra_headers=extra_headers if extra_headers else None,
             pre_computed_auth=auth_info.as_tuple() if auth_info else None,
             envelope=envelope,
+            protected_body_keys=get_cache_sensitive_protected_body_keys(provider_api_format),
+            provider_api_format=provider_api_format,
         )
         if upstream_is_stream:
             from src.core.api_format.headers import set_accept_if_absent

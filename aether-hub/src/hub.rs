@@ -15,6 +15,8 @@ use tracing::{debug, info, warn};
 use crate::control_plane::ControlPlaneClient;
 use crate::protocol;
 
+const MAX_REQUEST_BODY_FRAME_SIZE: usize = 32 * 1024;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SendStatus {
     Queued,
@@ -421,7 +423,6 @@ impl HubRouter {
         &self,
         node_id: &str,
         meta: &protocol::RequestMeta,
-        body: Bytes,
     ) -> Result<Arc<LocalStream>, String> {
         let proxy_conn = self
             .get_proxy_conn(node_id)
@@ -454,20 +455,6 @@ impl HubRouter {
             &meta_payload,
         );
 
-        let (body_payload, body_flags) = match protocol::compress_payload(body.as_ref()) {
-            Ok(result) => result,
-            Err(e) => {
-                proxy_conn.release_stream();
-                return Err(format!("failed to compress request body: {e}"));
-            }
-        };
-        let body_frame = protocol::encode_frame(
-            proxy_stream_id,
-            protocol::REQUEST_BODY,
-            body_flags | protocol::FLAG_END_STREAM,
-            &body_payload,
-        );
-
         // Frames encoded successfully -- now register the stream.
         let local_stream_id = self.next_local_stream_id.fetch_add(1, Ordering::Relaxed);
         let local_stream = Arc::new(LocalStream::new(
@@ -481,18 +468,75 @@ impl HubRouter {
             .insert((proxy_conn.id, proxy_stream_id), local_stream_id);
 
         match proxy_conn.send(Message::Binary(header_frame.into())) {
-            SendStatus::Queued => {}
+            SendStatus::Queued => Ok(local_stream),
             SendStatus::Closed | SendStatus::Congested => {
                 self.cleanup_local_stream(local_stream_id);
                 proxy_conn.release_stream();
-                return Err("proxy connection congested".to_string());
+                Err("proxy connection congested".to_string())
+            }
+        }
+    }
+
+    pub fn push_local_request_body(
+        &self,
+        local_stream_id: u64,
+        payload: Bytes,
+        end_stream: bool,
+    ) -> Result<(), String> {
+        let stream = self
+            .local_streams
+            .get(&local_stream_id)
+            .map(|entry| entry.value().clone())
+            .ok_or_else(|| "local stream not found".to_string())?;
+        let proxy_conn = self
+            .proxy_conns_by_id
+            .get(&stream.proxy_conn_id)
+            .map(|entry| entry.value().clone())
+            .ok_or_else(|| "proxy connection unavailable".to_string())?;
+
+        let total_chunks = payload.len().div_ceil(MAX_REQUEST_BODY_FRAME_SIZE);
+        if total_chunks == 0 {
+            if end_stream {
+                self.send_request_body_frame(&proxy_conn, stream.proxy_stream_id, &[], true)?;
+            }
+        } else {
+            for (index, chunk) in payload.chunks(MAX_REQUEST_BODY_FRAME_SIZE).enumerate() {
+                let is_last_chunk = index + 1 == total_chunks;
+                self.send_request_body_frame(
+                    &proxy_conn,
+                    stream.proxy_stream_id,
+                    chunk,
+                    end_stream && is_last_chunk,
+                )?;
             }
         }
 
+        Ok(())
+    }
+
+    fn send_request_body_frame(
+        &self,
+        proxy_conn: &Arc<ProxyConn>,
+        proxy_stream_id: u32,
+        payload: &[u8],
+        end_stream: bool,
+    ) -> Result<(), String> {
+        let (body_payload, body_flags) = protocol::compress_payload(payload)
+            .map_err(|e| format!("failed to compress request body: {e}"))?;
+        let body_frame = protocol::encode_frame(
+            proxy_stream_id,
+            protocol::REQUEST_BODY,
+            body_flags
+                | if end_stream {
+                    protocol::FLAG_END_STREAM
+                } else {
+                    0
+                },
+            &body_payload,
+        );
         match proxy_conn.send(Message::Binary(body_frame.into())) {
-            SendStatus::Queued => Ok(local_stream),
+            SendStatus::Queued => Ok(()),
             SendStatus::Closed | SendStatus::Congested => {
-                self.cancel_local_stream(local_stream_id, "proxy connection congested");
                 Err("proxy connection congested".to_string())
             }
         }
@@ -772,9 +816,11 @@ mod tests {
         hub.register_proxy(proxy);
 
         let stream = hub
-            .open_local_stream("node-1", &build_meta(), Bytes::new())
+            .open_local_stream("node-1", &build_meta())
             .expect("open local stream");
         let _ = proxy_rx.try_recv().expect("headers frame");
+        hub.push_local_request_body(stream.id, Bytes::new(), true)
+            .expect("finish empty body");
         let _ = proxy_rx.try_recv().expect("body frame");
 
         hub.cancel_local_stream(stream.id, "client dropped");
@@ -786,5 +832,47 @@ mod tests {
         };
         let header = protocol::FrameHeader::parse(&cancelled_data).expect("cancel frame header");
         assert_eq!(header.msg_type, protocol::STREAM_ERROR);
+    }
+
+    #[tokio::test]
+    async fn push_local_request_body_splits_large_payload_and_marks_end() {
+        let hub = HubRouter::new(ControlPlaneClient::disabled());
+
+        let (proxy_tx, mut proxy_rx) = mpsc::channel(8);
+        let (proxy_close_tx, _) = watch::channel(false);
+        let proxy = Arc::new(ProxyConn::new(
+            200,
+            "node-2".to_string(),
+            "Node 2".to_string(),
+            proxy_tx,
+            proxy_close_tx,
+            16,
+        ));
+        hub.register_proxy(proxy);
+
+        let stream = hub
+            .open_local_stream("node-2", &build_meta())
+            .expect("open local stream");
+        let _ = proxy_rx.try_recv().expect("headers frame");
+
+        let payload = Bytes::from(vec![b'x'; MAX_REQUEST_BODY_FRAME_SIZE + 17]);
+        hub.push_local_request_body(stream.id, payload, true)
+            .expect("push request body");
+
+        let first = match proxy_rx.try_recv().expect("first body frame") {
+            Message::Binary(data) => data.to_vec(),
+            other => panic!("unexpected message: {other:?}"),
+        };
+        let first_header = protocol::FrameHeader::parse(&first).expect("first body header");
+        assert_eq!(first_header.msg_type, protocol::REQUEST_BODY);
+        assert_eq!(first_header.flags & protocol::FLAG_END_STREAM, 0);
+
+        let second = match proxy_rx.try_recv().expect("second body frame") {
+            Message::Binary(data) => data.to_vec(),
+            other => panic!("unexpected message: {other:?}"),
+        };
+        let second_header = protocol::FrameHeader::parse(&second).expect("second body header");
+        assert_eq!(second_header.msg_type, protocol::REQUEST_BODY);
+        assert_ne!(second_header.flags & protocol::FLAG_END_STREAM, 0);
     }
 }

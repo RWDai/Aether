@@ -66,22 +66,21 @@ class HubTunnelTransport(httpx.AsyncBaseTransport):
             if key.lower() not in _HOP_BY_HOP_HEADERS_BYTES:
                 headers[key.decode("latin-1")] = value.decode("latin-1")
 
-        body = request.content or await request.aread() or b""
-        envelope = _encode_relay_envelope(
+        relay_content = _iter_relay_envelope(
             {
                 "method": request.method,
                 "url": str(request.url),
                 "headers": headers,
                 "timeout": int(self._timeout),
             },
-            body,
+            request,
         )
 
         relay_request = self._relay_client.build_request(
             "POST",
             config.local_relay_url(self._node_id),
             headers={"content-type": _RELAY_CONTENT_TYPE},
-            content=envelope,
+            content=relay_content,
         )
 
         try:
@@ -124,9 +123,39 @@ class HubRelayResponseStream(httpx.AsyncByteStream):
         await self._response.aclose()
 
 
-def _encode_relay_envelope(meta: dict[str, object], body: bytes) -> bytes:
+async def _iter_relay_envelope(
+    meta: dict[str, object],
+    request: httpx.Request,
+) -> AsyncGenerator[bytes, None]:
     meta_json = json.dumps(meta, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    return struct.pack("!I", len(meta_json)) + meta_json + body
+    yield struct.pack("!I", len(meta_json)) + meta_json
+    async for chunk in _iter_request_body(request):
+        if chunk:
+            yield chunk
+
+
+async def _iter_request_body(request: httpx.Request) -> AsyncGenerator[bytes, None]:
+    stream = request.stream
+    try:
+        if hasattr(stream, "__aiter__"):
+            async for chunk in stream:
+                if chunk:
+                    yield bytes(chunk)
+            return
+
+        if hasattr(stream, "__iter__"):
+            for chunk in stream:
+                if chunk:
+                    yield bytes(chunk)
+            return
+
+        body = request.content
+        if body:
+            yield body
+    finally:
+        aclose = getattr(stream, "aclose", None)
+        if callable(aclose):
+            await aclose()
 
 
 async def _read_error_message(response: httpx.Response) -> str:

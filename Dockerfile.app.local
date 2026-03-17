@@ -20,6 +20,11 @@ ARG HUB_RELEASE_REPO=fawney19/Aether
 ARG HUB_TAG
 ARG TARGETARCH
 ARG GITHUB_TOKEN
+# GitHub 下载镜像前缀，国内构建时传入可用的镜像加速地址
+# 用法: --build-arg GITHUB_MIRROR=https://ghfast.top
+#   或: --build-arg GITHUB_MIRROR=https://gh-proxy.com
+#   或: --build-arg GITHUB_MIRROR=https://mirror.ghproxy.com
+ARG GITHUB_MIRROR
 
 # 运行时依赖（使用清华镜像源 + BuildKit 缓存加速）
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -40,10 +45,8 @@ COPY --from=builder /usr/local/bin/uvicorn /usr/local/bin/
 COPY --from=builder /usr/local/bin/alembic /usr/local/bin/
 
 # Hub 预编译二进制
-# 本地部署: 将 aether-hub-linux-{amd64,arm64}.tar.gz 放到项目根目录，构建时自动使用
-# 没有本地文件时回退到 GitHub Release 下载
+# 国内构建: --build-arg GITHUB_MIRROR=https://ghfast.top 即可走镜像下载
 # GITHUB_TOKEN 可选：未认证 API 限流 60 次/小时，认证后 5000 次/小时
-COPY Dockerfile.app.local aether-hub-linux-*.tar.gz /tmp/hub-local/
 RUN set -eux; \
     arch="${TARGETARCH:-}"; \
     if [ -z "$arch" ]; then \
@@ -55,31 +58,30 @@ RUN set -eux; \
         aarch64) arch="arm64" ;; \
         *) echo "Unsupported architecture: $arch"; exit 1 ;; \
     esac; \
-    local_file="/tmp/hub-local/aether-hub-linux-${arch}.tar.gz"; \
-    if [ -f "$local_file" ]; then \
-        echo "Using local hub binary: $local_file"; \
-        tar xzf "$local_file" -C /usr/local/bin; \
-    else \
-        echo "Local hub binary not found, downloading from GitHub..."; \
-        auth_header=""; \
-        if [ -n "${GITHUB_TOKEN:-}" ]; then \
-            auth_header="Authorization: token ${GITHUB_TOKEN}"; \
-        fi; \
-        tag="${HUB_TAG:-}"; \
-        if [ -z "$tag" ]; then \
-            tag="$(curl -sL ${auth_header:+-H "$auth_header"} "https://api.github.com/repos/${HUB_RELEASE_REPO}/releases" | python3 -c "import json,sys;print(next((r['tag_name'] for r in json.load(sys.stdin) if r.get('tag_name','').startswith('hub-v') and not r.get('draft') and not r.get('prerelease')),''))")"; \
-        fi; \
-        if [ -z "$tag" ]; then \
-            echo "Failed to resolve hub release tag"; \
-            exit 1; \
-        fi; \
-        echo "Using Hub release tag: $tag"; \
-        url="https://github.com/${HUB_RELEASE_REPO}/releases/download/${tag}/aether-hub-linux-${arch}.tar.gz"; \
-        curl -L --fail -o /tmp/aether-hub.tar.gz "$url"; \
-        tar xzf /tmp/aether-hub.tar.gz -C /usr/local/bin; \
+    auth_header=""; \
+    if [ -n "${GITHUB_TOKEN:-}" ]; then \
+        auth_header="Authorization: token ${GITHUB_TOKEN}"; \
     fi; \
+    tag="${HUB_TAG:-}"; \
+    if [ -z "$tag" ]; then \
+        tag="$(curl -sL ${auth_header:+-H "$auth_header"} "https://api.github.com/repos/${HUB_RELEASE_REPO}/releases" | python3 -c "import json,sys;print(next((r['tag_name'] for r in json.load(sys.stdin) if r.get('tag_name','').startswith('hub-v') and not r.get('draft') and not r.get('prerelease')),''))")"; \
+    fi; \
+    if [ -z "$tag" ]; then \
+        echo "Failed to resolve hub release tag"; \
+        exit 1; \
+    fi; \
+    echo "Using Hub release tag: $tag"; \
+    origin_url="https://github.com/${HUB_RELEASE_REPO}/releases/download/${tag}/aether-hub-linux-${arch}.tar.gz"; \
+    if [ -n "${GITHUB_MIRROR:-}" ]; then \
+        url="${GITHUB_MIRROR}/https://github.com/${HUB_RELEASE_REPO}/releases/download/${tag}/aether-hub-linux-${arch}.tar.gz"; \
+        echo "Using mirror: ${GITHUB_MIRROR}"; \
+    else \
+        url="$origin_url"; \
+    fi; \
+    curl -L --fail -o /tmp/aether-hub.tar.gz "$url"; \
+    tar xzf /tmp/aether-hub.tar.gz -C /usr/local/bin; \
     chmod +x /usr/local/bin/aether-hub; \
-    rm -rf /tmp/hub-local /tmp/aether-hub.tar.gz
+    rm -f /tmp/aether-hub.tar.gz
 
 # 从 builder 阶段复制前端构建产物
 COPY --from=builder /app/frontend/dist /usr/share/nginx/html

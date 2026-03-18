@@ -490,7 +490,6 @@ class ChatSyncExecutor:
             extra_headers=prep.extra_headers if prep.extra_headers else None,
             pre_computed_auth=auth_info.as_tuple() if auth_info else None,
             envelope=envelope,
-            protected_body_keys=prep.protected_body_keys,
             provider_api_format=prep.provider_api_format,
         )
         if upstream_is_stream:

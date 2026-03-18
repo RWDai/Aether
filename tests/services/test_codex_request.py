@@ -333,7 +333,6 @@ def test_codex_passthrough_builder_preserves_real_codex_headers() -> None:
 
 
 def test_codex_passthrough_builder_applies_prompt_body_rules() -> None:
-    from src.api.handlers.base.request_builder import get_cache_sensitive_protected_body_keys
     from src.core.api_format.metadata import CODEX_DEFAULT_BODY_RULES
 
     builder = PassthroughRequestBuilder()
@@ -351,10 +350,6 @@ def test_codex_passthrough_builder_applies_prompt_body_rules() -> None:
         endpoint,
         key,
         pre_computed_auth=("Authorization", "Bearer upstream-token"),
-        protected_body_keys=get_cache_sensitive_protected_body_keys(
-            "openai:cli",
-            provider_type="codex",
-        ),
         provider_api_format="openai:cli",
     )
 

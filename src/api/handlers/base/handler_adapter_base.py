@@ -372,11 +372,17 @@ class HandlerAdapterBase(ApiAdapter):
         )
         from src.core.api_format.headers import HeaderBuilder
         from src.core.provider_types import ProviderType
+        from src.services.provider.adapters.vertex_ai.transport import is_vertex_ai_context
 
         validated_base_url = cls._validate_test_base_url(base_url)
         is_antigravity = provider_type == ProviderType.ANTIGRAVITY
         is_gemini_cli = provider_type == ProviderType.GEMINI_CLI
-        is_vertex = provider_type == ProviderType.VERTEX_AI
+        is_vertex = is_vertex_ai_context(
+            base_url=validated_base_url,
+            provider_type=provider_type,
+            endpoint=provider_endpoint,
+            key=provider_api_key,
+        )
         is_kiro = provider_type == ProviderType.KIRO
         is_oauth = auth_type == "oauth"
         vertex_auth_info: Any | None = None

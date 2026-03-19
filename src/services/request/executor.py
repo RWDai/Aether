@@ -21,6 +21,10 @@ from src.services.provider.format import normalize_endpoint_signature
 from src.services.rate_limit.adaptive_reservation import get_adaptive_reservation_manager
 from src.services.rate_limit.adaptive_rpm import get_adaptive_rpm_manager
 from src.services.request.candidate import RequestCandidateService
+from src.services.request.model_test_debug import (
+    get_candidate_model_test_debug,
+    merge_model_test_debug,
+)
 
 
 @dataclass
@@ -219,6 +223,13 @@ class RequestExecutor:
                     _pi = await resolve_proxy_info_async(_eff_proxy)
                     if _pi:
                         _extra["proxy"] = _pi
+                    _extra = (
+                        merge_model_test_debug(
+                            _extra,
+                            get_candidate_model_test_debug(candidate),
+                        )
+                        or _extra
+                    )
                     RequestCandidateService.mark_candidate_success(
                         db=self.db,
                         candidate_id=candidate_id,

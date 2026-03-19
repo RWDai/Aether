@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import types
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, cast
@@ -165,6 +166,42 @@ def test_prepare_update_payload_vertex_to_oauth_clears_auth_config(
 
     assert prepared.update_data["auth_config"] is None
     assert prepared.update_data["api_key"] == "ENC:__placeholder__"
+
+
+def test_validate_vertex_api_formats_api_key_allows_gemini_only() -> None:
+    command_module._validate_vertex_api_formats("vertex_ai", "api_key", ["gemini:chat"])
+
+    with pytest.raises(InvalidRequestException, match="claude:chat"):
+        command_module._validate_vertex_api_formats("vertex_ai", "api_key", ["claude:chat"])
+
+
+def test_validate_vertex_api_formats_service_account_allows_gemini_and_claude() -> None:
+    command_module._validate_vertex_api_formats("vertex_ai", "service_account", ["claude:chat"])
+    command_module._validate_vertex_api_formats("vertex_ai", "service_account", ["gemini:chat"])
+    command_module._validate_vertex_api_formats(
+        "vertex_ai", "service_account", ["gemini:chat", "claude:chat"]
+    )
+
+    with pytest.raises(InvalidRequestException, match="openai:chat"):
+        command_module._validate_vertex_api_formats("vertex_ai", "service_account", ["openai:chat"])
+
+
+def test_prepare_update_payload_allows_unrelated_update_for_legacy_vertex_combo() -> None:
+    key = _build_key(
+        auth_type="service_account",
+        api_formats=["gemini:chat"],
+        provider=SimpleNamespace(provider_type="vertex_ai"),
+    )
+    key_data = EndpointAPIKeyUpdate.model_validate({"name": "legacy-key"})
+
+    prepared = command_module._prepare_update_key_payload(
+        db=cast(Any, _NoQueryDB()),
+        key=cast(Any, key),
+        key_id="key-1",
+        key_data=key_data,
+    )
+
+    assert prepared.update_data["name"] == "legacy-key"
 
 
 def test_clear_oauth_invalid_response_invalidates_caches(
@@ -345,6 +382,12 @@ async def test_batch_delete_endpoint_keys_response_cleans_related_references(
         SimpleNamespace(id="key-2", provider_id="provider-1"),
     ]
     db = _FakeBatchDeleteDB(keys)
+
+    @contextmanager
+    def _fake_get_db_context() -> Any:
+        yield db
+
+    monkeypatch.setattr(command_module, "get_db_context", _fake_get_db_context)
 
     result = await command_module.batch_delete_endpoint_keys_response(
         cast(Any, db),

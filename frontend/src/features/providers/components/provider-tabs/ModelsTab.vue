@@ -221,13 +221,14 @@
     :testing="modelTest.testing.value"
     :trace="modelTest.testTrace.value"
     :request-id="modelTest.requestId.value"
-    :show-endpoint-selector="activeEndpoints.length > 1"
-    :message-draft="testMessageDraft"
+    :request-body-draft="testRequestBodyDraft"
+    :request-body-error="testRequestBodyError"
+    :start-disabled="!selectedTestEndpoint || !!testRequestBodyError"
     @close="handleTestDialogClose"
     @back="handleTestDialogBack"
     @start="handleStartPendingTest"
     @select-endpoint="handleSelectTestEndpoint"
-    @update:message-draft="testMessageDraft = $event"
+    @update:request-body-draft="testRequestBodyDraft = $event"
   />
 </template>
 
@@ -250,6 +251,10 @@ import { parseApiError } from '@/utils/errorParser'
 import { formatApiFormat } from '@/api/endpoints/types/api-format'
 import type { ProviderWithEndpointsSummary } from '@/api/endpoints'
 import ModelTestDialog from './ModelTestDialog.vue'
+import {
+  buildDefaultModelTestRequestBody,
+  parseModelTestRequestBodyDraft,
+} from './model-test-request'
 
 const props = defineProps<{
   provider: ProviderWithEndpointsSummary
@@ -275,8 +280,10 @@ const localModels = ref<Model[]>([])
 const togglingModelId = ref<string | null>(null)
 const pendingTestModel = ref<Model | null>(null)
 const selectedTestEndpoint = ref<ProviderEndpoint | null>(null)
-const testMessageDraft = ref('')
+const testRequestBodyDraft = ref('')
 const activeEndpoints = computed(() => (props.endpoints ?? []).filter(endpoint => endpoint.is_active))
+const parsedTestRequestBody = computed(() => parseModelTestRequestBodyDraft(testRequestBodyDraft.value))
+const testRequestBodyError = computed(() => parsedTestRequestBody.value.error)
 const models = computed(() => props.models ?? localModels.value)
 // 按名称排序的模型列表
 const sortedModels = computed(() => {
@@ -442,18 +449,37 @@ function handleTestDialogClose() {
   modelTest.resetState()
   pendingTestModel.value = null
   selectedTestEndpoint.value = null
+  testRequestBodyDraft.value = ''
 }
 
 function handleTestDialogBack() {
   if (modelTest.testing.value) return
   modelTest.testResult.value = null
-  selectedTestEndpoint.value = null
+  modelTest.stopPolling()
 }
 
-async function handleSelectTestEndpoint(endpointId: string) {
-  if (!pendingTestModel.value) return
+function handleSelectTestEndpoint(endpointId: string) {
   const endpoint = activeEndpoints.value.find(item => item.id === endpointId)
   if (!endpoint) return
+  selectedTestEndpoint.value = endpoint
+}
+
+async function handleStartPendingTest() {
+  if (modelTest.testing.value) return
+  if (!pendingTestModel.value) return
+
+  const endpoint = selectedTestEndpoint.value || activeEndpoints.value[0]
+  if (!endpoint) {
+    showError('请选择要测试的端点')
+    return
+  }
+
+  const { value: requestBody, error } = parsedTestRequestBody.value
+  if (!requestBody || error) {
+    showError(`测试请求体无效: ${error || '无效 JSON'}`)
+    return
+  }
+
   selectedTestEndpoint.value = endpoint
   const model = pendingTestModel.value
   const modelName = model.global_model_name || model.provider_model_name
@@ -464,26 +490,14 @@ async function handleSelectTestEndpoint(endpointId: string) {
     displayLabel: `${endpointPrefix}${modelName}`,
     apiFormat: endpoint.api_format,
     endpointId: endpoint.id,
-    message: testMessageDraft.value,
+    requestBody,
     concurrency: 5,
-    onSuccess: () => {
-      pendingTestModel.value = null
-      selectedTestEndpoint.value = null
-    },
     onError: () => {
       if (activeEndpoints.value.length > 1) {
-        selectedTestEndpoint.value = null
         return true
       }
     },
   })
-}
-
-async function handleStartPendingTest() {
-  if (modelTest.testing.value) return
-  const endpoint = activeEndpoints.value[0]
-  if (!endpoint) return
-  await handleSelectTestEndpoint(endpoint.id)
 }
 
 async function testModelConnection(model: Model) {
@@ -495,7 +509,10 @@ async function testModelConnection(model: Model) {
   }
 
   pendingTestModel.value = model
-  selectedTestEndpoint.value = null
+  selectedTestEndpoint.value = activeEndpoints.value[0] ?? null
+  testRequestBodyDraft.value = buildDefaultModelTestRequestBody(
+    model.global_model_name || model.provider_model_name,
+  )
   modelTest.testResult.value = null
   modelTest.dialogOpen.value = true
 }

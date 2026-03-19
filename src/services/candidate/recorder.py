@@ -45,6 +45,7 @@ class CandidateRecorder:
                     error_message=getattr(row, "error_message", None),
                     status_code=getattr(row, "status_code", None),
                     latency_ms=getattr(row, "latency_ms", None),
+                    extra_data=getattr(row, "extra_data", None),
                 )
             )
 

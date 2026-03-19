@@ -253,6 +253,7 @@ class GeminiChatAdapter(ChatAdapterBase):
             evaluate_condition,
         )
         from src.core.api_format.headers import HeaderBuilder
+        from src.services.provider.adapters.vertex_ai.transport import is_vertex_ai_context
 
         # Gemini需要从request_data或model_name参数获取model名称
         effective_model_name = model_name or request_data.get("model", "")
@@ -264,7 +265,12 @@ class GeminiChatAdapter(ChatAdapterBase):
 
         is_antigravity = provider_type and provider_type.lower() == "antigravity"
         is_gemini_cli = provider_type and provider_type.lower() == "gemini_cli"
-        is_vertex = provider_type and provider_type.lower() == "vertex_ai"
+        is_vertex = is_vertex_ai_context(
+            base_url=base_url,
+            provider_type=provider_type,
+            endpoint=provider_endpoint,
+            key=provider_api_key,
+        )
         is_oauth = auth_type == "oauth"
         vertex_auth_info: Any | None = None
 

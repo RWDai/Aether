@@ -1,9 +1,9 @@
 """Vertex AI provider plugin — 统一注册入口。
 
 注册 Vertex AI 对各通用 registry / capability registry 的 hooks：
-- Transport Hook (URL 构建，支持 API Key / Service Account 双策略)
-- Model Fetcher (专用上游模型获取链路，不走通用 /v1beta/models / /v1/models)
-- Provider Format Capability（跨格式支持：同一 Provider 同时访问 Gemini 和 Claude 模型）
+- Transport Hook (URL 构建：Gemini 走 Express mode，Claude 走 Service Account)
+- Model Fetcher (专用上游模型获取链路)
+- Provider Format Capability（跨格式支持：同一 Provider 可配置 Gemini / Claude）
 """
 
 from __future__ import annotations
@@ -18,8 +18,6 @@ from src.services.provider.adapters.vertex_ai.transport import get_effective_for
 
 # Vertex AI 公共 API 根
 _VERTEX_API_BASE = "https://aiplatform.googleapis.com"
-# Gemini Developer API（API Key 场景兜底）
-_GEMINI_DEV_BASE = "https://generativelanguage.googleapis.com"
 
 _MODEL_PAGE_SIZE = 100
 _MODEL_MAX_PAGES = 20
@@ -261,6 +259,7 @@ async def _fetch_models_vertex_api_key(
     ctx: Any,
     auth_config: dict[str, Any] | None,
 ) -> tuple[list[dict[str, Any]], list[str], bool]:
+    """API Key 仅抓取 Vertex AI Express mode 的 Google publisher models。"""
     api_key = str(ctx.api_key_value or "").strip()
     if not api_key or api_key == "__placeholder__":
         return [], ["vertex_ai(api_key): missing api key"], False
@@ -275,7 +274,7 @@ async def _fetch_models_vertex_api_key(
         _build_google_publisher_list_url(base) for base in _iter_endpoint_base_urls(ctx)
     ]
 
-    # 1) Vertex API list (publisher=google)
+    # Vertex Express mode list (publisher=google)
     for url in vertex_list_urls:
         headers = {"Accept": "application/json", **endpoint_headers}
         models, err, success = await _fetch_models_from_url(
@@ -297,29 +296,6 @@ async def _fetch_models_vertex_api_key(
             continue
         all_models.extend(models)
 
-    # 2) 兜底：Gemini Developer API
-    if not all_models:
-        fallback_url = f"{_GEMINI_DEV_BASE}/v1beta/models"
-        headers = {"Accept": "application/json", **endpoint_headers}
-        models, err, success = await _fetch_models_from_url(
-            client,
-            url=fallback_url,
-            headers=headers,
-            params={"key": api_key, "pageSize": _MODEL_PAGE_SIZE},
-            auth_config=auth_config,
-            fallback_publisher="google",
-        )
-        if success:
-            has_success = True
-        if err:
-            labeled = f"{fallback_url}: {err}"
-            if _is_soft_not_found(err):
-                soft_errors.append(labeled)
-            else:
-                hard_errors.append(labeled)
-        else:
-            all_models.extend(models)
-
     deduped = _dedupe_models(all_models)
     if deduped:
         return deduped, hard_errors, has_success or True
@@ -338,6 +314,7 @@ async def _fetch_models_vertex_service_account(
     auth_config: dict[str, Any] | None,
     client_kwargs: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], list[str], bool]:
+    """Service Account 抓取 Vertex AI Google + Anthropic publisher models。"""
     if not isinstance(auth_config, dict):
         return [], ["vertex_ai(service_account): missing auth_config"], False
 
@@ -420,8 +397,8 @@ async def fetch_models_vertex_ai(
 ) -> tuple[list[dict], list[str], bool, dict[str, Any] | None]:
     """Vertex AI 专用模型获取链路。
 
-    - API Key: 优先请求 Vertex publisher models，失败时兜底 Gemini Developer API
-    - Service Account: 使用 SA 凭证换取 Bearer Token，按 region + publisher 查询
+    - API Key: 仅请求 Vertex AI Express mode 的 Gemini models
+    - Service Account: 使用 SA 凭证换取 Bearer Token，按 region 查询 Gemini + Claude models
     """
     from src.services.proxy_node.resolver import build_proxy_client_kwargs
 

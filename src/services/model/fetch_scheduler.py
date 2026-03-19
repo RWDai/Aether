@@ -54,9 +54,7 @@ KEY_FETCH_TIMEOUT_SECONDS = 120
 MODEL_FETCH_HTTP_TIMEOUT = 10.0
 
 # 启动时首次自动获取开关与延迟
-MODEL_FETCH_STARTUP_ENABLED = (
-    os.getenv("MODEL_FETCH_STARTUP_ENABLED", "true").lower() == "true"
-)
+MODEL_FETCH_STARTUP_ENABLED = os.getenv("MODEL_FETCH_STARTUP_ENABLED", "true").lower() == "true"
 MODEL_FETCH_STARTUP_DELAY_SECONDS = max(
     0,
     int(os.getenv("MODEL_FETCH_STARTUP_DELAY_SECONDS", "10")),
@@ -487,13 +485,21 @@ class ModelFetchScheduler:
                 self._update_key_error(prepared.key_id, f"OAuth token resolution failed: {e}")
                 return "error"
         else:
-            try:
-                api_key_value = crypto_service.decrypt(prepared.encrypted_api_key)
-            except Exception:
-                self._update_key_error(prepared.key_id, "Decrypt error")
-                return "error"
+            is_vertex_service_account = (
+                prepared.provider_type.lower() == ProviderType.VERTEX_AI.value
+                and prepared.auth_type in ("service_account", "vertex_ai")
+            )
 
-            # Best-effort: decrypt auth_config if present (e.g. Antigravity project_id).
+            if is_vertex_service_account:
+                api_key_value = "__placeholder__"
+            else:
+                try:
+                    api_key_value = crypto_service.decrypt(prepared.encrypted_api_key)
+                except Exception:
+                    self._update_key_error(prepared.key_id, "Decrypt error")
+                    return "error"
+
+            # Best-effort: decrypt auth_config if present (e.g. Antigravity project_id / Vertex SA JSON).
             if prepared.encrypted_auth_config:
                 try:
                     parsed = json.loads(crypto_service.decrypt(prepared.encrypted_auth_config))
@@ -582,9 +588,13 @@ class ModelFetchScheduler:
                 db.commit()
                 return "error"
 
-            # Service Account 类型不支持自动获取模型（Vertex AI SA / 旧 vertex_ai auth_type）
             auth_type = getattr(key, "auth_type", "api_key") or "api_key"
-            if auth_type in ("service_account", "vertex_ai"):
+            provider_type = str(getattr(provider, "provider_type", "") or "")
+            is_vertex_service_account = (
+                provider_type.strip().lower() == ProviderType.VERTEX_AI.value
+                and auth_type in ("service_account", "vertex_ai")
+            )
+            if auth_type in ("service_account", "vertex_ai") and not is_vertex_service_account:
                 key.last_models_fetch_error = (
                     "auto_fetch_models 暂不支持 Service Account 类型的 Key"
                 )
@@ -610,9 +620,7 @@ class ModelFetchScheduler:
                 key.last_models_fetch_at = now
                 db.commit()
                 return "error"
-
             encrypted_auth_config = getattr(key, "auth_config", None)
-            provider_type = str(getattr(provider, "provider_type", "") or "")
 
             return PreparedModelsFetchContext(
                 key_id=key_id,

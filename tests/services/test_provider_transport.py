@@ -1,4 +1,7 @@
 from dataclasses import dataclass
+from types import SimpleNamespace
+
+import pytest
 
 from src.services.provider.transport import build_provider_url
 
@@ -61,3 +64,52 @@ def test_gemini_non_stream_does_not_add_alt() -> None:
 
     assert url.endswith("/v1beta/models/gemini-1.5-pro:generateContent")
     assert "alt=" not in url
+
+
+def test_vertex_gemini_api_key_base_url_uses_vertex_transport_without_provider_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    endpoint = _DummyEndpoint(
+        base_url="https://aiplatform.googleapis.com",
+        api_format="gemini:chat",
+    )
+    key = SimpleNamespace(auth_type="api_key", api_key="enc-key")
+
+    from src.core.crypto import crypto_service
+
+    monkeypatch.setattr(crypto_service, "decrypt", lambda value: "test-key")
+
+    url = build_provider_url(
+        endpoint,  # type: ignore[arg-type] - test stub
+        path_params={"model": "gemini-3.1-pro-preview"},
+        is_stream=False,
+        key=key,  # type: ignore[arg-type] - test stub
+    )
+
+    assert (
+        url == "https://aiplatform.googleapis.com/v1/publishers/google/models/"
+        "gemini-3.1-pro-preview:generateContent?key=test-key"
+    )
+
+
+def test_vertex_gemini_service_account_base_url_uses_vertex_transport_without_provider_type() -> (
+    None
+):
+    endpoint = _DummyEndpoint(
+        base_url="https://aiplatform.googleapis.com",
+        api_format="gemini:chat",
+    )
+    key = SimpleNamespace(auth_type="service_account", auth_config={"project_id": "demo-project"})
+
+    url = build_provider_url(
+        endpoint,  # type: ignore[arg-type] - test stub
+        path_params={"model": "gemini-3.1-pro-preview"},
+        is_stream=False,
+        key=key,  # type: ignore[arg-type] - test stub
+        decrypted_auth_config={"project_id": "demo-project", "region": "global"},
+    )
+
+    assert (
+        url == "https://aiplatform.googleapis.com/v1/projects/demo-project/locations/global/"
+        "publishers/google/models/gemini-3.1-pro-preview:generateContent"
+    )

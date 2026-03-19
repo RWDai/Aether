@@ -17,6 +17,10 @@ from src.core.exceptions import (
 from src.core.logger import logger
 from src.core.provider_types import ProviderType
 from src.services.request.candidate import RequestCandidateService
+from src.services.request.model_test_debug import (
+    get_candidate_model_test_debug,
+    merge_model_test_debug,
+)
 from src.services.task.execute.pool import TaskPoolOperationsService
 from src.services.task.request_state import RequestBodyState
 
@@ -206,6 +210,9 @@ class TaskErrorOperationsService:
         )
         _proxy_info = await resolve_proxy_info_async(_eff_proxy)
         _proxy_extra: dict[str, Any] | None = {"proxy": _proxy_info} if _proxy_info else None
+        _proxy_extra = merge_model_test_debug(
+            _proxy_extra, get_candidate_model_test_debug(candidate)
+        )
 
         if not isinstance(exec_err, ExecutionError):
             RequestCandidateService.mark_candidate_failed(
@@ -410,6 +417,13 @@ class TaskErrorOperationsService:
             }
             if _proxy_info:
                 serializable_extra_data["proxy"] = _proxy_info
+            serializable_extra_data = (
+                merge_model_test_debug(
+                    serializable_extra_data,
+                    get_candidate_model_test_debug(candidate),
+                )
+                or serializable_extra_data
+            )
 
             if isinstance(converted_error, ThinkingSignatureException):
                 action = self.handle_thinking_signature_error(

@@ -109,6 +109,7 @@ const props = defineProps<{
   zIndex?: number // Custom z-index for nested dialogs (default: 60)
   noPadding?: boolean // Disable default content padding
   persistent?: boolean // Prevent closing on backdrop click
+  closeOnBackdrop?: boolean // Allow closing on backdrop click (default: true)
 }>()
 
 // Emits 定义
@@ -145,7 +146,7 @@ function handleClose() {
 
 // 处理背景点击
 function handleBackdropClick() {
-  if (!props.persistent) {
+  if (!props.persistent && props.closeOnBackdrop !== false) {
     handleClose()
   }
 }

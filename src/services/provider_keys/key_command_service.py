@@ -59,7 +59,7 @@ def _validate_vertex_api_formats(
     if auth_type == "api_key":
         allowed = {"gemini:chat"}
     elif auth_type in {"service_account", "vertex_ai"}:
-        allowed = {"gemini:chat", "claude:chat"}
+        allowed = {"claude:chat", "gemini:chat"}
     else:
         return
 
@@ -310,14 +310,16 @@ def _prepare_update_key_payload(
         exclude_key_id=key_id,
     )
 
-    # Vertex Provider: auth_type 与 api_formats 的组合必须合法
-    provider = getattr(key, "provider", None)
-    effective_api_formats = update_data.get("api_formats", key.api_formats)
-    _validate_vertex_api_formats(
-        getattr(provider, "provider_type", None),
-        target_auth_type,
-        effective_api_formats,
-    )
+    # Vertex Provider: 仅在 auth_type/api_formats 变更时校验组合，
+    # 避免历史旧数据在无关编辑时被强制阻断。
+    if "auth_type" in update_data or "api_formats" in update_data:
+        provider = getattr(key, "provider", None)
+        effective_api_formats = update_data.get("api_formats", key.api_formats)
+        _validate_vertex_api_formats(
+            getattr(provider, "provider_type", None),
+            target_auth_type,
+            effective_api_formats,
+        )
 
     if "api_key" in update_data:
         api_key_raw = update_data["api_key"]

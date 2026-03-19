@@ -240,6 +240,10 @@
                           -->{{ proxyTimingBreakdown(currentAttempt.extra_data.proxy) }}<!--
                         -->)</span>
                       </span>
+                      <code
+                        v-if="typeof currentAttempt.extra_data.proxy.node_id === 'string' && currentAttempt.extra_data.proxy.node_id"
+                        class="text-xs font-mono text-muted-foreground"
+                      >节点 Key {{ currentAttempt.extra_data.proxy.node_id }}</code>
                     </span>
                   </div>
                   <div
@@ -462,7 +466,7 @@ interface UsageData {
 }
 
 const props = defineProps<{
-  requestId: string
+  requestId?: string | null
   /** 外部传入的状态码，用于覆盖 trace.final_status 的判断 */
   overrideStatusCode?: number
   /** 请求侧 API 格式（客户端入口格式） */
@@ -471,6 +475,12 @@ const props = defineProps<{
   usageData?: UsageData | null
   /** 请求元数据（用于号池调度组装） */
   requestMetadata?: Record<string, unknown> | null
+  /** 已获取的追踪数据；传入时不再内部拉取 */
+  traceData?: RequestTrace | null
+}>()
+
+const emit = defineEmits<{
+  selectAttempt: [attempt: CandidateRecord | null]
 }>()
 
 // 用量数据（从 props 获取）
@@ -525,7 +535,8 @@ const getFinalStatusBadgeVariant = (status: string): BadgeVariant => {
 
 const loading = ref(false)
 const error = ref<string | null>(null)
-const trace = ref<RequestTrace | null>(null)
+const internalTrace = ref<RequestTrace | null>(null)
+const trace = computed(() => props.traceData ?? internalTrace.value)
 const selectedGroupIndex = ref(0)
 const selectedAttemptIndex = ref(0)
 const hoveredGroupIndex = ref<number | null>(null)
@@ -1045,6 +1056,10 @@ const currentAttempt = computed(() => {
   return selectedGroup.value.allAttempts[selectedAttemptIndex.value] || selectedGroup.value.primary
 })
 
+watch(currentAttempt, (attempt) => {
+  emit('selectAttempt', attempt ?? null)
+}, { immediate: true })
+
 const currentGroupTitle = computed(() => {
   if (!selectedGroup.value || !currentAttempt.value) return ''
   if (selectedGroup.value.isPoolGroup) {
@@ -1224,7 +1239,7 @@ const navigateGroup = (direction: number) => {
 // 加载请求追踪数据
 const isSilentRefresh = ref(false)
 const loadTrace = async (silent = false) => {
-  if (!props.requestId) return
+  if (!props.requestId || props.traceData) return
 
   isSilentRefresh.value = silent
 
@@ -1234,7 +1249,7 @@ const loadTrace = async (silent = false) => {
   error.value = null
 
   try {
-    trace.value = await requestTraceApi.getRequestTrace(props.requestId)
+    internalTrace.value = await requestTraceApi.getRequestTrace(props.requestId)
   } catch (err: unknown) {
     if (!silent) {
       error.value = parseApiError(err, '加载失败')
@@ -1304,12 +1319,31 @@ watch(groupedTimeline, (newGroups) => {
   selectedAttemptIndex.value = 0
 }, { immediate: true })
 
-// 监听 requestId 变化
-watch(() => props.requestId, () => {
-  selectedGroupIndex.value = 0
-  selectedAttemptIndex.value = 0
-  loadTrace()
-}, { immediate: true })
+// 监听 requestId / 外部 trace 变化
+watch(
+  [() => props.requestId, () => props.traceData],
+  () => {
+    selectedGroupIndex.value = 0
+    selectedAttemptIndex.value = 0
+
+    if (props.traceData) {
+      internalTrace.value = null
+      loading.value = false
+      error.value = null
+      return
+    }
+
+    if (!props.requestId) {
+      internalTrace.value = null
+      loading.value = false
+      error.value = null
+      return
+    }
+
+    void loadTrace()
+  },
+  { immediate: true },
+)
 
 defineExpose({ refresh: () => loadTrace(true) })
 

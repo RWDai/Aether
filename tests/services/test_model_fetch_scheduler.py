@@ -6,7 +6,9 @@ import pytest
 
 import src.services.model.fetch_scheduler as fetch_scheduler_module
 from src.services.model.fetch_scheduler import (
+    EndpointFetchConfig,
     ModelFetchScheduler,
+    PreparedModelsFetchContext,
     _aggregate_models_for_cache,
     _run_key_fetch_workers,
 )
@@ -108,3 +110,70 @@ async def test_perform_fetch_all_keys_scans_in_batches(monkeypatch: pytest.Monke
 
     assert batch_requests == [None, "b"]
     assert processed_batches == [["a", "b"], ["c"]]
+
+
+@pytest.mark.asyncio
+async def test_fetch_models_for_key_by_id_vertex_service_account_uses_auth_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scheduler = ModelFetchScheduler()
+    captured: dict[str, object] = {}
+
+    prepared = PreparedModelsFetchContext(
+        key_id="key-vertex-sa",
+        provider_id="provider-vertex",
+        provider_name="Vertex",
+        provider_type="vertex_ai",
+        auth_type="service_account",
+        encrypted_api_key="ENC_PLACEHOLDER",
+        encrypted_auth_config="ENC_AUTH_CONFIG",
+        format_to_endpoint={
+            "gemini:chat": EndpointFetchConfig(base_url="https://aiplatform.googleapis.com"),
+        },
+        proxy_config=None,
+    )
+
+    monkeypatch.setattr(scheduler, "_prepare_fetch_context", lambda key_id: prepared)
+
+    async def fake_fetch_models_for_key(ctx, *, timeout_seconds: float):
+        captured["api_key_value"] = ctx.api_key_value
+        captured["auth_config"] = ctx.auth_config
+        captured["timeout_seconds"] = timeout_seconds
+        return ([], [], True, None)
+
+    async def fake_update_key_after_fetch(
+        key_id: str,
+        provider_id: str,
+        provider_name: str,
+        all_models: list[dict],
+        errors: list[str],
+        has_success: bool,
+        upstream_metadata=None,
+    ) -> str:
+        captured["update_key_id"] = key_id
+        captured["update_provider_id"] = provider_id
+        return "success"
+
+    def fake_decrypt(value: str) -> str:
+        if value == "ENC_AUTH_CONFIG":
+            return (
+                '{"project_id":"demo-project","client_email":"svc@example.com",'
+                '"private_key":"-----BEGIN PRIVATE KEY-----\\nTEST\\n-----END PRIVATE KEY-----\\n"}'
+            )
+        raise AssertionError(f"unexpected decrypt call for {value}")
+
+    monkeypatch.setattr(fetch_scheduler_module, "fetch_models_for_key", fake_fetch_models_for_key)
+    monkeypatch.setattr(scheduler, "_update_key_after_fetch", fake_update_key_after_fetch)
+    monkeypatch.setattr(fetch_scheduler_module.crypto_service, "decrypt", fake_decrypt)
+
+    result = await scheduler._fetch_models_for_key_by_id("key-vertex-sa")
+
+    assert result == "success"
+    assert captured["api_key_value"] == "__placeholder__"
+    assert captured["auth_config"] == {
+        "project_id": "demo-project",
+        "client_email": "svc@example.com",
+        "private_key": "-----BEGIN PRIVATE KEY-----\nTEST\n-----END PRIVATE KEY-----\n",
+    }
+    assert captured["update_key_id"] == "key-vertex-sa"
+    assert captured["update_provider_id"] == "provider-vertex"

@@ -937,6 +937,7 @@
                 ref="modelMappingTabRef"
                 :key="`mapping-${provider.id}`"
                 :provider="provider"
+                :endpoints="endpoints"
                 :provider-keys="providerKeys"
                 :models="providerModels"
                 :mapping-preview="providerMappingPreview"

@@ -122,6 +122,18 @@ async def run_endpoint_check(
     if result.usage_data:
         response_data["usage"] = result.usage_data
 
+    response_data["debug"] = {
+        "request_url": request.url,
+        "request_headers": _redact_headers(request.headers),
+        "request_body": request.json_body,
+        "response_headers": _redact_headers(result.headers) if result.headers else None,
+        "response_body": (
+            result.raw_response_body
+            if result.raw_response_body is not None
+            else result.response_data
+        ),
+    }
+
     return response_data
 
 
@@ -600,6 +612,7 @@ class EndpointCheckResult:
     response_data: dict[str, Any] | None = None
     error_message: str | None = None
     usage_data: dict[str, Any] | None = None
+    raw_response_body: Any | None = None
 
 
 class HttpRequestExecutor:
@@ -665,6 +678,7 @@ class HttpRequestExecutor:
                             request_id=request_id,
                             response_data=None,
                             error_message=response_data.get("error"),
+                            raw_response_body=response_data.get("response_body"),
                         )
 
                     return EndpointCheckResult(
@@ -673,6 +687,7 @@ class HttpRequestExecutor:
                         response_time_ms=response_time_ms,
                         request_id=request_id,
                         response_data=response_data.get("final_response"),
+                        raw_response_body=response_data.get("final_response"),
                     )
                 else:
                     # 非流式请求：直接读取响应
@@ -705,6 +720,9 @@ class HttpRequestExecutor:
                             response_time_ms=response_time_ms,
                             request_id=request_id,
                             response_data=response_data,
+                            raw_response_body=(
+                                response_data if response_data is not None else response.text
+                            ),
                         )
                     else:
                         error_body = response.text[:500] if response.text else "(empty)"
@@ -743,10 +761,12 @@ class HttpRequestExecutor:
                 headers = dict(response.headers)
 
                 if response.status_code != 200:
+                    # 读取上限 16KB 用于 debug response_body；
+                    # error 字段仅取前 500 字符，避免日志/展示过长
                     error_body = ""
                     async for chunk in response.aiter_text():
                         error_body += chunk
-                        if len(error_body) > 500:
+                        if len(error_body) > 16384:
                             break
                     logger.debug(
                         "[{}] check_endpoint | stream error | {}",
@@ -757,6 +777,7 @@ class HttpRequestExecutor:
                         "error": f"HTTP {response.status_code}: {error_body[:500]}",
                         "status_code": response.status_code,
                         "headers": headers,
+                        "response_body": error_body,
                     }
 
                 # 收集 SSE 事件（兼容多种 API 格式）
@@ -841,7 +862,7 @@ class HttpRequestExecutor:
 
         except Exception as e:
             logger.warning("[{}] check_endpoint | stream error | {}", request.api_format, e)
-            return {"error": str(e), "status_code": 500, "headers": {}}
+            return {"error": str(e), "status_code": 500, "headers": {}, "response_body": None}
 
 
 class UsageCalculator:
@@ -1109,6 +1130,7 @@ class ErrorHandler:
                 "original_error": str(error),
                 "retryable": True,
             },
+            raw_response_body=None,
         )
 
     @staticmethod
@@ -1129,6 +1151,7 @@ class ErrorHandler:
                 "retryable": True,
                 "timeout_seconds": request.timeout,
             },
+            raw_response_body=None,
         )
 
     @staticmethod
@@ -1175,6 +1198,7 @@ class ErrorHandler:
                 "response_body": error.response.text[:500] if error.response.text else "",
                 "retryable": retryable,
             },
+            raw_response_body=error.response.text if error.response.text else None,
         )
 
     @staticmethod
@@ -1196,6 +1220,7 @@ class ErrorHandler:
                 "details": error.details,
                 "retryable": error.status_code >= 500 or error.status_code == 429,
             },
+            raw_response_body=None,
         )
 
     @staticmethod
@@ -1215,6 +1240,7 @@ class ErrorHandler:
                 "original_error": str(error),
                 "retryable": False,
             },
+            raw_response_body=None,
         )
 
     @staticmethod
@@ -1238,6 +1264,7 @@ class ErrorHandler:
                 "original_error": str(error),
                 "retryable": False,
             },
+            raw_response_body=None,
         )
 
 

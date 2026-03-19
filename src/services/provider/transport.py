@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 from typing import TYPE_CHECKING, Any, Callable
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 from src.core.api_format import (
     EndpointKind,
@@ -70,6 +70,34 @@ def redact_url_for_log(url: str) -> str:
         脱敏后的 URL
     """
     return _SENSITIVE_QUERY_PARAMS_PATTERN.sub(r"\1\2=***", url)
+
+
+# Vertex AI host 白名单：aiplatform.googleapis.com 及其区域子域名
+_VERTEX_AI_HOST = "aiplatform.googleapis.com"
+_VERTEX_AI_ENDPOINT_SIGS = {"gemini:chat", "claude:chat"}
+_VERTEX_AI_AUTH_TYPES = {"api_key", "service_account", "vertex_ai"}
+
+
+def looks_like_vertex_ai_host(
+    base_url: str,
+    endpoint_sig: str = "",
+    auth_type: str = "",
+) -> bool:
+    """根据 base_url + endpoint_sig/auth_type 判断是否属于 Vertex AI。
+
+    用于历史数据兼容：部分旧记录缺少 provider_type，但 base_url 已固定到 aiplatform。
+    """
+    try:
+        host = (urlparse(base_url).netloc or "").strip().lower()
+    except Exception:
+        return False
+    if not host:
+        return False
+    if host != _VERTEX_AI_HOST and not host.endswith(f".{_VERTEX_AI_HOST}"):
+        return False
+    sig = endpoint_sig.strip().lower()
+    at = auth_type.strip().lower()
+    return sig in _VERTEX_AI_ENDPOINT_SIGS or at in _VERTEX_AI_AUTH_TYPES
 
 
 def _normalize_base_url(base_url: str, path: str) -> str:
@@ -137,6 +165,16 @@ def _get_provider_type(
         pt = decrypted_auth_config.get("provider_type")
         if isinstance(pt, str) and pt.strip():
             return pt.strip().lower()
+
+    # Fallback: 历史 Vertex 数据可能缺少 provider_type，但 base_url 已固定到 aiplatform。
+    try:
+        base_url = str(getattr(endpoint, "base_url", "") or "").strip()
+        endpoint_sig = str(getattr(endpoint, "api_format", "") or "").strip()
+        auth_type = str(getattr(key, "auth_type", "") or "").strip() if key else ""
+        if base_url and looks_like_vertex_ai_host(base_url, endpoint_sig, auth_type):
+            return ProviderType.VERTEX_AI.value
+    except Exception:
+        pass
 
     return None
 

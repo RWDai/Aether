@@ -1,12 +1,16 @@
 """Vertex AI URL 构建（Transport Hook）。
 
-根据 auth_type 选择两种完全不同的 URL 构建策略：
+Vertex AI Gemini / Imagen 支持两种认证路径：
 
-- API Key: 全局端点，简化路径
+- API Key + Gemini/Imagen (Express mode):
   https://aiplatform.googleapis.com/v1/publishers/google/models/{model}:{action}?key={API_KEY}
+- Service Account + Gemini/Imagen:
+  https://{region}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{region}/publishers/google/models/{model}:{action}
 
-- Service Account: 区域端点，完整路径
-  https://{region}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{region}/publishers/{publisher}/models/{model}:{action}
+Claude 仍走标准 Vertex AI Service Account 路径：
+
+- Service Account + Claude:
+  https://{region}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{region}/publishers/anthropic/models/{model}:{action}
 """
 
 from __future__ import annotations
@@ -16,6 +20,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 from src.core.logger import logger
+from src.core.provider_types import ProviderType, normalize_provider_type
 from src.services.provider.adapters.vertex_ai.constants import (
     API_KEY_BASE_URL,
     DEFAULT_FORMAT,
@@ -23,7 +28,34 @@ from src.services.provider.adapters.vertex_ai.constants import (
     MODEL_FORMAT_MAPPING,
 )
 from src.services.provider.format import normalize_endpoint_signature
-from src.services.provider.transport import redact_url_for_log
+from src.services.provider.transport import looks_like_vertex_ai_host, redact_url_for_log
+
+
+def is_vertex_ai_context(
+    *,
+    base_url: str | None = None,
+    provider_type: Any = None,
+    endpoint: Any = None,
+    key: Any = None,
+) -> bool:
+    """Best-effort 判断当前测试/请求上下文是否应视为 Vertex AI。"""
+    if normalize_provider_type(provider_type) == ProviderType.VERTEX_AI.value:
+        return True
+
+    for obj in (endpoint, key):
+        provider = getattr(obj, "provider", None) if obj is not None else None
+        if normalize_provider_type(getattr(provider, "provider_type", None)) == (
+            ProviderType.VERTEX_AI.value
+        ):
+            return True
+
+    candidate_base_url = str(base_url or getattr(endpoint, "base_url", "") or "").strip()
+    if not candidate_base_url:
+        return False
+
+    endpoint_sig = str(getattr(endpoint, "api_format", "") or "").strip()
+    auth_type = str(getattr(key, "auth_type", "") or "").strip()
+    return looks_like_vertex_ai_host(candidate_base_url, endpoint_sig, auth_type)
 
 
 def get_effective_format(
@@ -95,28 +127,36 @@ def build_vertex_ai_url(
     key: Any = None,
     decrypted_auth_config: dict[str, Any] | None = None,
 ) -> str:
-    """Vertex AI transport hook — 统一 URL 构建入口。
+    """Vertex AI transport hook — 统一 URL 构建入口。"""
+    from src.core.exceptions import InvalidRequestException
 
-    根据 key.auth_type 分派到 API Key 或 Service Account 两种策略。
-    """
-    auth_type = getattr(key, "auth_type", "api_key") if key else "api_key"
+    model = str((path_params or {}).get("model", "") or "").strip()
+    if not model:
+        raise InvalidRequestException("Vertex AI 请求缺少 model 参数")
+
+    auth_type = str(getattr(key, "auth_type", "api_key") or "api_key").strip().lower()
+    is_claude_model = model.startswith("claude-")
 
     if auth_type == "api_key":
+        if is_claude_model:
+            raise InvalidRequestException(
+                "Vertex API Key 不支持 Claude 模型，请改用 Service Account 认证。"
+            )
         return _build_api_key_url(
             key=key,
             path_params=path_params,
             query_params=effective_query_params,
             is_stream=is_stream,
         )
-    else:
-        # service_account（以及向后兼容旧的 "vertex_ai" auth_type）
-        return _build_service_account_url(
-            key=key,
-            path_params=path_params,
-            query_params=effective_query_params,
-            is_stream=is_stream,
-            decrypted_auth_config=decrypted_auth_config,
-        )
+
+    # service_account（以及向后兼容旧的 "vertex_ai" auth_type）
+    return _build_service_account_url(
+        key=key,
+        path_params=path_params,
+        query_params=effective_query_params,
+        is_stream=is_stream,
+        decrypted_auth_config=decrypted_auth_config,
+    )
 
 
 def _build_api_key_url(
@@ -136,11 +176,6 @@ def _build_api_key_url(
     model = (path_params or {}).get("model", "")
     if not model:
         raise InvalidRequestException("Vertex AI 请求缺少 model 参数")
-
-    if str(model).startswith("claude-"):
-        raise InvalidRequestException(
-            "Vertex API Key 不支持 Claude 模型，请改用 Service Account 认证。"
-        )
 
     action = "streamGenerateContent" if is_stream else "generateContent"
     path = f"/v1/publishers/google/models/{model}:{action}"
@@ -177,10 +212,7 @@ def _build_service_account_url(
     is_stream: bool = False,
     decrypted_auth_config: dict[str, Any] | None = None,
 ) -> str:
-    """构建 Service Account 认证的区域端点 URL。
-
-    格式: https://{region}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{region}/publishers/{publisher}/models/{model}:{action}
-    """
+    """构建 Service Account 认证的 Vertex AI 区域端点 URL。"""
     from src.core.crypto import crypto_service
     from src.core.exceptions import InvalidRequestException
 
@@ -227,11 +259,7 @@ def _build_service_account_url(
     else:
         region = "global"
 
-    # 判断是 Claude 还是 Gemini 模型
-    is_claude_model = model.startswith("claude-")
-
-    # 根据模型类型确定 publisher 和 action
-    if is_claude_model:
+    if model.startswith("claude-"):
         publisher = "anthropic"
         action = "streamRawPredict" if is_stream else "rawPredict"
     else:
@@ -249,7 +277,7 @@ def _build_service_account_url(
     # 添加查询参数
     effective_query_params = dict(query_params) if query_params else {}
     # Gemini 流式请求使用 SSE 格式，Claude 不需要
-    if is_stream and not is_claude_model:
+    if is_stream and not model.startswith("claude-"):
         effective_query_params.setdefault("alt", "sse")
     # 移除不适用于 Vertex AI 的参数
     effective_query_params.pop("beta", None)

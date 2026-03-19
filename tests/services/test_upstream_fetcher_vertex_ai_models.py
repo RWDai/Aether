@@ -52,7 +52,7 @@ async def test_fetch_models_for_key_vertex_api_key_custom_fetcher() -> None:
 
 
 @pytest.mark.asyncio
-async def test_fetch_models_for_key_vertex_service_account_ignores_soft_404_when_success() -> None:
+async def test_fetch_models_for_key_vertex_service_account_fetches_google_and_claude() -> None:
     auth_config = {
         "project_id": "demo-project",
         "client_email": "svc@example.iam.gserviceaccount.com",
@@ -74,16 +74,27 @@ async def test_fetch_models_for_key_vertex_service_account_ignores_soft_404_when
         (
             [
                 {
-                    "id": "gemini-2.0-flash",
+                    "id": "gemini-3.1-pro-preview",
                     "owned_by": "google",
-                    "display_name": "Gemini 2.0 Flash",
+                    "display_name": "Gemini 3.1 Pro Preview",
                     "api_format": "gemini:chat",
                 }
             ],
             None,
             True,
         ),
-        ([], "HTTP 404: not found", False),
+        (
+            [
+                {
+                    "id": "claude-3-7-sonnet@20250219",
+                    "owned_by": "anthropic",
+                    "display_name": "Claude 3.7 Sonnet",
+                    "api_format": "claude:chat",
+                }
+            ],
+            None,
+            True,
+        ),
     ]
 
     with (
@@ -111,7 +122,8 @@ async def test_fetch_models_for_key_vertex_service_account_ignores_soft_404_when
     assert errors == []
     assert meta is None
     ids = {m.get("id") for m in models}
-    assert "gemini-2.0-flash" in ids
+    assert "gemini-3.1-pro-preview" in ids
+    assert "claude-3-7-sonnet@20250219" in ids
 
 
 @pytest.mark.asyncio
@@ -131,7 +143,6 @@ async def test_fetch_models_for_key_vertex_api_key_returns_soft_404_when_all_fai
             "src.services.provider.adapters.vertex_ai.plugin._fetch_models_from_url",
             AsyncMock(
                 side_effect=[
-                    ([], "HTTP 404: not found", False),
                     ([], "HTTP 404: not found", False),
                 ]
             ),

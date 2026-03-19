@@ -15,6 +15,7 @@ export interface StartTestParams {
   apiFormat?: string
   endpointId?: string
   message?: string
+  requestBody?: Record<string, unknown>
   concurrency?: number
   onSuccess?: (result: TestModelFailoverResponse) => void
   /** Return `true` to indicate the failure has been handled; otherwise the composable sets `testResult`. */
@@ -55,6 +56,16 @@ export function useModelTest(options: UseModelTestOptions) {
     try {
       const trace = await requestTraceApi.getRequestTrace(reqId, { attemptedOnly: false })
       if (tracePollToken !== token || requestId.value !== reqId) return
+      testTrace.value = trace
+    } catch (err: unknown) {
+      if (isAxiosError(err) && err.response?.status === 404) return
+    }
+  }
+
+  async function refreshTraceSnapshot(reqId: string) {
+    try {
+      const trace = await requestTraceApi.getRequestTrace(reqId, { attemptedOnly: false })
+      if (requestId.value !== reqId) return
       testTrace.value = trace
     } catch (err: unknown) {
       if (isAxiosError(err) && err.response?.status === 404) return
@@ -128,6 +139,7 @@ export function useModelTest(options: UseModelTestOptions) {
         api_format: params.apiFormat,
         endpoint_id: params.endpointId,
         ...(normalizedMessage ? { message: normalizedMessage } : {}),
+        ...(params.requestBody ? { request_body: params.requestBody } : {}),
         request_id: reqId,
         concurrency: params.concurrency,
       }, {
@@ -135,6 +147,9 @@ export function useModelTest(options: UseModelTestOptions) {
       })
 
       if (result.success) {
+        await refreshTraceSnapshot(reqId)
+        stopPolling({ clearState: false })
+        testResult.value = result
         const successAttempt = result.attempts.find(a => a.status === 'success')
         const latency = successAttempt?.latency_ms != null ? ` (${successAttempt.latency_ms}ms)` : ''
         const mapped = successAttempt?.effective_model && successAttempt.effective_model !== params.modelName
@@ -142,10 +157,10 @@ export function useModelTest(options: UseModelTestOptions) {
           : ''
         params.onSuccess?.(result)
         showSuccess(`${params.displayLabel}${mapped} 测试成功${latency}`)
-        resetState()
         return
       }
 
+      await refreshTraceSnapshot(reqId)
       stopPolling({ clearState: false })
       const handled = params.onFailure?.(result)
       if (!handled) {

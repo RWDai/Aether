@@ -32,6 +32,7 @@ class CandidateKey:
     error_message: str | None = None
     status_code: int | None = None
     latency_ms: int | None = None
+    extra_data: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {
@@ -52,6 +53,7 @@ class CandidateKey:
             "error_message": self.error_message,
             "status_code": self.status_code,
             "latency_ms": self.latency_ms,
+            "extra_data": self.extra_data,
         }
         # drop Nones for compact audit payload
         return {k: v for k, v in data.items() if v is not None}

@@ -245,6 +245,7 @@ class TestModelFailoverRequest(BaseModel):
     api_format: str | None = None  # 指定 API 格式（endpoint signature）
     endpoint_id: str | None = None  # 指定仅使用该端点测试
     message: str | None = None
+    request_headers: dict[str, Any] | None = None
     request_body: dict[str, Any] | None = None
     request_id: str | None = None
     concurrency: int = Field(default=1, ge=1, le=20)
@@ -310,6 +311,31 @@ def _build_test_request_payload(request: TestModelFailoverRequest) -> dict[str, 
         "temperature": 0.7,
         "stream": True,
     }
+
+
+def _build_test_request_headers(request: TestModelFailoverRequest) -> dict[str, str]:
+    if not isinstance(request.request_headers, dict):
+        return {}
+
+    headers: dict[str, str] = {}
+    for raw_key, raw_value in request.request_headers.items():
+        key = str(raw_key or "").strip()
+        if not key or raw_value is None:
+            continue
+
+        if isinstance(raw_value, str):
+            value = raw_value
+        elif isinstance(raw_value, (bool, int, float)):
+            value = str(raw_value)
+        else:
+            try:
+                value = json.dumps(raw_value, ensure_ascii=False)
+            except (TypeError, ValueError):
+                value = str(raw_value)
+
+        headers[key] = value
+
+    return headers
 
 
 def _extract_test_debug_payload(response: dict[str, Any]) -> dict[str, Any] | None:
@@ -1660,6 +1686,7 @@ async def _execute_test_check(
     key: Any,
     effective_model: str,
     request_payload: dict[str, Any],
+    request_headers: dict[str, str] | None,
     request_timeout: float,
     provider_type: str,
     user: User | None,
@@ -1679,6 +1706,8 @@ async def _execute_test_check(
 
     auth_type = str(getattr(key, "auth_type", "api_key") or "api_key").lower()
     extra_headers = get_extra_headers_from_endpoint(endpoint) or {}
+    if request_headers:
+        extra_headers.update(request_headers)
     if auth_type == "oauth":
         account_id = (auth_config or {}).get("account_id")
         if account_id:
@@ -1738,6 +1767,7 @@ async def _run_concurrent_test(
     is_cancelled: Callable[[], Awaitable[bool]],
     request_id: str,
     request_payload: dict[str, Any],
+    request_headers: dict[str, str] | None,
     effective_model_by_candidate_index: dict[int, str],
     request_timeout: float,
     provider_type: str,
@@ -1873,6 +1903,7 @@ async def _run_concurrent_test(
                     str(request_payload.get("model", "") or ""),
                 ),
                 request_payload=request_payload,
+                request_headers=request_headers,
                 request_timeout=request_timeout,
                 provider_type=provider_type,
                 user=user,
@@ -2354,6 +2385,7 @@ async def test_model_failover(
         ).model_dump()
 
     request_payload = _build_test_request_payload(request)
+    request_headers = _build_test_request_headers(request)
     request_id = str(request.request_id or f"provider-test-{uuid4().hex[:12]}")
     request_timeout = float(getattr(provider, "request_timeout", 0) or TimeoutDefaults.HTTP_REQUEST)
     provider_type = str(getattr(provider, "provider_type", "") or "").lower()
@@ -2372,6 +2404,7 @@ async def test_model_failover(
             key=key,
             effective_model=effective_model,
             request_payload=request_payload,
+            request_headers=request_headers or None,
             request_timeout=request_timeout,
             provider_type=provider_type,
             user=current_user,
@@ -2416,6 +2449,7 @@ async def test_model_failover(
                 is_cancelled=http_request.is_disconnected,
                 request_id=request_id,
                 request_payload=dict(request_payload),
+                request_headers=request_headers or None,
                 effective_model_by_candidate_index=effective_model_by_candidate_index,
                 request_timeout=request_timeout,
                 provider_type=provider_type,
@@ -2434,7 +2468,7 @@ async def test_model_failover(
                 is_stream=False,
                 capability_requirements=None,
                 request_body_state=MutableRequestBodyState(dict(request_payload)),
-                request_headers=None,
+                request_headers=request_headers or None,
                 request_body=dict(request_payload),
                 affinity_key=f"provider-test:{provider.id}",
                 create_pending_usage=False,

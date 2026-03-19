@@ -4,7 +4,7 @@
       ref="fileInputRef"
       type="file"
       :accept="accept"
-      multiple
+      :multiple="multiple"
       class="hidden"
       @change="handleFileSelect"
     >
@@ -94,6 +94,7 @@ const props = withDefaults(defineProps<{
   disabled?: boolean
   resetKey?: string | number
   accept?: string
+  multiple?: boolean
   dropTitle?: string
   dropHint?: string
   manualLabel?: string
@@ -106,6 +107,7 @@ const props = withDefaults(defineProps<{
   disabled: false,
   resetKey: '',
   accept: '.json,.txt',
+  multiple: true,
   dropTitle: '拖入导入文件或点击选择',
   dropHint: '支持 .json / .txt，可多选',
   manualLabel: '',
@@ -218,13 +220,19 @@ function mergeFileContents(contents: string[]): string {
 }
 
 async function readFiles(files: File[]) {
-  const validFiles = files.filter(isValidFileType)
+  const sourceFiles = props.multiple ? files : files.slice(0, 1)
+
+  if (!props.multiple && files.length > 1) {
+    emitError('仅支持选择 1 个文件，已读取第一个文件', '提示')
+  }
+
+  const validFiles = sourceFiles.filter(isValidFileType)
   if (validFiles.length === 0) {
     emitError('仅支持 .json 或 .txt 文件', '格式错误')
     return
   }
-  if (validFiles.length < files.length) {
-    emitError(`已忽略 ${files.length - validFiles.length} 个不支持的文件`, '提示')
+  if (validFiles.length < sourceFiles.length) {
+    emitError(`已忽略 ${sourceFiles.length - validFiles.length} 个不支持的文件`, '提示')
   }
 
   try {

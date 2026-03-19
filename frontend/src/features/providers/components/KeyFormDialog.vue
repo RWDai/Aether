@@ -79,18 +79,19 @@
           {{ editingKey ? '' : '*' }}
         </Label>
         <template v-if="form.auth_type === 'service_account'">
-          <Textarea
-            :id="apiKeyInputId"
+          <JsonImportInput
             v-model="form.auth_config_text"
-            :required="!editingKey"
-            :placeholder="editingKey ? '留空表示不修改' : '粘贴完整的 Service Account JSON'"
-            class="min-h-[120px] font-mono text-xs"
-            autocomplete="off"
-            spellcheck="false"
+            :disabled="saving"
+            :reset-key="formNonce"
+            accept=".json,.txt,application/json,text/plain"
+            :multiple="false"
+            drop-title="拖入 Service Account JSON 或点击选择"
+            drop-hint="支持 .json / .txt，单文件导入"
+            :manual-placeholder="editingKey ? '留空表示不修改，或粘贴完整的 Service Account JSON' : '粘贴完整的 Service Account JSON'"
+            :manual-description="serviceAccountDescription"
+            textarea-class="min-h-[160px] font-mono text-xs break-all !rounded-xl"
+            @error="handleServiceAccountImportError"
           />
-          <p class="text-xs text-muted-foreground mt-1">
-            JSON 格式，包含 project_id、private_key 等字段
-          </p>
         </template>
         <template v-else>
           <Input
@@ -330,13 +331,14 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { Dialog, Button, Input, Label, Switch, Select, SelectTrigger, SelectValue, SelectContent, SelectItem, Textarea } from '@/components/ui'
+import { Dialog, Button, Input, Label, Switch, Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui'
 import { Key, SquarePen } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
 import { useFormDialog } from '@/composables/useFormDialog'
 import { parseApiError } from '@/utils/errorParser'
 import { parseNumberInput, parseNullableNumberInput } from '@/utils/form'
 import { log } from '@/utils/logger'
+import JsonImportInput from '@/components/common/JsonImportInput.vue'
 import {
   addProviderKey,
   updateProviderKey,
@@ -414,6 +416,12 @@ const visibleApiFormats = computed(() => {
 })
 
 const showAuthTypeSelector = computed(() => props.providerType === 'vertex_ai')
+
+const serviceAccountDescription = computed(() => (
+  props.editingKey
+    ? '留空表示不修改；JSON 格式，包含 project_id、private_key 等字段'
+    : 'JSON 格式，包含 project_id、private_key 等字段'
+))
 
 // 默认认证类型
 const defaultAuthType = 'api_key' as const
@@ -674,6 +682,10 @@ function parseAuthConfig(): Record<string, unknown> | null {
   } catch {
     return null
   }
+}
+
+function handleServiceAccountImportError(payload: { message: string, title?: string }) {
+  showError(payload.message, payload.title || '错误')
 }
 
 async function handleSave() {

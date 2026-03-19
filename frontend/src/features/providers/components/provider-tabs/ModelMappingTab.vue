@@ -319,13 +319,18 @@
     :testing="modelTest.testing.value"
     :trace="modelTest.testTrace.value"
     :request-id="modelTest.requestId.value"
+    :request-headers-draft="testRequestHeadersDraft"
+    :request-headers-reset-value="testRequestHeadersResetValue"
+    :request-headers-error="testRequestHeadersError"
     :request-body-draft="testRequestBodyDraft"
+    :request-body-reset-value="testRequestBodyResetValue"
     :request-body-error="testRequestBodyError"
-    :start-disabled="!selectedTestEndpoint || !!testRequestBodyError"
+    :start-disabled="!selectedTestEndpoint || !!testRequestHeadersError || !!testRequestBodyError"
     @close="handleTestDialogClose"
     @back="handleTestDialogBack"
     @select-endpoint="handleSelectTestEndpoint"
     @start="handleStartMappingTest"
+    @update:request-headers-draft="testRequestHeadersDraft = $event"
     @update:request-body-draft="testRequestBodyDraft = $event"
   />
 </template>
@@ -353,8 +358,12 @@ import { updateModel } from '@/api/endpoints/models'
 import { parseApiError } from '@/utils/errorParser'
 import type { ProviderWithEndpointsSummary } from '@/api/endpoints'
 import {
+  buildDefaultModelTestRequestHeaders,
   buildDefaultModelTestRequestBody,
+  parseModelTestRequestHeadersDraft,
   parseModelTestRequestBodyDraft,
+  POOL_TEST_CONCURRENCY,
+  SINGLE_TEST_CONCURRENCY,
 } from './model-test-request'
 
 interface MappingItem {
@@ -409,8 +418,14 @@ const pendingMappingKey = ref<string | null>(null)
 const testingModelName = ref<string | null>(null)
 const preselectedModelId = ref<string | null>(null)
 const selectedTestEndpoint = ref<ProviderEndpoint | null>(null)
+const testRequestHeadersDraft = ref('')
+const testRequestHeadersResetValue = ref('')
 const testRequestBodyDraft = ref('')
+const testRequestBodyResetValue = ref('')
+const isPoolManagedProvider = computed(() => Boolean(props.provider.pool_advanced))
 const activeEndpoints = computed(() => (props.endpoints ?? []).filter(endpoint => endpoint.is_active))
+const parsedTestRequestHeaders = computed(() => parseModelTestRequestHeadersDraft(testRequestHeadersDraft.value))
+const testRequestHeadersError = computed(() => parsedTestRequestHeaders.value.error)
 const parsedTestRequestBody = computed(() => parseModelTestRequestBodyDraft(testRequestBodyDraft.value))
 const testRequestBodyError = computed(() => parsedTestRequestBody.value.error)
 
@@ -651,7 +666,10 @@ function handleTestDialogClose() {
   testingModelName.value = null
   testingMapping.value = null
   selectedTestEndpoint.value = null
+  testRequestHeadersDraft.value = ''
+  testRequestHeadersResetValue.value = ''
   testRequestBodyDraft.value = ''
+  testRequestBodyResetValue.value = ''
 }
 
 function handleTestDialogBack() {
@@ -678,7 +696,10 @@ function runMappingTest(testingKey: string, modelName: string) {
   testingMapping.value = null
   testingModelName.value = modelName
   selectedTestEndpoint.value = activeEndpoints.value[0] ?? null
-  testRequestBodyDraft.value = buildDefaultModelTestRequestBody(modelName)
+  testRequestHeadersResetValue.value = buildDefaultModelTestRequestHeaders()
+  testRequestHeadersDraft.value = testRequestHeadersResetValue.value
+  testRequestBodyResetValue.value = buildDefaultModelTestRequestBody(modelName)
+  testRequestBodyDraft.value = testRequestBodyResetValue.value
 }
 
 async function handleStartMappingTest() {
@@ -686,6 +707,12 @@ async function handleStartMappingTest() {
   const endpoint = selectedTestEndpoint.value || activeEndpoints.value[0]
   if (!endpoint) {
     showError('请选择要测试的端点')
+    return
+  }
+
+  const { value: requestHeaders, error: requestHeadersError } = parsedTestRequestHeaders.value
+  if (!requestHeaders || requestHeadersError) {
+    showError(`测试请求头无效: ${requestHeadersError || '无效 JSON'}`)
     return
   }
 
@@ -703,7 +730,9 @@ async function handleStartMappingTest() {
     displayLabel: `[${endpoint.api_format}] 映射 "${testingModelName.value}"`,
     apiFormat: endpoint.api_format,
     endpointId: endpoint.id,
+    requestHeaders,
     requestBody,
+    concurrency: isPoolManagedProvider.value ? POOL_TEST_CONCURRENCY : SINGLE_TEST_CONCURRENCY,
   })
   if (pendingMappingKey.value === currentMappingKey) {
     pendingMappingKey.value = null

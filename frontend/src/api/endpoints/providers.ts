@@ -194,6 +194,7 @@ export interface TestModelFailoverRequest {
   api_format?: string
   endpoint_id?: string
   message?: string
+  request_headers?: Record<string, unknown>
   request_body?: Record<string, unknown>
   request_id?: string
   concurrency?: number

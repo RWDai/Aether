@@ -221,13 +221,18 @@
     :testing="modelTest.testing.value"
     :trace="modelTest.testTrace.value"
     :request-id="modelTest.requestId.value"
+    :request-headers-draft="testRequestHeadersDraft"
+    :request-headers-reset-value="testRequestHeadersResetValue"
+    :request-headers-error="testRequestHeadersError"
     :request-body-draft="testRequestBodyDraft"
+    :request-body-reset-value="testRequestBodyResetValue"
     :request-body-error="testRequestBodyError"
-    :start-disabled="!selectedTestEndpoint || !!testRequestBodyError"
+    :start-disabled="!selectedTestEndpoint || !!testRequestHeadersError || !!testRequestBodyError"
     @close="handleTestDialogClose"
     @back="handleTestDialogBack"
     @start="handleStartPendingTest"
     @select-endpoint="handleSelectTestEndpoint"
+    @update:request-headers-draft="testRequestHeadersDraft = $event"
     @update:request-body-draft="testRequestBodyDraft = $event"
   />
 </template>
@@ -252,8 +257,12 @@ import { formatApiFormat } from '@/api/endpoints/types/api-format'
 import type { ProviderWithEndpointsSummary } from '@/api/endpoints'
 import ModelTestDialog from './ModelTestDialog.vue'
 import {
+  buildDefaultModelTestRequestHeaders,
   buildDefaultModelTestRequestBody,
+  parseModelTestRequestHeadersDraft,
   parseModelTestRequestBodyDraft,
+  POOL_TEST_CONCURRENCY,
+  SINGLE_TEST_CONCURRENCY,
 } from './model-test-request'
 
 const props = defineProps<{
@@ -280,8 +289,14 @@ const localModels = ref<Model[]>([])
 const togglingModelId = ref<string | null>(null)
 const pendingTestModel = ref<Model | null>(null)
 const selectedTestEndpoint = ref<ProviderEndpoint | null>(null)
+const testRequestHeadersDraft = ref('')
+const testRequestHeadersResetValue = ref('')
 const testRequestBodyDraft = ref('')
+const testRequestBodyResetValue = ref('')
+const isPoolManagedProvider = computed(() => Boolean(props.provider.pool_advanced))
 const activeEndpoints = computed(() => (props.endpoints ?? []).filter(endpoint => endpoint.is_active))
+const parsedTestRequestHeaders = computed(() => parseModelTestRequestHeadersDraft(testRequestHeadersDraft.value))
+const testRequestHeadersError = computed(() => parsedTestRequestHeaders.value.error)
 const parsedTestRequestBody = computed(() => parseModelTestRequestBodyDraft(testRequestBodyDraft.value))
 const testRequestBodyError = computed(() => parsedTestRequestBody.value.error)
 const models = computed(() => props.models ?? localModels.value)
@@ -449,7 +464,10 @@ function handleTestDialogClose() {
   modelTest.resetState()
   pendingTestModel.value = null
   selectedTestEndpoint.value = null
+  testRequestHeadersDraft.value = ''
+  testRequestHeadersResetValue.value = ''
   testRequestBodyDraft.value = ''
+  testRequestBodyResetValue.value = ''
 }
 
 function handleTestDialogBack() {
@@ -474,6 +492,12 @@ async function handleStartPendingTest() {
     return
   }
 
+  const { value: requestHeaders, error: requestHeadersError } = parsedTestRequestHeaders.value
+  if (!requestHeaders || requestHeadersError) {
+    showError(`测试请求头无效: ${requestHeadersError || '无效 JSON'}`)
+    return
+  }
+
   const { value: requestBody, error } = parsedTestRequestBody.value
   if (!requestBody || error) {
     showError(`测试请求体无效: ${error || '无效 JSON'}`)
@@ -490,8 +514,9 @@ async function handleStartPendingTest() {
     displayLabel: `${endpointPrefix}${modelName}`,
     apiFormat: endpoint.api_format,
     endpointId: endpoint.id,
+    requestHeaders,
     requestBody,
-    concurrency: 5,
+    concurrency: isPoolManagedProvider.value ? POOL_TEST_CONCURRENCY : SINGLE_TEST_CONCURRENCY,
     onError: () => {
       if (activeEndpoints.value.length > 1) {
         return true
@@ -510,9 +535,12 @@ async function testModelConnection(model: Model) {
 
   pendingTestModel.value = model
   selectedTestEndpoint.value = activeEndpoints.value[0] ?? null
-  testRequestBodyDraft.value = buildDefaultModelTestRequestBody(
+  testRequestHeadersResetValue.value = buildDefaultModelTestRequestHeaders()
+  testRequestHeadersDraft.value = testRequestHeadersResetValue.value
+  testRequestBodyResetValue.value = buildDefaultModelTestRequestBody(
     model.global_model_name || model.provider_model_name,
   )
+  testRequestBodyDraft.value = testRequestBodyResetValue.value
   modelTest.testResult.value = null
   modelTest.dialogOpen.value = true
 }

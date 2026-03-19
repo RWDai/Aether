@@ -15,6 +15,7 @@ export interface StartTestParams {
   apiFormat?: string
   endpointId?: string
   message?: string
+  requestHeaders?: Record<string, unknown>
   requestBody?: Record<string, unknown>
   concurrency?: number
   onSuccess?: (result: TestModelFailoverResponse) => void
@@ -139,6 +140,7 @@ export function useModelTest(options: UseModelTestOptions) {
         api_format: params.apiFormat,
         endpoint_id: params.endpointId,
         ...(normalizedMessage ? { message: normalizedMessage } : {}),
+        ...(params.requestHeaders ? { request_headers: params.requestHeaders } : {}),
         ...(params.requestBody ? { request_body: params.requestBody } : {}),
         request_id: reqId,
         concurrency: params.concurrency,

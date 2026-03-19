@@ -1,7 +1,7 @@
 <template>
   <Dialog
     :open="open"
-    size="2xl"
+    size="3xl"
     :close-on-backdrop="false"
     @update:open="(val: boolean) => { if (!val) emit('close') }"
   >
@@ -37,12 +37,12 @@
             当前测试会固定到选中的端点
           </div>
         </div>
-        <div class="space-y-2">
+        <div class="grid gap-2 md:grid-cols-2">
           <button
             v-for="endpoint in endpoints"
             :key="endpoint.id"
             type="button"
-            class="w-full rounded-lg border px-3 py-3 text-left transition-colors"
+            class="h-full w-full rounded-lg border px-3 py-3 text-left transition-colors"
             :class="selectedEndpoint?.id === endpoint.id
               ? 'border-primary bg-primary/5'
               : 'border-border/60 hover:bg-muted/40'"
@@ -65,33 +65,91 @@
         </div>
       </div>
 
-      <div class="space-y-2">
-        <div class="flex items-center justify-between gap-3">
-          <div class="text-sm font-medium">
-            测试请求体
+      <div class="grid gap-4 lg:grid-cols-2 lg:items-start">
+        <div class="space-y-2">
+          <div class="flex items-center justify-between gap-3">
+            <div class="text-sm font-medium">
+              测试请求头
+            </div>
+            <div class="flex items-center gap-1">
+              <Button
+                variant="ghost"
+                size="icon"
+                class="h-8 w-8 rounded-lg text-muted-foreground"
+                title="格式化请求头 JSON"
+                @click="formatRequestHeadersDraft"
+              >
+                <Code2 class="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                class="h-8 w-8 rounded-lg text-muted-foreground"
+                title="重置请求头"
+                @click="resetRequestHeadersDraft"
+              >
+                <RotateCcw class="h-4 w-4" />
+              </Button>
+            </div>
           </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            @click="formatRequestBodyDraft"
+          <Textarea
+            :model-value="requestHeadersDraft"
+            class="min-h-[260px] font-mono text-xs"
+            placeholder="输入 JSON 请求头"
+            @update:model-value="emit('update:requestHeadersDraft', $event)"
+          />
+          <div
+            v-if="requestHeadersError"
+            class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
           >
-            格式化 JSON
-          </Button>
+            {{ requestHeadersError }}
+          </div>
+          <div class="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-[11px] text-muted-foreground">
+            这里的请求头会合并到测试请求里；鉴权头和必要系统头仍由后端按端点规则补齐。
+          </div>
         </div>
-        <Textarea
-          :model-value="requestBodyDraft"
-          class="min-h-[260px] font-mono text-xs"
-          placeholder="输入 JSON 请求体"
-          @update:model-value="emit('update:requestBodyDraft', $event)"
-        />
-        <div
-          v-if="requestBodyError"
-          class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
-        >
-          {{ requestBodyError }}
-        </div>
-        <div class="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-[11px] text-muted-foreground">
-          会强制使用当前测试模型；这里编辑的是测试基础请求体，实际发送时会按端点格式转换并应用规则。
+
+        <div class="space-y-2">
+          <div class="flex items-center justify-between gap-3">
+            <div class="text-sm font-medium">
+              测试请求体
+            </div>
+            <div class="flex items-center gap-1">
+              <Button
+                variant="ghost"
+                size="icon"
+                class="h-8 w-8 rounded-lg text-muted-foreground"
+                title="格式化请求体 JSON"
+                @click="formatRequestBodyDraft"
+              >
+                <Code2 class="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                class="h-8 w-8 rounded-lg text-muted-foreground"
+                title="重置请求体"
+                @click="resetRequestBodyDraft"
+              >
+                <RotateCcw class="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+          <Textarea
+            :model-value="requestBodyDraft"
+            class="min-h-[260px] font-mono text-xs"
+            placeholder="输入 JSON 请求体"
+            @update:model-value="emit('update:requestBodyDraft', $event)"
+          />
+          <div
+            v-if="requestBodyError"
+            class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+          >
+            {{ requestBodyError }}
+          </div>
+          <div class="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-[11px] text-muted-foreground">
+            会强制使用当前测试模型；这里编辑的是测试基础请求体，实际发送时会按端点格式转换并应用规则。
+          </div>
         </div>
       </div>
 
@@ -582,7 +640,6 @@
     <template #footer>
       <Button
         variant="outline"
-        size="sm"
         @click="emit('close')"
       >
         {{ showSetup ? '取消' : '关闭' }}
@@ -590,7 +647,6 @@
       <Button
         v-if="showResult"
         variant="outline"
-        size="sm"
         @click="emit('back')"
       >
         返回
@@ -601,7 +657,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { Check, Copy, Loader2, Maximize2, Minimize2 } from 'lucide-vue-next'
+import { Check, Code2, Copy, Loader2, Maximize2, Minimize2, RotateCcw } from 'lucide-vue-next'
 import {
   Badge,
   Card,
@@ -635,7 +691,11 @@ const props = defineProps<{
   testing?: boolean
   trace?: RequestTrace | null
   requestId?: string | null
+  requestHeadersDraft?: string
+  requestHeadersResetValue?: string
+  requestHeadersError?: string | null
   requestBodyDraft?: string
+  requestBodyResetValue?: string
   requestBodyError?: string | null
   startDisabled?: boolean
 }>()
@@ -645,10 +705,12 @@ const emit = defineEmits<{
   back: []
   start: []
   selectEndpoint: [endpointId: string]
+  'update:requestHeadersDraft': [value: string]
   'update:requestBodyDraft': [value: string]
 }>()
 
 const endpoints = computed(() => props.endpoints ?? [])
+const requestHeadersDraft = computed(() => props.requestHeadersDraft ?? '')
 const requestBodyDraft = computed(() => props.requestBodyDraft ?? '')
 const traceCandidates = computed(() => props.trace?.candidates ?? [])
 const showSetup = computed(() => props.open && !props.testing && !props.result)
@@ -664,7 +726,7 @@ const dialogTitle = computed(() => {
 
 const dialogDescription = computed(() => {
   if (showSetup.value && props.selectingModelName) {
-    return `为 ${props.selectingModelName} 选择端点并编辑测试请求体`
+    return `为 ${props.selectingModelName} 选择端点并编辑测试请求头与请求体`
   }
   if (props.testing && props.selectedEndpoint) {
     return `正在通过 ${formatApiFormat(props.selectedEndpoint.api_format)} 测试 ${props.selectingModelName || '模型'}`
@@ -969,11 +1031,39 @@ function collapseInspectionContent() {
   inspectionExpandDepth.value = 0
 }
 
+function formatRequestHeadersDraft() {
+  formatJsonDraft(requestHeadersDraft.value, value => emit('update:requestHeadersDraft', value), '{}')
+}
+
 function formatRequestBodyDraft() {
+  formatJsonDraft(requestBodyDraft.value, value => emit('update:requestBodyDraft', value))
+}
+
+function resetRequestHeadersDraft() {
+  emit('update:requestHeadersDraft', props.requestHeadersResetValue ?? '{}')
+}
+
+function resetRequestBodyDraft() {
+  emit('update:requestBodyDraft', props.requestBodyResetValue ?? '')
+}
+
+function formatJsonDraft(
+  draft: string,
+  onFormatted: (value: string) => void,
+  emptyFallback?: string,
+) {
+  const normalized = draft.trim()
+  if (!normalized) {
+    if (emptyFallback !== undefined) {
+      onFormatted(emptyFallback)
+    }
+    return
+  }
+
   try {
-    const parsed = JSON.parse(requestBodyDraft.value)
+    const parsed = JSON.parse(normalized)
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return
-    emit('update:requestBodyDraft', JSON.stringify(parsed, null, 2))
+    onFormatted(JSON.stringify(parsed, null, 2))
   } catch {
     // keep user input untouched when JSON is invalid
   }

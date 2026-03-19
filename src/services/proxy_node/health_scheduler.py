@@ -74,9 +74,13 @@ class ProxyNodeHealthScheduler:
         if not self.running:
             return
         self.running = False
+        scheduler = get_scheduler()
+        scheduler.remove_job("proxy_node_health_check")
         logger.info("ProxyNodeHealthScheduler stopped")
 
     async def _scheduled_check(self) -> None:
+        if not self.running:
+            return
         await self._check_heartbeats()
         self._check_count = (self._check_count + 1) % _EVENT_CLEANUP_INTERVAL
         if self._check_count == 0:

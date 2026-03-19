@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from src.models.database import StatsDaily, StatsUserDaily
 from src.services.system.stats_aggregator import (
@@ -59,6 +60,20 @@ class _BatchUserStatsSession:
 
     def commit(self) -> None:
         self.commit_count += 1
+
+
+class _RetryCommitSession:
+    def __init__(self) -> None:
+        self.commit_count = 0
+        self.rollback_count = 0
+
+    def commit(self) -> None:
+        self.commit_count += 1
+        if self.commit_count == 1:
+            raise IntegrityError("insert", {}, Exception("duplicate key"))
+
+    def rollback(self) -> None:
+        self.rollback_count += 1
 
 
 def test_query_stats_hybrid_batches_statsdaily_lookup_and_merges_realtime_ranges(
@@ -165,6 +180,79 @@ def test_aggregate_user_daily_stats_batch_updates_all_users_in_two_queries() -> 
     assert user_two.success_requests == 0
     assert user_two.error_requests == 0
     assert user_two.total_cost == 0.0
+
+
+def test_aggregate_daily_stats_bundle_retries_after_integrity_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target_day = datetime(2026, 3, 1, tzinfo=timezone.utc)
+    db = _RetryCommitSession()
+    stats_calls: list[SimpleNamespace] = []
+    stage_calls: list[str] = []
+
+    def fake_aggregate_daily_stats(*_args: object, **_kwargs: object) -> SimpleNamespace:
+        stats = SimpleNamespace(is_complete=False, aggregated_at=None)
+        stats_calls.append(stats)
+        stage_calls.append("daily")
+        return stats
+
+    def fake_model_stats(*_args: object, **_kwargs: object) -> list[object]:
+        stage_calls.append("model")
+        return []
+
+    def fake_provider_stats(*_args: object, **_kwargs: object) -> list[object]:
+        stage_calls.append("provider")
+        return []
+
+    def fake_api_key_stats(*_args: object, **_kwargs: object) -> list[object]:
+        stage_calls.append("api_key")
+        return []
+
+    def fake_error_stats(*_args: object, **_kwargs: object) -> list[object]:
+        stage_calls.append("error")
+        return []
+
+    def fake_user_daily_stats(*_args: object, **_kwargs: object) -> list[object]:
+        stage_calls.append("user")
+        return []
+
+    monkeypatch.setattr(StatsAggregatorService, "aggregate_daily_stats", fake_aggregate_daily_stats)
+    monkeypatch.setattr(StatsAggregatorService, "aggregate_daily_model_stats", fake_model_stats)
+    monkeypatch.setattr(
+        StatsAggregatorService, "aggregate_daily_provider_stats", fake_provider_stats
+    )
+    monkeypatch.setattr(StatsAggregatorService, "aggregate_daily_api_key_stats", fake_api_key_stats)
+    monkeypatch.setattr(StatsAggregatorService, "aggregate_daily_error_stats", fake_error_stats)
+    monkeypatch.setattr(
+        StatsAggregatorService, "aggregate_user_daily_stats_batch", fake_user_daily_stats
+    )
+
+    result = StatsAggregatorService.aggregate_daily_stats_bundle(
+        cast(Any, db),
+        target_day,
+        user_ids=["user-1"],
+    )
+
+    assert db.commit_count == 2
+    assert db.rollback_count == 1
+    assert len(stats_calls) == 2
+    assert stage_calls == [
+        "daily",
+        "model",
+        "provider",
+        "api_key",
+        "error",
+        "user",
+        "daily",
+        "model",
+        "provider",
+        "api_key",
+        "error",
+        "user",
+    ]
+    assert result is stats_calls[-1]
+    assert result.is_complete is True
+    assert result.aggregated_at is not None
 
 
 def test_compute_percentiles_by_local_day_returns_sqlite_fallback_without_queries() -> None:

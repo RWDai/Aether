@@ -20,6 +20,9 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
 
+_proxy_node_task_coordinator: Any | None = None
+
+
 def _reset_tunnel_connected_on_startup() -> None:
     """服务端启动时将所有 tunnel_connected=True 的节点重置为 False/OFFLINE。
 
@@ -89,8 +92,10 @@ async def _on_startup() -> None:
 
     from src.clients import get_redis_client
 
+    global _proxy_node_task_coordinator
     redis_client = await get_redis_client()
     task_coordinator = StartupTaskCoordinator(redis_client)
+    _proxy_node_task_coordinator = task_coordinator
 
     proxy_node_health_scheduler = get_proxy_node_health_scheduler()
     active = await task_coordinator.acquire("proxy_node_health")
@@ -104,6 +109,10 @@ async def _on_startup() -> None:
     if active:
         logger.info("启动 ProxyNode 心跳检测调度器...")
         await proxy_node_health_scheduler.start()
+        task_coordinator.register_lock_lost_callback(
+            "proxy_node_health",
+            lambda _name: _stop_proxy_node_scheduler_on_lock_lost(logger),
+        )
 
 
 async def _on_shutdown() -> None:
@@ -117,14 +126,28 @@ async def _on_shutdown() -> None:
 
     from src.clients import get_redis_client
 
-    redis_client = await get_redis_client()
-    task_coordinator = StartupTaskCoordinator(redis_client)
+    global _proxy_node_task_coordinator
+    if _proxy_node_task_coordinator is None:
+        redis_client = await get_redis_client()
+        _proxy_node_task_coordinator = StartupTaskCoordinator(redis_client)
 
     scheduler = get_proxy_node_health_scheduler()
     if scheduler.running:
         logger.info("停止 ProxyNode 心跳检测调度器...")
         await scheduler.stop()
-        await task_coordinator.release("proxy_node_health")
+    await _proxy_node_task_coordinator.release("proxy_node_health")
+    _proxy_node_task_coordinator = None
+
+
+async def _stop_proxy_node_scheduler_on_lock_lost(logger: Any) -> None:
+    from src.services.proxy_node.health_scheduler import get_proxy_node_health_scheduler
+
+    scheduler = get_proxy_node_health_scheduler()
+    if not scheduler.running:
+        return
+
+    logger.warning("检测到 proxy_node_health 的 leader 锁已丢失，停止本实例的 ProxyNode 心跳检测")
+    await scheduler.stop()
 
 
 async def _health_check() -> ModuleHealth:

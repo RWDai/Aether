@@ -54,10 +54,14 @@ class QuotaScheduler:
             return
 
         self.running = False
+        scheduler = get_scheduler()
+        scheduler.remove_job("quota_reset_check")
         logger.info("Quota scheduler stopped")
 
     async def _scheduled_quota_check(self) -> None:
         """额度检查任务（定时调用）"""
+        if not self.running:
+            return
         await self._check_and_reset_quotas()
 
     async def _check_and_reset_quotas(self) -> None:

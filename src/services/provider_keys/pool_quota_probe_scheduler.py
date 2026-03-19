@@ -183,6 +183,8 @@ class PoolQuotaProbeScheduler:
         if not self.running:
             return
         self.running = False
+        scheduler = get_scheduler()
+        scheduler.remove_job("pool_quota_probe_check")
         logger.info("PoolQuotaProbeScheduler stopped")
 
     async def _scheduled_probe_check(self) -> None:

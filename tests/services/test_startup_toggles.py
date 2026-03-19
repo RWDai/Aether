@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
 
+import src.main as main_module
 import src.services.system.maintenance_scheduler as maintenance_scheduler_module
 from src.config.settings import config
 from src.services.system.maintenance_scheduler import MaintenanceScheduler
@@ -43,6 +47,85 @@ async def test_maintenance_scheduler_start_skips_startup_task_when_disabled(
     await scheduler.start()
 
     assert created is False
+
+
+@pytest.mark.asyncio
+async def test_maintenance_scheduler_stop_cancels_startup_task_and_removes_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scheduler = MaintenanceScheduler()
+    scheduler.running = True
+    scheduler._startup_task = asyncio.create_task(asyncio.sleep(3600))
+    removed_jobs: list[str] = []
+
+    monkeypatch.setattr(
+        maintenance_scheduler_module,
+        "get_scheduler",
+        lambda: SimpleNamespace(remove_job=lambda job_id: removed_jobs.append(job_id)),
+    )
+
+    await scheduler.stop()
+
+    assert scheduler.running is False
+    assert scheduler._startup_task is None
+    assert set(removed_jobs) == {
+        "stats_aggregation",
+        "stats_hourly_aggregation",
+        "wallet_daily_usage_aggregation",
+        "usage_cleanup",
+        "pool_monitor",
+        "http_client_idle_cleanup",
+        "pending_cleanup",
+        "audit_cleanup",
+        "gemini_file_mapping_cleanup",
+        "candidate_cleanup",
+        "db_maintenance",
+        "antigravity_ua_refresh",
+        scheduler.CHECKIN_JOB_ID,
+    }
+
+
+@pytest.mark.asyncio
+async def test_stop_service_on_lock_lost_keeps_state_when_stop_fails() -> None:
+    state = main_module.LifecycleState()
+    service = SimpleNamespace()
+    state.quota_scheduler = cast(Any, service)
+
+    async def fail_stop() -> None:
+        raise RuntimeError("boom")
+
+    await main_module._stop_service_on_lock_lost(
+        state,
+        lock_name="quota_scheduler",
+        service_name="月卡额度重置调度器",
+        state_attr="quota_scheduler",
+        stop=fail_stop,
+    )
+
+    assert state.quota_scheduler is service
+
+
+@pytest.mark.asyncio
+async def test_stop_service_on_lock_lost_clears_state_after_success() -> None:
+    state = main_module.LifecycleState()
+    service = SimpleNamespace()
+    state.quota_scheduler = cast(Any, service)
+    stopped = False
+
+    async def stop() -> None:
+        nonlocal stopped
+        stopped = True
+
+    await main_module._stop_service_on_lock_lost(
+        state,
+        lock_name="quota_scheduler",
+        service_name="月卡额度重置调度器",
+        state_attr="quota_scheduler",
+        stop=stop,
+    )
+
+    assert stopped is True
+    assert state.quota_scheduler is None
 
 
 def test_http_client_idle_cleanup_interval_env_invalid(
@@ -276,7 +359,7 @@ async def test_perform_cleanup_deletes_first_and_uses_non_overlapping_windows(
 
     class _FakeDateTime(datetime):
         @classmethod
-        def now(cls, tz=None):  # type: ignore[override]
+        def now(cls, tz: timezone | None = None) -> datetime:  # type: ignore[override]
             if tz is None:
                 return fixed_now.replace(tzinfo=None)
             return fixed_now.astimezone(tz)
@@ -291,7 +374,7 @@ async def test_perform_cleanup_deletes_first_and_uses_non_overlapping_windows(
 
     calls: list[tuple[str, datetime, int, datetime | None]] = []
 
-    def _record(name: str, count: int):
+    def _record(name: str, count: int) -> Callable[..., int]:
         def _inner(
             cutoff_time: datetime,
             batch_size: int,
@@ -313,6 +396,10 @@ async def test_perform_cleanup_deletes_first_and_uses_non_overlapping_windows(
         "auto_delete_expired_keys": False,
     }
 
+    def _delete_old_records(cutoff_time: datetime, batch_size: int) -> int:
+        calls.append(("delete", cutoff_time, batch_size, None))
+        return 5
+
     monkeypatch.setattr(maintenance_scheduler_module, "datetime", _FakeDateTime)
     monkeypatch.setattr(
         maintenance_scheduler_module.asyncio, "get_running_loop", lambda: _FakeLoop()
@@ -330,8 +417,7 @@ async def test_perform_cleanup_deletes_first_and_uses_non_overlapping_windows(
     monkeypatch.setattr(
         scheduler,
         "_delete_old_records",
-        lambda cutoff_time, batch_size: calls.append(("delete", cutoff_time, batch_size, None))
-        or 5,
+        _delete_old_records,
     )
     monkeypatch.setattr(
         scheduler,

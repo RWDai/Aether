@@ -54,9 +54,7 @@ KEY_FETCH_TIMEOUT_SECONDS = 120
 MODEL_FETCH_HTTP_TIMEOUT = 10.0
 
 # 启动时首次自动获取开关与延迟
-MODEL_FETCH_STARTUP_ENABLED = (
-    os.getenv("MODEL_FETCH_STARTUP_ENABLED", "true").lower() == "true"
-)
+MODEL_FETCH_STARTUP_ENABLED = os.getenv("MODEL_FETCH_STARTUP_ENABLED", "true").lower() == "true"
 MODEL_FETCH_STARTUP_DELAY_SECONDS = max(
     0,
     int(os.getenv("MODEL_FETCH_STARTUP_DELAY_SECONDS", "10")),
@@ -315,6 +313,8 @@ class ModelFetchScheduler:
     async def stop(self) -> None:
         """停止调度器"""
         self._running = False
+        scheduler = get_scheduler()
+        scheduler.remove_job("model_auto_fetch")
 
         # 取消并等待启动任务完成
         if self._startup_task and not self._startup_task.done():
@@ -348,6 +348,8 @@ class ModelFetchScheduler:
 
     async def _scheduled_fetch_models(self) -> None:
         """定时任务入口"""
+        if not self._running:
+            return
         async with self._lock:
             await self._perform_fetch_all_keys()
 

@@ -11,9 +11,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import pathlib
 import uuid
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from src.core.logger import logger
@@ -35,6 +37,8 @@ class StartupTaskCoordinator:
         self.redis = redis_client
         self._tokens: dict[str, str] = {}
         self._file_handles: dict[str, object] = {}
+        self._refresh_tasks: dict[str, asyncio.Task[None]] = {}
+        self._lock_lost_callbacks: dict[str, Callable[[str], Awaitable[None] | None]] = {}
         self._lock_dir = pathlib.Path(lock_dir or os.getenv("TASK_LOCK_DIR", "./.locks"))
         if not self._lock_dir.exists():
             self._lock_dir.mkdir(parents=True, exist_ok=True)
@@ -80,6 +84,7 @@ class StartupTaskCoordinator:
                     )
                     if result == 1:
                         self._tokens[name] = token
+                        self._start_refresh_task(name, ttl)
                         logger.info(f"任务 {name} 通过 Redis 锁独占执行")
                         return True
                     return False
@@ -88,6 +93,7 @@ class StartupTaskCoordinator:
                     acquired = await self.redis.set(self._redis_key(name), token, nx=True, ex=ttl)
                     if acquired:
                         self._tokens[name] = token
+                        self._start_refresh_task(name, ttl)
                         logger.info(f"任务 {name} 通过 Redis 锁独占执行")
                         return True
                     return False
@@ -97,6 +103,11 @@ class StartupTaskCoordinator:
         return await self._acquire_file_lock(name)
 
     async def release(self, name: str) -> Any:
+        refresh_task = self._refresh_tasks.pop(name, None)
+        if refresh_task is not None:
+            refresh_task.cancel()
+        self._lock_lost_callbacks.pop(name, None)
+
         if self.redis and name in self._tokens:
             token = self._tokens.pop(name)
             script = """
@@ -136,6 +147,72 @@ class StartupTaskCoordinator:
         except BlockingIOError:
             handle.close()
             return False
+
+    def register_lock_lost_callback(
+        self,
+        name: str,
+        callback: Callable[[str], Awaitable[None] | None],
+    ) -> None:
+        self._lock_lost_callbacks[name] = callback
+
+    def _start_refresh_task(self, name: str, ttl: int) -> None:
+        if not self.redis:
+            return
+
+        existing_task = self._refresh_tasks.pop(name, None)
+        if existing_task is not None:
+            existing_task.cancel()
+
+        self._refresh_tasks[name] = asyncio.create_task(self._refresh_lock_loop(name, ttl))
+
+    async def _refresh_lock(self, name: str, ttl: int) -> bool:
+        token = self._tokens.get(name)
+        if not self.redis or token is None:
+            return False
+
+        script = """
+        if redis.call('GET', KEYS[1]) == ARGV[1] then
+            return redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2]))
+        end
+        return 0
+        """
+        result = await self.redis.eval(script, 1, self._redis_key(name), token, ttl)
+        return result == 1
+
+    async def _refresh_lock_loop(self, name: str, ttl: int) -> None:
+        interval = max(1, ttl // 3)
+        try:
+            while name in self._tokens:
+                await asyncio.sleep(interval)
+                if name not in self._tokens:
+                    break
+                try:
+                    refreshed = await self._refresh_lock(name, ttl)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # pragma: no cover - 续租失败后下轮重试
+                    logger.warning(f"续租任务锁 {name} 失败: {exc}")
+                    continue
+
+                if not refreshed:
+                    logger.warning(f"任务 {name} 的 Redis 锁已失效，停止续租")
+                    self._tokens.pop(name, None)
+                    await self._notify_lock_lost(name)
+                    break
+        except asyncio.CancelledError:
+            raise
+
+    async def _notify_lock_lost(self, name: str) -> None:
+        callback = self._lock_lost_callbacks.pop(name, None)
+        if callback is None:
+            return
+
+        try:
+            result = callback(name)
+            if result is not None:
+                await result
+        except Exception as exc:  # pragma: no cover - 回调失败仅记录日志
+            logger.exception("任务 {} 的失锁回调执行失败: {}", name, exc)
 
 
 async def ensure_singleton_task(

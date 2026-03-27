@@ -23,11 +23,23 @@ jobs:
       matrix:
         include:
           - name: linux-amd64
+            libc: gnu
             target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             use_cross: true
           - name: linux-arm64
+            libc: gnu
             target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            use_cross: true
+          - name: linux-musl-amd64
+            libc: musl
+            target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            use_cross: true
+          - name: linux-musl-arm64
+            libc: musl
+            target: aarch64-unknown-linux-musl
             os: ubuntu-latest
             use_cross: true
           - name: macos-amd64
@@ -200,8 +212,10 @@ jobs:
           cd aether-proxy
 
           TABLE="| Platform | Download |\n|----------|----------|\n"
-          TABLE+="| Linux x86_64 | [aether-proxy-linux-amd64.tar.gz](${BASE}/aether-proxy-linux-amd64.tar.gz) |\n"
-          TABLE+="| Linux ARM64 | [aether-proxy-linux-arm64.tar.gz](${BASE}/aether-proxy-linux-arm64.tar.gz) |\n"
+          TABLE+="| Linux x86_64 (GNU) | [aether-proxy-linux-amd64.tar.gz](${BASE}/aether-proxy-linux-amd64.tar.gz) |\n"
+          TABLE+="| Linux ARM64 (GNU) | [aether-proxy-linux-arm64.tar.gz](${BASE}/aether-proxy-linux-arm64.tar.gz) |\n"
+          TABLE+="| Linux x86_64 (musl) | [aether-proxy-linux-musl-amd64.tar.gz](${BASE}/aether-proxy-linux-musl-amd64.tar.gz) |\n"
+          TABLE+="| Linux ARM64 (musl) | [aether-proxy-linux-musl-arm64.tar.gz](${BASE}/aether-proxy-linux-musl-arm64.tar.gz) |\n"
           TABLE+="| macOS x86_64 | [aether-proxy-macos-amd64.tar.gz](${BASE}/aether-proxy-macos-amd64.tar.gz) |\n"
           TABLE+="| macOS ARM64 | [aether-proxy-macos-arm64.tar.gz](${BASE}/aether-proxy-macos-arm64.tar.gz) |\n"
           TABLE+="| Windows x86_64 | [aether-proxy-windows-amd64.zip](${BASE}/aether-proxy-windows-amd64.zip) |"

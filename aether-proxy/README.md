@@ -6,6 +6,10 @@ Tunnel 模式下代理节点**无需对外监听端口**，仅需出站连接到
 
 ## 安装
 
+`aether-proxy` 现在会根据宿主机自动选择服务管理器：
+- 常规 Linux 发行版：`systemd`
+- Alpine Linux：`OpenRC`
+
 ### Docker Compose 部署
 
 ```bash
@@ -47,7 +51,7 @@ sudo aether-proxy setup
 sudo aether-proxy uninstall
 ```
 
-完成向导后, 配置自动保存到 `aether-proxy.toml`，如果启用了 Install Service，将自动注册并启动 systemd 服务。
+完成向导后, 配置自动保存到 `aether-proxy.toml`，如果启用了 Install Service，将自动注册并启动当前系统支持的服务（`systemd` 或 `OpenRC`）。
 
 ### 直接运行
 

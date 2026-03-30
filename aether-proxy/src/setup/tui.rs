@@ -24,7 +24,7 @@ use crate::config::{ConfigFile, ServerEntry};
 
 /// Outcome of the setup wizard, returned to the caller.
 pub enum SetupOutcome {
-    /// Config saved; systemd service installed and started.
+    /// Config saved; service installed and started.
     ServiceInstalled,
     /// Config saved; no service -- caller should start the proxy directly.
     ReadyToRun(PathBuf),
@@ -160,7 +160,7 @@ impl App {
                     .into(),
                     kind: FieldKind::Bool,
                     required: true,
-                    help: "Install as systemd service (requires root) -- Enter to toggle",
+                    help: "Install as system service (systemd/OpenRC, requires root) -- Space to toggle, Enter to finish",
                 },
             ],
             selected: 0,
@@ -399,23 +399,20 @@ impl App {
             }
             KeyCode::Home => self.selected = 0,
             KeyCode::End => self.selected = self.total_field_count() - 1,
-            KeyCode::Enter | KeyCode::Char(' ') => {
+            KeyCode::Enter => {
                 let kind = self.selected_field().kind;
                 let key_str = self.selected_field().key;
                 let value = self.selected_field().value.clone();
                 match kind {
                     FieldKind::Bool => {
-                        let toggled = if value == "true" { "false" } else { "true" };
-                        if key_str == "install_service"
-                            && toggled == "true"
-                            && !super::service::is_available()
-                        {
-                            self.message = Some((
-                                "requires root with systemd, use: sudo aether-proxy setup".into(),
-                                Instant::now(),
-                                true,
-                            ));
+                        if key_str == "install_service" {
+                            if let Err(e) = self.save() {
+                                self.message = Some((format!("error: {}", e), Instant::now(), true));
+                                return false;
+                            }
+                            return true;
                         } else {
+                            let toggled = if value == "true" { "false" } else { "true" };
                             self.selected_field_mut().value = toggled.into();
                             self.modified = true;
                         }
@@ -431,6 +428,30 @@ impl App {
                         self.edit_cursor = self.edit_buffer.chars().count();
                         self.mode = Mode::Editing;
                     }
+                }
+            }
+            KeyCode::Char(' ') => {
+                let kind = self.selected_field().kind;
+                let key_str = self.selected_field().key;
+                let value = self.selected_field().value.clone();
+                match kind {
+                    FieldKind::Bool => {
+                        let toggled = if value == "true" { "false" } else { "true" };
+                        if key_str == "install_service"
+                            && toggled == "true"
+                            && !super::service::is_available()
+                        {
+                            self.message = Some((
+                                super::service::unavailable_hint(),
+                                Instant::now(),
+                                true,
+                            ));
+                        } else {
+                            self.selected_field_mut().value = toggled.into();
+                            self.modified = true;
+                        }
+                    }
+                    _ => {}
                 }
             }
             // -- Tab navigation --
@@ -760,6 +781,8 @@ fn render_footer(f: &mut Frame, app: &App, area: Rect) {
 
     let keybindings = if app.mode == Mode::Editing {
         "Enter confirm  Esc cancel"
+    } else if app.selected_field().key == "install_service" {
+        "j/k select  Space toggle  Enter finish  + add server  ^S save  q quit"
     } else if app.server_tabs.len() > 1 {
         "j/k select  Enter edit  Tab switch  + add  x remove  ^S save  q quit"
     } else {

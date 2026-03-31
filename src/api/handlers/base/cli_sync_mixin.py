@@ -233,13 +233,8 @@ class CliSyncMixin:
                 f"代理={_proxy_label}"
             )
 
-            # 获取复用的 HTTP 客户端（支持代理配置，Key 级别优先于 Provider 级别）
-            # 注意：使用 get_proxy_client 复用连接池，不再每次创建新客户端
-            from src.clients.http_client import HTTPClientPool
             from src.services.proxy_node.resolver import (
-                build_post_kwargs_async,
                 build_proxy_url_async,
-                build_stream_kwargs_async,
                 resolve_delegate_config_async,
             )
 
@@ -298,234 +293,92 @@ class CliSyncMixin:
                 ),
             )
 
-            if config.executor_backend == "rust" and is_remote_contract_eligible(rust_plan):
-                try:
-                    rust_result = await RustExecutorClient().execute_sync_json(rust_plan)
-                except (RustExecutorClientError, httpx.HTTPError, json.JSONDecodeError) as exc:
-                    logger.warning(
-                        "[{}] CLI Rust executor 不可用，回退 Python 执行: {}",
-                        self.request_id,
-                        exc,
-                    )
-                else:
-                    status_code = rust_result.status_code
-                    response_headers = dict(rust_result.headers)
-                    extract_proxy_timing(sync_proxy_info, response_headers)
+            if not is_remote_contract_eligible(rust_plan):
+                raise ProviderNotAvailableException(
+                    "CLI 请求暂不支持当前 Rust executor 契约",
+                    provider_name=str(provider.name),
+                    upstream_response="remote_contract_ineligible",
+                )
 
-                    if envelope:
-                        envelope.on_http_status(
-                            base_url=selected_base_url_cached,
-                            status_code=status_code,
-                        )
+            try:
+                rust_result = await RustExecutorClient().execute_sync_json(rust_plan)
+            except (RustExecutorClientError, httpx.HTTPError, json.JSONDecodeError) as exc:
+                logger.warning(
+                    "[{}] CLI Rust executor unavailable: {}",
+                    self.request_id,
+                    exc,
+                )
+                raise ProviderNotAvailableException(
+                    "执行器暂时不可用，请稍后重试",
+                    provider_name=str(provider.name),
+                    upstream_response=str(exc),
+                ) from exc
 
-                    request = httpx.Request("POST", url, headers=provider_headers)
-                    synthetic_content = rust_result.response_body_bytes
-                    if synthetic_content is None:
-                        synthetic_content = json.dumps(
-                            rust_result.response_json or {},
-                            ensure_ascii=False,
-                        ).encode("utf-8")
-                    synthetic_response = httpx.Response(
-                        status_code,
-                        request=request,
-                        headers=response_headers,
-                        content=synthetic_content,
-                    )
-
-                    if status_code >= 400:
-                        error = httpx.HTTPStatusError(
-                            f"Upstream status error: {status_code}",
-                            request=request,
-                            response=synthetic_response,
-                        )
-                        error_body = ""
-                        try:
-                            if envelope and hasattr(envelope, "extract_error_text"):
-                                error_body = await envelope.extract_error_text(synthetic_response)
-                            else:
-                                error_body = (
-                                    synthetic_response.text[:4000]
-                                    if synthetic_response.text
-                                    else ""
-                                )
-                        except Exception:
-                            error_body = (
-                                synthetic_response.text[:4000] if synthetic_response.text else ""
-                            )
-                        error.upstream_response = error_body[:4000]  # type: ignore[attr-defined]
-                        raise error
-
-                    if upstream_is_stream:
-                        if rust_result.response_body_bytes is None:
-                            raise RustExecutorClientError(
-                                "Rust executor stream sync result must contain body bytes"
-                            )
-                        response_json = await self._aggregate_upstream_stream_sync_response(
-                            body_bytes=rust_result.response_body_bytes,
-                            provider_api_format=provider_api_format,
-                            client_api_format=client_api_format,
-                            provider_name=str(provider.name),
-                            provider_type=str(getattr(provider, "provider_type", "") or "").lower(),
-                            model=str(model or ""),
-                            request_id=str(self.request_id or ""),
-                            envelope=envelope,
-                        )
-                        response_metadata_result = self._extract_response_metadata(
-                            response_json or {}
-                        )
-                        return response_json if isinstance(response_json, dict) else {}
-
-                    response_json = rust_result.response_json or {}
-                    if envelope:
-                        response_json = envelope.unwrap_response(response_json)
-                        envelope.postprocess_unwrapped_response(model=model, data=response_json)
-
-                    response_metadata_result = self._extract_response_metadata(response_json)
-                    return response_json if isinstance(response_json, dict) else {}
-
-            http_client = await HTTPClientPool.get_upstream_client(
-                delegate_cfg,
-                proxy_config=_effective_proxy,
-                tls_profile=envelope_tls_profile,
-            )
-
-            # 注意：不使用 async with，因为复用的客户端不应该被关闭
-            # 超时通过 timeout 参数控制
-            resp: httpx.Response | None = None
-            if not upstream_is_stream:
-                try:
-                    _pkw = await build_post_kwargs_async(
-                        delegate_cfg,
-                        url=url,
-                        headers=provider_headers,
-                        payload=provider_payload,
-                        timeout=request_timeout,
-                        client_content_encoding=effective_client_content_encoding,
-                    )
-                    resp = await http_client.post(**_pkw)
-                except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as e:
-                    if envelope:
-                        envelope.on_connection_error(base_url=selected_base_url_cached, exc=e)
-                        if selected_base_url_cached:
-                            logger.warning(
-                                f"[{envelope.name}] Connection error: {selected_base_url_cached} ({e})"
-                            )
-                    raise
-            else:
-                # Forced upstream streaming: aggregate SSE to a sync JSON response.
-                try:
-                    _stream_args = await build_stream_kwargs_async(
-                        delegate_cfg,
-                        url=url,
-                        headers=provider_headers,
-                        payload=provider_payload,
-                        timeout=request_timeout,
-                        client_content_encoding=effective_client_content_encoding,
-                    )
-                    async with http_client.stream(**_stream_args) as stream_resp:
-                        resp = stream_resp
-
-                        status_code = stream_resp.status_code
-                        response_headers = dict(stream_resp.headers)
-                        extract_proxy_timing(sync_proxy_info, response_headers)
-
-                        if envelope:
-                            envelope.on_http_status(
-                                base_url=selected_base_url_cached,
-                                status_code=status_code,
-                            )
-
-                        stream_resp.raise_for_status()
-                        response_body = await stream_resp.aread()
-                        response_json = await self._aggregate_upstream_stream_sync_response(
-                            body_bytes=response_body,
-                            provider_api_format=provider_api_format,
-                            client_api_format=client_api_format,
-                            provider_name=str(provider.name),
-                            provider_type=str(getattr(provider, "provider_type", "") or "").lower(),
-                            model=str(model or ""),
-                            request_id=str(self.request_id or ""),
-                            envelope=envelope,
-                        )
-                        response_json = response_json if isinstance(response_json, dict) else {}
-
-                except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as e:
-                    if envelope:
-                        envelope.on_connection_error(base_url=selected_base_url_cached, exc=e)
-                        if selected_base_url_cached:
-                            logger.warning(
-                                f"[{envelope.name}] Connection error: {selected_base_url_cached} ({e})"
-                            )
-                    raise
-
-            status_code = resp.status_code
-            response_headers = dict(resp.headers)
+            status_code = rust_result.status_code
+            response_headers = dict(rust_result.headers)
             extract_proxy_timing(sync_proxy_info, response_headers)
 
             if envelope:
-                envelope.on_http_status(base_url=selected_base_url_cached, status_code=status_code)
+                envelope.on_http_status(
+                    base_url=selected_base_url_cached,
+                    status_code=status_code,
+                )
 
-            # Forced upstream streaming already built response_json via aggregator.
-            if upstream_is_stream:
-                response_metadata_result = self._extract_response_metadata(response_json or {})
-                return response_json if isinstance(response_json, dict) else {}
+            request = httpx.Request("POST", url, headers=provider_headers)
+            synthetic_content = rust_result.response_body_bytes
+            if synthetic_content is None:
+                synthetic_content = json.dumps(
+                    rust_result.response_json or {},
+                    ensure_ascii=False,
+                ).encode("utf-8")
+            synthetic_response = httpx.Response(
+                status_code,
+                request=request,
+                headers=response_headers,
+                content=synthetic_content,
+            )
 
-            # Reuse HTTPStatusError classification path (handled by TaskService/error_classifier).
-            try:
-                resp.raise_for_status()
-            except httpx.HTTPStatusError as e:
+            if status_code >= 400:
+                error = httpx.HTTPStatusError(
+                    f"Upstream status error: {status_code}",
+                    request=request,
+                    response=synthetic_response,
+                )
                 error_body = ""
                 try:
                     if envelope and hasattr(envelope, "extract_error_text"):
-                        error_body = await envelope.extract_error_text(resp)
+                        error_body = await envelope.extract_error_text(synthetic_response)
                     else:
-                        error_body = resp.text[:4000] if resp.text else ""
+                        error_body = synthetic_response.text[:4000] if synthetic_response.text else ""
                 except Exception:
-                    error_body = ""
-                e.upstream_response = error_body  # type: ignore[attr-defined]
-                raise
+                    error_body = synthetic_response.text[:4000] if synthetic_response.text else ""
+                error.upstream_response = error_body[:4000]  # type: ignore[attr-defined]
+                raise error
 
-            # 安全解析 JSON 响应，处理可能的编码错误
-            try:
-                response_json = resp.json()
-            except (UnicodeDecodeError, json.JSONDecodeError) as e:
-                # 获取原始响应内容用于调试（存入 upstream_response）
-                content_type = resp.headers.get("content-type", "unknown")
-                content_encoding = resp.headers.get("content-encoding", "none")
-                raw_content = ""
-                try:
-                    raw_content = resp.text[:500] if resp.text else "(empty)"
-                except Exception:
-                    try:
-                        raw_content = repr(resp.content[:500]) if resp.content else "(empty)"
-                    except Exception:
-                        raw_content = "(unable to read)"
-                logger.error(
-                    f"[{self.request_id}] 无法解析响应 JSON: {e}, "
-                    f"Content-Type: {content_type}, Content-Encoding: {content_encoding}, "
-                    f"响应长度: {len(resp.content)} bytes, 原始内容: {raw_content}"
-                )
-                # 判断错误类型，生成友好的客户端错误消息（不暴露提供商信息）
-                if raw_content == "(empty)" or not raw_content.strip():
-                    client_message = "上游服务返回了空响应"
-                elif raw_content.strip().startswith(("<", "<!doctype", "<!DOCTYPE")):
-                    client_message = "上游服务返回了非预期的响应格式"
-                else:
-                    client_message = "上游服务返回了无效的响应"
-                raise ProviderNotAvailableException(
-                    client_message,
+            if upstream_is_stream:
+                if rust_result.response_body_bytes is None:
+                    raise RustExecutorClientError(
+                        "Rust executor stream sync result must contain body bytes"
+                    )
+                response_json = await self._aggregate_upstream_stream_sync_response(
+                    body_bytes=rust_result.response_body_bytes,
+                    provider_api_format=provider_api_format,
+                    client_api_format=client_api_format,
                     provider_name=str(provider.name),
-                    upstream_status=resp.status_code,
-                    upstream_response=raw_content,
+                    provider_type=str(getattr(provider, "provider_type", "") or "").lower(),
+                    model=str(model or ""),
+                    request_id=str(self.request_id or ""),
+                    envelope=envelope,
                 )
+                response_metadata_result = self._extract_response_metadata(response_json or {})
+                return response_json if isinstance(response_json, dict) else {}
 
+            response_json = rust_result.response_json or {}
             if envelope:
                 response_json = envelope.unwrap_response(response_json)
                 envelope.postprocess_unwrapped_response(model=model, data=response_json)
 
-            # 提取 Provider 响应元数据（子类可覆盖）
             response_metadata_result = self._extract_response_metadata(response_json)
-
             return response_json if isinstance(response_json, dict) else {}
 
         try:

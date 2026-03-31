@@ -10,15 +10,18 @@ Provider 操作 API 路由
 
 from __future__ import annotations
 
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from src.api.base.admin_adapter import AdminApiAdapter
+from src.api.base.context import ApiRequestContext
+from src.api.base.pipeline import get_pipeline
 from src.database import get_db
-from src.models.database import Provider, User
+from src.models.database import Provider
 from src.services.provider_ops import (
     ConnectorAuthType,
     ProviderActionType,
@@ -26,9 +29,9 @@ from src.services.provider_ops import (
     ProviderOpsService,
     get_registry,
 )
-from src.utils.auth_utils import require_admin
 
 router = APIRouter(prefix="/api/admin/provider-ops", tags=["Provider Operations"])
+pipeline = get_pipeline()
 
 
 # ==================== Request/Response Models ====================
@@ -122,7 +125,7 @@ class ProviderOpsConfigResponse(BaseModel):
     is_configured: bool
     architecture_id: str | None = None
     base_url: str | None = None
-    connector: dict[str, Any] | None = None  # 脱敏后的连接器配置
+    connector: dict[str, Any] | None = None
 
 
 class VerifyAuthResponse(BaseModel):
@@ -146,19 +149,47 @@ def _serialize_data(data: Any) -> Any:
     return data
 
 
-# ==================== Routes ====================
+def _build_action_result_response(result: Any) -> ActionResultResponse:
+    return ActionResultResponse(
+        status=result.status.value,
+        action_type=result.action_type.value,
+        data=_serialize_data(result.data),
+        message=result.message,
+        executed_at=result.executed_at.isoformat(),
+        response_time_ms=result.response_time_ms,
+        cache_ttl_seconds=result.cache_ttl_seconds,
+    )
 
 
-@router.get("/architectures", response_model=list[ArchitectureInfo])
-async def list_architectures(_: User = Depends(require_admin)) -> Any:
-    """获取所有可用的架构"""
+def _resolve_provider_base_url(
+    provider_id: str,
+    db: Session,
+    *,
+    saved_config: ProviderOpsConfig | None = None,
+) -> str | None:
+    base_url = saved_config.base_url if saved_config else None
+    if base_url:
+        return base_url
+
+    provider = db.query(Provider).filter(Provider.id == provider_id).first()
+    if not provider:
+        return None
+
+    if provider.endpoints:
+        for endpoint in provider.endpoints:
+            if endpoint.base_url:
+                return endpoint.base_url
+
+    provider_config = provider.config or {}
+    return provider_config.get("base_url") or provider.website
+
+
+def _list_architectures_response() -> list[dict[str, Any]]:
     registry = get_registry()
     return registry.to_dict_list()
 
 
-@router.get("/architectures/{architecture_id}", response_model=ArchitectureInfo)
-async def get_architecture(architecture_id: str, _: User = Depends(require_admin)) -> Any:
-    """获取指定架构的详情"""
+def _get_architecture_response(architecture_id: str) -> dict[str, Any]:
     registry = get_registry()
     arch = registry.get(architecture_id)
     if not arch:
@@ -166,15 +197,8 @@ async def get_architecture(architecture_id: str, _: User = Depends(require_admin
     return arch.to_dict()
 
 
-@router.get("/providers/{provider_id}/status", response_model=ProviderOpsStatusResponse)
-async def get_provider_ops_status(
-    provider_id: str,
-    db: Session = Depends(get_db),
-    _: User = Depends(require_admin),
-) -> Any:
-    """获取 Provider 的操作状态"""
+def _get_provider_ops_status_response(provider_id: str, db: Session) -> ProviderOpsStatusResponse:
     service = ProviderOpsService(db)
-
     config = service.get_config(provider_id)
     conn_state = service.get_connection_status(provider_id)
 
@@ -199,17 +223,10 @@ async def get_provider_ops_status(
     )
 
 
-@router.get("/providers/{provider_id}/config", response_model=ProviderOpsConfigResponse)
-async def get_provider_ops_config(
+def _get_provider_ops_config_response(
     provider_id: str,
-    db: Session = Depends(get_db),
-    _: User = Depends(require_admin),
-) -> Any:
-    """
-    获取 Provider 的操作配置（脱敏）
-
-    返回已保存的配置，但敏感字段（如 api_key）会被脱敏处理。
-    """
+    db: Session,
+) -> ProviderOpsConfigResponse:
     service = ProviderOpsService(db)
     config = service.get_config(provider_id)
 
@@ -219,22 +236,8 @@ async def get_provider_ops_config(
             is_configured=False,
         )
 
-    # 获取 base_url：优先从 provider_ops 配置读取，否则回退到 endpoint/provider
-    base_url = config.base_url
-    if not base_url:
-        provider = db.query(Provider).filter(Provider.id == provider_id).first()
-        if provider:
-            if provider.endpoints:
-                for endpoint in provider.endpoints:
-                    if endpoint.base_url:
-                        base_url = endpoint.base_url
-                        break
-            if not base_url:
-                provider_config = provider.config or {}
-                base_url = provider_config.get("base_url") or provider.website
-
-    # 获取脱敏后的凭据
     masked_credentials = service.get_masked_credentials(config.connector_credentials)
+    base_url = _resolve_provider_base_url(provider_id, db, saved_config=config)
 
     return ProviderOpsConfigResponse(
         provider_id=provider_id,
@@ -249,33 +252,27 @@ async def get_provider_ops_config(
     )
 
 
-@router.put("/providers/{provider_id}/config")
-async def save_provider_ops_config(
+def _save_provider_ops_config_response(
     provider_id: str,
-    request: SaveConfigRequest,
-    db: Session = Depends(get_db),
-    _: User = Depends(require_admin),
-) -> Any:
-    """保存 Provider 的操作配置"""
+    payload: SaveConfigRequest,
+    db: Session,
+) -> dict[str, Any]:
     service = ProviderOpsService(db)
-
-    # 合并凭据：如果请求中的敏感字段为空，使用已保存的凭据
     credentials = service.merge_credentials_with_saved(
-        provider_id, dict(request.connector.credentials)
+        provider_id, dict(payload.connector.credentials)
     )
 
-    # 构建配置对象
     config = ProviderOpsConfig(
-        architecture_id=request.architecture_id,
-        base_url=request.base_url,
-        connector_auth_type=ConnectorAuthType(request.connector.auth_type),
-        connector_config=request.connector.config,
+        architecture_id=payload.architecture_id,
+        base_url=payload.base_url,
+        connector_auth_type=ConnectorAuthType(payload.connector.auth_type),
+        connector_config=payload.connector.config,
         connector_credentials=credentials,
         actions={
             action_type: {"enabled": action_config.enabled, "config": action_config.config}
-            for action_type, action_config in request.actions.items()
+            for action_type, action_config in payload.actions.items()
         },
-        schedule=request.schedule,
+        schedule=payload.schedule,
     )
 
     success = service.save_config(provider_id, config)
@@ -285,52 +282,27 @@ async def save_provider_ops_config(
     return {"success": True, "message": "配置保存成功"}
 
 
-@router.post("/providers/{provider_id}/verify", response_model=VerifyAuthResponse)
-async def verify_provider_auth(
+async def _verify_provider_auth_response(
     provider_id: str,
-    request: SaveConfigRequest,
-    db: Session = Depends(get_db),
-    _: User = Depends(require_admin),
-) -> Any:
-    """
-    验证 Provider 认证配置
-
-    在保存前测试认证是否有效。
-    如果凭据中的敏感字段为空，会使用已保存的凭据。
-    """
+    payload: SaveConfigRequest,
+    db: Session,
+) -> VerifyAuthResponse:
     service = ProviderOpsService(db)
-
-    # 获取 base_url
-    base_url = request.base_url
-    if not base_url:
-        # 尝试从 Provider 获取
-        provider = db.query(Provider).filter(Provider.id == provider_id).first()
-        if provider:
-            # 从 endpoints 或 config 获取
-            if provider.endpoints:
-                for endpoint in provider.endpoints:
-                    if endpoint.base_url:
-                        base_url = endpoint.base_url
-                        break
-            if not base_url and provider.config:
-                base_url = provider.config.get("base_url")
-
+    base_url = payload.base_url or _resolve_provider_base_url(provider_id, db)
     if not base_url:
         return VerifyAuthResponse(
             success=False,
             message="请提供 API 地址",
         )
 
-    # 合并凭据：如果请求中的敏感字段为空，使用已保存的凭据
     credentials = service.merge_credentials_with_saved(
-        provider_id, dict(request.connector.credentials)
+        provider_id, dict(payload.connector.credentials)
     )
-
     result = await service.verify_auth(
         base_url=base_url,
-        architecture_id=request.architecture_id,
-        auth_type=ConnectorAuthType(request.connector.auth_type),
-        config=request.connector.config,
+        architecture_id=payload.architecture_id,
+        auth_type=ConnectorAuthType(payload.connector.auth_type),
+        config=payload.connector.config,
         credentials=credentials,
         provider_id=provider_id,
     )
@@ -343,51 +315,181 @@ async def verify_provider_auth(
     )
 
 
+def _delete_provider_ops_config_response(provider_id: str, db: Session) -> dict[str, Any]:
+    service = ProviderOpsService(db)
+    success = service.delete_config(provider_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Provider 不存在")
+    return {"success": True, "message": "配置已删除"}
+
+
+async def _connect_provider_response(
+    provider_id: str,
+    payload: ConnectRequest,
+    db: Session,
+) -> dict[str, Any]:
+    service = ProviderOpsService(db)
+    success, message = await service.connect(provider_id, payload.credentials)
+    if not success:
+        raise HTTPException(status_code=400, detail=message)
+    return {"success": True, "message": message}
+
+
+async def _disconnect_provider_response(provider_id: str, db: Session) -> dict[str, Any]:
+    service = ProviderOpsService(db)
+    await service.disconnect(provider_id)
+    return {"success": True, "message": "已断开连接"}
+
+
+async def _execute_action_response(
+    provider_id: str,
+    action_type: str,
+    payload: ExecuteActionRequest,
+    db: Session,
+) -> ActionResultResponse:
+    service = ProviderOpsService(db)
+    try:
+        action_type_enum = ProviderActionType(action_type)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"无效的操作类型: {action_type}") from exc
+
+    result = await service.execute_action(provider_id, action_type_enum, payload.config)
+    return _build_action_result_response(result)
+
+
+async def _get_balance_response(
+    provider_id: str,
+    refresh: bool,
+    db: Session,
+) -> ActionResultResponse:
+    service = ProviderOpsService(db)
+    result = await service.query_balance_with_cache(provider_id, trigger_refresh=refresh)
+    return _build_action_result_response(result)
+
+
+async def _refresh_balance_response(provider_id: str, db: Session) -> ActionResultResponse:
+    service = ProviderOpsService(db)
+    result = await service.query_balance(provider_id)
+    return _build_action_result_response(result)
+
+
+async def _checkin_response(provider_id: str, db: Session) -> ActionResultResponse:
+    service = ProviderOpsService(db)
+    result = await service.checkin(provider_id)
+    return _build_action_result_response(result)
+
+
+async def _batch_query_balance_response(
+    provider_ids: list[str] | None,
+    db: Session,
+) -> dict[str, ActionResultResponse]:
+    service = ProviderOpsService(db)
+    results = await service.batch_query_balance(provider_ids)
+    return {
+        provider_id: _build_action_result_response(result)
+        for provider_id, result in results.items()
+    }
+
+
+# ==================== Routes ====================
+
+
+@router.get("/architectures", response_model=list[ArchitectureInfo])
+async def list_architectures(request: Request, db: Session = Depends(get_db)) -> Any:
+    """获取所有可用的架构"""
+    adapter = AdminProviderOpsListArchitecturesAdapter()
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+
+
+@router.get("/architectures/{architecture_id}", response_model=ArchitectureInfo)
+async def get_architecture(
+    architecture_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Any:
+    """获取指定架构的详情"""
+    adapter = AdminProviderOpsGetArchitectureAdapter(architecture_id=architecture_id)
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+
+
+@router.get("/providers/{provider_id}/status", response_model=ProviderOpsStatusResponse)
+async def get_provider_ops_status(
+    provider_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Any:
+    """获取 Provider 的操作状态"""
+    adapter = AdminProviderOpsStatusAdapter(provider_id=provider_id)
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+
+
+@router.get("/providers/{provider_id}/config", response_model=ProviderOpsConfigResponse)
+async def get_provider_ops_config(
+    provider_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Any:
+    """获取 Provider 的操作配置（脱敏）"""
+    adapter = AdminProviderOpsConfigAdapter(provider_id=provider_id)
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+
+
+@router.put("/providers/{provider_id}/config")
+async def save_provider_ops_config(
+    provider_id: str,
+    payload: SaveConfigRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Any:
+    """保存 Provider 的操作配置"""
+    adapter = AdminProviderOpsSaveConfigAdapter(provider_id=provider_id, payload=payload)
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+
+
+@router.post("/providers/{provider_id}/verify", response_model=VerifyAuthResponse)
+async def verify_provider_auth(
+    provider_id: str,
+    payload: SaveConfigRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Any:
+    """验证 Provider 认证配置"""
+    adapter = AdminProviderOpsVerifyAuthAdapter(provider_id=provider_id, payload=payload)
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+
+
 @router.delete("/providers/{provider_id}/config")
 async def delete_provider_ops_config(
     provider_id: str,
+    request: Request,
     db: Session = Depends(get_db),
-    _: User = Depends(require_admin),
 ) -> Any:
     """删除 Provider 的操作配置"""
-    service = ProviderOpsService(db)
-    success = service.delete_config(provider_id)
-
-    if not success:
-        raise HTTPException(status_code=404, detail="Provider 不存在")
-
-    return {"success": True, "message": "配置已删除"}
+    adapter = AdminProviderOpsDeleteConfigAdapter(provider_id=provider_id)
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.post("/providers/{provider_id}/connect")
 async def connect_provider(
     provider_id: str,
-    request: ConnectRequest,
+    payload: ConnectRequest,
+    request: Request,
     db: Session = Depends(get_db),
-    _: User = Depends(require_admin),
 ) -> Any:
     """建立与 Provider 的连接"""
-    service = ProviderOpsService(db)
-
-    success, message = await service.connect(provider_id, request.credentials)
-
-    if not success:
-        raise HTTPException(status_code=400, detail=message)
-
-    return {"success": True, "message": message}
+    adapter = AdminProviderOpsConnectAdapter(provider_id=provider_id, payload=payload)
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.post("/providers/{provider_id}/disconnect")
 async def disconnect_provider(
     provider_id: str,
+    request: Request,
     db: Session = Depends(get_db),
-    _: User = Depends(require_admin),
 ) -> Any:
     """断开与 Provider 的连接"""
-    service = ProviderOpsService(db)
-    await service.disconnect(provider_id)
-
-    return {"success": True, "message": "已断开连接"}
+    adapter = AdminProviderOpsDisconnectAdapter(provider_id=provider_id)
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.post(
@@ -397,119 +499,182 @@ async def disconnect_provider(
 async def execute_action(
     provider_id: str,
     action_type: str,
-    request: ExecuteActionRequest,
+    payload: ExecuteActionRequest,
+    request: Request,
     db: Session = Depends(get_db),
-    _: User = Depends(require_admin),
 ) -> Any:
     """执行指定操作"""
-    service = ProviderOpsService(db)
-
-    try:
-        action_type_enum = ProviderActionType(action_type)
-    except ValueError:
-        raise HTTPException(status_code=400, detail=f"无效的操作类型: {action_type}")
-
-    result = await service.execute_action(provider_id, action_type_enum, request.config)
-
-    return ActionResultResponse(
-        status=result.status.value,
-        action_type=result.action_type.value,
-        data=_serialize_data(result.data),
-        message=result.message,
-        executed_at=result.executed_at.isoformat(),
-        response_time_ms=result.response_time_ms,
-        cache_ttl_seconds=result.cache_ttl_seconds,
+    adapter = AdminProviderOpsExecuteActionAdapter(
+        provider_id=provider_id,
+        action_type=action_type,
+        payload=payload,
     )
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.get("/providers/{provider_id}/balance", response_model=ActionResultResponse)
 async def get_balance(
     provider_id: str,
+    request: Request,
     refresh: bool = True,
     db: Session = Depends(get_db),
-    _: User = Depends(require_admin),
 ) -> Any:
-    """
-    获取余额（优先返回缓存，后台异步刷新）
-
-    - refresh=True（默认）：返回缓存并触发后台刷新
-    - refresh=False：仅返回缓存，不触发刷新
-    """
-    service = ProviderOpsService(db)
-    result = await service.query_balance_with_cache(provider_id, trigger_refresh=refresh)
-
-    return ActionResultResponse(
-        status=result.status.value,
-        action_type=result.action_type.value,
-        data=_serialize_data(result.data),
-        message=result.message,
-        executed_at=result.executed_at.isoformat(),
-        response_time_ms=result.response_time_ms,
-        cache_ttl_seconds=result.cache_ttl_seconds,
-    )
+    """获取余额（优先返回缓存，后台异步刷新）"""
+    adapter = AdminProviderOpsGetBalanceAdapter(provider_id=provider_id, refresh=refresh)
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.post("/providers/{provider_id}/balance", response_model=ActionResultResponse)
 async def refresh_balance(
     provider_id: str,
+    request: Request,
     db: Session = Depends(get_db),
-    _: User = Depends(require_admin),
 ) -> Any:
     """立即刷新余额（同步等待结果）"""
-    service = ProviderOpsService(db)
-    result = await service.query_balance(provider_id)
-
-    return ActionResultResponse(
-        status=result.status.value,
-        action_type=result.action_type.value,
-        data=_serialize_data(result.data),
-        message=result.message,
-        executed_at=result.executed_at.isoformat(),
-        response_time_ms=result.response_time_ms,
-        cache_ttl_seconds=result.cache_ttl_seconds,
-    )
+    adapter = AdminProviderOpsRefreshBalanceAdapter(provider_id=provider_id)
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.post("/providers/{provider_id}/checkin", response_model=ActionResultResponse)
 async def checkin(
     provider_id: str,
+    request: Request,
     db: Session = Depends(get_db),
-    _: User = Depends(require_admin),
 ) -> Any:
     """签到（快捷方法）"""
-    service = ProviderOpsService(db)
-    result = await service.checkin(provider_id)
-
-    return ActionResultResponse(
-        status=result.status.value,
-        action_type=result.action_type.value,
-        data=_serialize_data(result.data),
-        message=result.message,
-        executed_at=result.executed_at.isoformat(),
-        response_time_ms=result.response_time_ms,
-        cache_ttl_seconds=result.cache_ttl_seconds,
-    )
+    adapter = AdminProviderOpsCheckinAdapter(provider_id=provider_id)
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.post("/batch/balance")
 async def batch_query_balance(
-    provider_ids: list[str] | None = None,
+    request: Request,
+    provider_ids: list[str] | None = Query(None),
     db: Session = Depends(get_db),
-    _: User = Depends(require_admin),
 ) -> Any:
     """批量查询余额"""
-    service = ProviderOpsService(db)
-    results = await service.batch_query_balance(provider_ids)
+    adapter = AdminProviderOpsBatchBalanceAdapter(provider_ids=provider_ids)
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
-    return {
-        provider_id: ActionResultResponse(
-            status=result.status.value,
-            action_type=result.action_type.value,
-            data=_serialize_data(result.data),
-            message=result.message,
-            executed_at=result.executed_at.isoformat(),
-            response_time_ms=result.response_time_ms,
-            cache_ttl_seconds=result.cache_ttl_seconds,
+
+# ==================== Adapters ====================
+
+
+class AdminProviderOpsListArchitecturesAdapter(AdminApiAdapter):
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        return _list_architectures_response()
+
+
+@dataclass
+class AdminProviderOpsGetArchitectureAdapter(AdminApiAdapter):
+    architecture_id: str
+
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        return _get_architecture_response(self.architecture_id)
+
+
+@dataclass
+class AdminProviderOpsStatusAdapter(AdminApiAdapter):
+    provider_id: str
+
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        return _get_provider_ops_status_response(self.provider_id, context.db)
+
+
+@dataclass
+class AdminProviderOpsConfigAdapter(AdminApiAdapter):
+    provider_id: str
+
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        return _get_provider_ops_config_response(self.provider_id, context.db)
+
+
+@dataclass
+class AdminProviderOpsSaveConfigAdapter(AdminApiAdapter):
+    provider_id: str
+    payload: SaveConfigRequest
+
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        return _save_provider_ops_config_response(self.provider_id, self.payload, context.db)
+
+
+@dataclass
+class AdminProviderOpsVerifyAuthAdapter(AdminApiAdapter):
+    provider_id: str
+    payload: SaveConfigRequest
+
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        return await _verify_provider_auth_response(self.provider_id, self.payload, context.db)
+
+
+@dataclass
+class AdminProviderOpsDeleteConfigAdapter(AdminApiAdapter):
+    provider_id: str
+
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        return _delete_provider_ops_config_response(self.provider_id, context.db)
+
+
+@dataclass
+class AdminProviderOpsConnectAdapter(AdminApiAdapter):
+    provider_id: str
+    payload: ConnectRequest
+
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        return await _connect_provider_response(self.provider_id, self.payload, context.db)
+
+
+@dataclass
+class AdminProviderOpsDisconnectAdapter(AdminApiAdapter):
+    provider_id: str
+
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        return await _disconnect_provider_response(self.provider_id, context.db)
+
+
+@dataclass
+class AdminProviderOpsExecuteActionAdapter(AdminApiAdapter):
+    provider_id: str
+    action_type: str
+    payload: ExecuteActionRequest
+
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        return await _execute_action_response(
+            self.provider_id,
+            self.action_type,
+            self.payload,
+            context.db,
         )
-        for provider_id, result in results.items()
-    }
+
+
+@dataclass
+class AdminProviderOpsGetBalanceAdapter(AdminApiAdapter):
+    provider_id: str
+    refresh: bool
+
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        return await _get_balance_response(self.provider_id, self.refresh, context.db)
+
+
+@dataclass
+class AdminProviderOpsRefreshBalanceAdapter(AdminApiAdapter):
+    provider_id: str
+
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        return await _refresh_balance_response(self.provider_id, context.db)
+
+
+@dataclass
+class AdminProviderOpsCheckinAdapter(AdminApiAdapter):
+    provider_id: str
+
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        return await _checkin_response(self.provider_id, context.db)
+
+
+@dataclass
+class AdminProviderOpsBatchBalanceAdapter(AdminApiAdapter):
+    provider_ids: list[str] | None
+
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        return await _batch_query_balance_response(self.provider_ids, context.db)

@@ -7,16 +7,11 @@ use http::{HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Client, Method};
 use tokio::sync::Mutex;
 
-#[derive(Debug, Clone, Copy, serde::Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, PartialEq, Eq)]
 pub enum HttpLoadProbeResponseMode {
+    #[default]
     HeadersOnly,
     FullBody,
-}
-
-impl Default for HttpLoadProbeResponseMode {
-    fn default() -> Self {
-        Self::HeadersOnly
-    }
 }
 
 #[derive(Debug, Clone)]

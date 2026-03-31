@@ -75,6 +75,14 @@ def _wait_until(predicate: Any, *, timeout: float = 1.0, interval: float = 0.01)
     assert predicate()
 
 
+def _make_legacy_test_client(app: FastAPI) -> TestClient:
+    return TestClient(
+        app,
+        base_url="http://127.0.0.1",
+        headers={"x-aether-legacy-internal-gateway": "true"},
+    )
+
+
 def test_report_stream_route_uses_lazy_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -91,7 +99,7 @@ def test_report_stream_route_uses_lazy_session(
         lambda: (_ for _ in ()).throw(AssertionError("create_session should not be called")),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/report-stream",
         json={
@@ -170,7 +178,7 @@ def test_report_stream_route_records_openai_chat_stream_success(
         record_mock,
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/report-stream",
         json={
@@ -203,7 +211,7 @@ def test_report_stream_route_records_claude_chat_stream_success(
         record_mock,
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/report-stream",
         json={
@@ -240,7 +248,7 @@ def test_report_stream_route_records_gemini_chat_stream_success(
         record_mock,
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/report-stream",
         json={
@@ -277,7 +285,7 @@ def test_report_stream_route_records_openai_cli_stream_success(
         record_mock,
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/report-stream",
         json={
@@ -316,7 +324,7 @@ def test_report_stream_route_records_claude_cli_stream_success(
         record_mock,
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/report-stream",
         json={
@@ -355,7 +363,7 @@ def test_report_stream_route_records_gemini_cli_stream_success(
         record_mock,
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/report-stream",
         json={

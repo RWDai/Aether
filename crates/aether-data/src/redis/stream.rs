@@ -168,6 +168,15 @@ impl RedisStreamRunner {
         stream: &RedisStreamName,
         fields: &BTreeMap<String, String>,
     ) -> Result<String, DataLayerError> {
+        self.append_fields_with_maxlen(stream, fields, None).await
+    }
+
+    pub async fn append_fields_with_maxlen(
+        &self,
+        stream: &RedisStreamName,
+        fields: &BTreeMap<String, String>,
+        maxlen: Option<usize>,
+    ) -> Result<String, DataLayerError> {
         validate_stream_name(stream)?;
         if fields.is_empty() {
             return Err(DataLayerError::InvalidInput(
@@ -178,7 +187,11 @@ impl RedisStreamRunner {
         self.run_with_timeout("redis stream append", async {
             let mut connection = self.client.get_multiplexed_async_connection().await?;
             let mut command = redis::cmd("XADD");
-            command.arg(&stream.0).arg("*");
+            command.arg(&stream.0);
+            if let Some(maxlen) = maxlen.filter(|value| *value > 0) {
+                command.arg("MAXLEN").arg("~").arg(maxlen);
+            }
+            command.arg("*");
             for (key, value) in fields {
                 command.arg(key).arg(value);
             }
@@ -276,6 +289,28 @@ impl RedisStreamRunner {
             let mut connection = self.client.get_multiplexed_async_connection().await?;
             let mut command = redis::cmd("XACK");
             command.arg(&stream.0).arg(&group.0);
+            for id in ids {
+                command.arg(id);
+            }
+            Ok(command.query_async::<usize>(&mut connection).await?)
+        })
+        .await
+    }
+
+    pub async fn delete(
+        &self,
+        stream: &RedisStreamName,
+        ids: &[String],
+    ) -> Result<usize, DataLayerError> {
+        validate_stream_name(stream)?;
+        if ids.is_empty() {
+            return Ok(0);
+        }
+
+        self.run_with_timeout("redis stream delete", async {
+            let mut connection = self.client.get_multiplexed_async_connection().await?;
+            let mut command = redis::cmd("XDEL");
+            command.arg(&stream.0);
             for id in ids {
                 command.arg(id);
             }
@@ -592,6 +627,7 @@ mod tests {
             runner.ack(&stream, &group, &[]).await.expect("empty ack"),
             0
         );
+        assert_eq!(runner.delete(&stream, &[]).await.expect("empty delete"), 0);
         assert!(runner
             .claim_stale(
                 &stream,

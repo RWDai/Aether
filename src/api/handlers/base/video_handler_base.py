@@ -189,7 +189,7 @@ class VideoHandlerBase(ABC):
         connect_timeout_ms: int = 30_000,
         pool_timeout_ms: int = 30_000,
         log_label: str = "VideoRequest",
-    ) -> httpx.Response | None:
+    ) -> httpx.Response:
         from src.services.request.executor_plan import (
             ExecutionPlan,
             ExecutionPlanTimeouts,
@@ -200,8 +200,13 @@ class VideoHandlerBase(ABC):
             RustExecutorClientError,
         )
 
+        resolved_provider_name = str(provider_name or "").strip() or None
         if config.executor_backend != "rust":
-            return None
+            raise ProviderNotAvailableException(
+                "Video 请求仅支持 Rust executor",
+                provider_name=resolved_provider_name,
+                upstream_response=f"executor_backend={config.executor_backend}",
+            )
 
         request_headers = dict(headers)
         if (
@@ -211,33 +216,48 @@ class VideoHandlerBase(ABC):
         ):
             request_headers["content-type"] = content_type
 
-        plan = ExecutionPlan(
-            request_id=str(self.request_id or ""),
-            candidate_id=None,
-            provider_name=str(provider_name or ""),
-            provider_id=str(provider_id or ""),
-            endpoint_id=str(endpoint_id or ""),
-            key_id=str(key_id or ""),
-            method=str(method or "POST").upper(),
-            url=url,
-            headers=request_headers,
-            body=build_execution_plan_body(body, content_type=content_type),
-            stream=False,
-            provider_api_format=str(provider_api_format or self.FORMAT_ID),
-            client_api_format=str(client_api_format or self.FORMAT_ID),
-            model_name=str(model_name or ""),
-            content_type=content_type,
-            content_encoding=content_encoding,
-            proxy=proxy,
-            tls_profile=tls_profile,
-            timeouts=ExecutionPlanTimeouts(
-                connect_ms=connect_timeout_ms,
-                read_ms=request_timeout_ms,
-                write_ms=request_timeout_ms,
-                pool_ms=pool_timeout_ms,
-                total_ms=request_timeout_ms,
-            ),
-        )
+        try:
+            plan = ExecutionPlan(
+                request_id=str(self.request_id or ""),
+                candidate_id=None,
+                provider_name=str(provider_name or ""),
+                provider_id=str(provider_id or ""),
+                endpoint_id=str(endpoint_id or ""),
+                key_id=str(key_id or ""),
+                method=str(method or "POST").upper(),
+                url=url,
+                headers=request_headers,
+                body=build_execution_plan_body(body, content_type=content_type),
+                stream=False,
+                provider_api_format=str(provider_api_format or self.FORMAT_ID),
+                client_api_format=str(client_api_format or self.FORMAT_ID),
+                model_name=str(model_name or ""),
+                content_type=content_type,
+                content_encoding=content_encoding,
+                proxy=proxy,
+                tls_profile=tls_profile,
+                timeouts=ExecutionPlanTimeouts(
+                    connect_ms=connect_timeout_ms,
+                    read_ms=request_timeout_ms,
+                    write_ms=request_timeout_ms,
+                    pool_ms=pool_timeout_ms,
+                    total_ms=request_timeout_ms,
+                ),
+            )
+        except Exception as exc:
+            logger.warning(
+                "[{}] Rust execution plan build failed request_id={} method={} url={}: {}",
+                log_label,
+                self.request_id,
+                method,
+                url,
+                sanitize_error_message(str(exc)),
+            )
+            raise ProviderNotAvailableException(
+                "Rust executor 请求计划构建失败",
+                provider_name=resolved_provider_name,
+                upstream_response=sanitize_error_message(str(exc)),
+            ) from exc
 
         try:
             rust_result = await RustExecutorClient().execute_sync_json(plan)
@@ -250,7 +270,11 @@ class VideoHandlerBase(ABC):
                 url,
                 sanitize_error_message(str(exc)),
             )
-            return None
+            raise ProviderNotAvailableException(
+                "执行器暂时不可用，请稍后重试",
+                provider_name=resolved_provider_name,
+                upstream_response=sanitize_error_message(str(exc)),
+            ) from exc
 
         response_headers = dict(rust_result.headers)
         if rust_result.response_json is not None:

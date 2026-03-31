@@ -126,54 +126,6 @@ pub(crate) async fn get_decision_trace(
     }
 }
 
-pub(crate) async fn get_request_usage_audit(
-    State(state): State<AppState>,
-    Path(request_id): Path<String>,
-) -> Result<Json<crate::gateway::data::RequestUsageAudit>, axum::response::Response> {
-    let usage = state
-        .read_request_usage_audit(&request_id)
-        .await
-        .map_err(IntoResponse::into_response)?;
-
-    match usage {
-        Some(usage) => Ok(Json(usage)),
-        None => Err((
-            axum::http::StatusCode::NOT_FOUND,
-            Json(json!({
-                "error": {
-                    "message": "Request usage not found",
-                }
-            })),
-        )
-            .into_response()),
-    }
-}
-
-pub(crate) async fn get_request_audit_bundle(
-    State(state): State<AppState>,
-    Path(request_id): Path<String>,
-    Query(query): Query<GetRequestCandidateTraceQuery>,
-) -> Result<Json<crate::gateway::data::RequestAuditBundle>, axum::response::Response> {
-    let attempted_only = query.attempted_only.unwrap_or(false);
-    let bundle = state
-        .read_request_audit_bundle(&request_id, attempted_only, current_unix_secs())
-        .await
-        .map_err(IntoResponse::into_response)?;
-
-    match bundle {
-        Some(bundle) => Ok(Json(bundle)),
-        None => Err((
-            axum::http::StatusCode::NOT_FOUND,
-            Json(json!({
-                "error": {
-                    "message": "Request audit bundle not found",
-                }
-            })),
-        )
-            .into_response()),
-    }
-}
-
 pub(crate) async fn get_auth_api_key_snapshot(
     State(state): State<AppState>,
     Path((user_id, api_key_id)): Path<(String, String)>,

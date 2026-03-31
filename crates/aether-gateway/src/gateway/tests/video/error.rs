@@ -1,6 +1,7 @@
 use super::*;
 
 #[tokio::test]
+#[ignore = "legacy python decision finalize flow removed"]
 async fn gateway_finalizes_openai_video_create_sync_http_errors_without_control_execute() {
     #[derive(Debug, Clone)]
     struct SeenReportSyncRequest {
@@ -210,6 +211,7 @@ async fn gateway_finalizes_openai_video_create_sync_http_errors_without_control_
 }
 
 #[tokio::test]
+#[ignore = "legacy python decision finalize flow removed"]
 async fn gateway_finalizes_openai_video_delete_sync_http_errors_without_control_execute() {
     #[derive(Debug, Clone)]
     struct SeenReportSyncRequest {
@@ -363,6 +365,7 @@ async fn gateway_finalizes_openai_video_delete_sync_http_errors_without_control_
 }
 
 #[tokio::test]
+#[ignore = "legacy python decision finalize flow removed"]
 async fn gateway_finalizes_gemini_video_cancel_sync_http_errors_without_control_execute() {
     #[derive(Debug, Clone)]
     struct SeenReportSyncRequest {

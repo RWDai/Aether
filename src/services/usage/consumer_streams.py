@@ -539,7 +539,7 @@ _consumer_instance: UsageQueueConsumer | None = None
 
 async def start_usage_queue_consumer() -> UsageQueueConsumer | None:
     global _consumer_instance
-    if not config.usage_queue_enabled:
+    if not config.usage_queue_enabled or not config.usage_queue_python_consumer_enabled:
         return None
     await ensure_usage_stream_group()
     if _consumer_instance is None:

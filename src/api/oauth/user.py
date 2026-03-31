@@ -19,12 +19,19 @@ from src.services.auth.session_service import CLIENT_DEVICE_ID_HEADER, SessionSe
 
 router = APIRouter(prefix="/api/user/oauth", tags=["User - OAuth"])
 pipeline = get_pipeline()
+_OAUTH_USER_LEGACY_DETAIL = "OAuth user routes are retired; use Rust maintenance backend"
+
+
+def _raise_oauth_user_legacy_unavailable() -> None:
+    raise HTTPException(status_code=503, detail=_OAUTH_USER_LEGACY_DETAIL)
 
 
 @router.get("/bindable-providers")
 async def list_bindable_providers(
     request: Request, db: Session = Depends(get_db)
 ) -> dict[str, Any]:
+    _ = request, db
+    _raise_oauth_user_legacy_unavailable()
     adapter = ListBindableProvidersAdapter()
     result = await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
     return cast(dict[str, Any], result)
@@ -32,6 +39,8 @@ async def list_bindable_providers(
 
 @router.get("/links")
 async def list_my_oauth_links(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
+    _ = request, db
+    _raise_oauth_user_legacy_unavailable()
     adapter = ListMyOAuthLinksAdapter()
     result = await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
     return cast(dict[str, Any], result)
@@ -42,6 +51,8 @@ async def create_bind_token(
     provider_type: str, request: Request, db: Session = Depends(get_db)
 ) -> dict[str, Any]:
     """创建一次性 OAuth 绑定令牌，用于浏览器跳转场景的安全认证"""
+    _ = provider_type, request, db
+    _raise_oauth_user_legacy_unavailable()
     adapter = CreateBindTokenAdapter(provider_type=provider_type)
     result = await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
     return cast(dict[str, Any], result)
@@ -55,6 +66,8 @@ async def bind_oauth_provider(
     bind_token: str | None = None,
 ) -> RedirectResponse:
     """发起 OAuth 绑定流程，支持通过 bind_token 参数进行安全认证"""
+    _ = provider_type, request, db, bind_token
+    _raise_oauth_user_legacy_unavailable()
     adapter = BindOAuthProviderAdapter(provider_type=provider_type, bind_token=bind_token)
     result = await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
     return cast(RedirectResponse, result)
@@ -64,6 +77,8 @@ async def bind_oauth_provider(
 async def unbind_oauth_provider(
     provider_type: str, request: Request, db: Session = Depends(get_db)
 ) -> dict[str, Any]:
+    _ = provider_type, request, db
+    _raise_oauth_user_legacy_unavailable()
     adapter = UnbindOAuthProviderAdapter(provider_type=provider_type)
     result = await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
     return cast(dict[str, Any], result)

@@ -226,6 +226,14 @@ async fn gateway_executes_openai_chat_gemini_cross_format_stream_via_local_strea
     assert!(response_text.contains("\"finish_reason\":\"stop\""));
     assert!(response_text.contains("data: [DONE]"));
 
+    wait_until(300, || {
+        seen_report
+            .lock()
+            .expect("mutex should lock")
+            .as_ref()
+            .is_some()
+    })
+    .await;
     let seen_report_request = seen_report
         .lock()
         .expect("mutex should lock")
@@ -461,6 +469,14 @@ async fn gateway_executes_openai_chat_gemini_cross_format_function_call_stream_v
     assert!(response_text.contains("\"finish_reason\":\"tool_calls\""));
     assert!(response_text.contains("data: [DONE]"));
 
+    wait_until(300, || {
+        seen_report
+            .lock()
+            .expect("mutex should lock")
+            .as_ref()
+            .is_some()
+    })
+    .await;
     wait_until(300, || {
         seen_report
             .lock()

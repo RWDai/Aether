@@ -163,9 +163,16 @@ class TestPipelineAuditLogging:
         mock_context.request_id = "req-123"
         mock_context.client_ip = "127.0.0.1"
         mock_context.user_agent = "test-agent"
+        mock_context.request_method = "POST"
+        mock_context.request_path = "/v1/messages"
+        mock_context.tx_committed_by_route = False
+        mock_context.gateway_execution_path = None
+        mock_context.rate_limit_scope = None
+        mock_context.sync_runtime_state_from_request = MagicMock()
         mock_context.request = MagicMock()
         mock_context.request.method = "POST"
         mock_context.request.url.path = "/v1/messages"
+        mock_context.original_headers = {}
         mock_context.start_time = 1000.0
 
         mock_adapter = MagicMock()
@@ -199,9 +206,16 @@ class TestPipelineAuditLogging:
         mock_context.request_id = "req-123"
         mock_context.client_ip = "127.0.0.1"
         mock_context.user_agent = "test-agent"
+        mock_context.request_method = "POST"
+        mock_context.request_path = "/v1/messages"
+        mock_context.tx_committed_by_route = False
+        mock_context.gateway_execution_path = None
+        mock_context.rate_limit_scope = None
+        mock_context.sync_runtime_state_from_request = MagicMock()
         mock_context.request = MagicMock()
         mock_context.request.method = "POST"
         mock_context.request.url.path = "/v1/messages"
+        mock_context.original_headers = {}
         mock_context.start_time = 1000.0
 
         mock_adapter = MagicMock()
@@ -239,11 +253,20 @@ class TestPipelineAuditLogging:
         mock_context.request_id = "req-123"
         mock_context.client_ip = "127.0.0.1"
         mock_context.user_agent = "test-agent"
+        mock_context.request_method = "POST"
+        mock_context.request_path = "/api/auth/refresh"
+        mock_context.tx_committed_by_route = False
+        mock_context.gateway_execution_path = None
+        mock_context.rate_limit_scope = None
         mock_context.request = MagicMock()
         mock_context.request.method = "POST"
         mock_context.request.url.path = "/api/auth/refresh"
         mock_context.request.state = SimpleNamespace(tx_committed_by_route=True)
+        mock_context.original_headers = {}
         mock_context.start_time = 1000.0
+        mock_context.sync_runtime_state_from_request = MagicMock(
+            side_effect=lambda: setattr(mock_context, "tx_committed_by_route", True)
+        )
 
         mock_adapter = MagicMock()
         mock_adapter.name = "test-adapter"
@@ -261,6 +284,8 @@ class TestPipelineAuditLogging:
         """测试没有数据库会话时跳过审计"""
         mock_context = MagicMock()
         mock_context.db = None
+        mock_context.sync_runtime_state_from_request = MagicMock()
+        mock_context.tx_committed_by_route = False
 
         mock_adapter = MagicMock()
         mock_adapter.audit_log_enabled = True
@@ -302,10 +327,17 @@ class TestPipelineAuditLogging:
         mock_context.request_id = "req-123"
         mock_context.client_ip = "127.0.0.1"
         mock_context.user_agent = "test-agent"
+        mock_context.request_method = "POST"
+        mock_context.request_path = "/v1/messages"
+        mock_context.tx_committed_by_route = False
+        mock_context.gateway_execution_path = None
+        mock_context.rate_limit_scope = None
+        mock_context.sync_runtime_state_from_request = MagicMock()
         mock_context.request = MagicMock()
         mock_context.request.method = "POST"
         mock_context.request.url.path = "/v1/messages"
         mock_context.start_time = 1000.0
+        mock_context.original_headers = {}
 
         mock_adapter = MagicMock()
         mock_adapter.name = "test-adapter"
@@ -320,6 +352,81 @@ class TestPipelineAuditLogging:
             with patch("time.time", return_value=1001.0):
                 # 不应该抛出异常
                 pipeline._record_audit_event(mock_context, mock_adapter, success=True)
+
+    def test_build_audit_metadata_prefers_context_path_params(
+        self, pipeline: ApiRequestPipeline
+    ) -> None:
+        mock_context = MagicMock()
+        mock_context.start_time = 1000.0
+        mock_context.mode = "standard"
+        mock_context.api_format_hint = "gemini"
+        mock_context.query_params = {}
+        mock_context.raw_body = b"{}"
+        mock_context.balance_remaining = 12.5
+        mock_context.audit_metadata = {}
+        mock_context.quiet_logging = False
+        mock_context.user = None
+        mock_context.api_key = None
+        mock_context.request_method = "POST"
+        mock_context.request_path = "/v1beta/models/gemini-2.5-flash:streamGenerateContent"
+        mock_context.tx_committed_by_route = False
+        mock_context.gateway_execution_path = "executor_local"
+        mock_context.rate_limit_scope = "user"
+        mock_context.sync_runtime_state_from_request = MagicMock()
+        mock_context.path_params = {"model": "gemini-2.5-flash", "stream": True}
+        mock_context.request = MagicMock()
+        mock_context.request.method = "POST"
+        mock_context.request.url.path = "/v1beta/models/gemini-2.5-flash:streamGenerateContent"
+        mock_context.original_headers = {"content-type": "application/json"}
+
+        mock_adapter = MagicMock()
+        mock_adapter.name = "public.gemini.content"
+        mock_adapter.__class__.__name__ = "PublicGeminiContentAdapter"
+        mock_adapter.mode.value = "standard"
+        mock_adapter.get_audit_metadata.return_value = {}
+
+        with patch("time.time", return_value=1001.0):
+            metadata = pipeline._build_audit_metadata(
+                context=mock_context,
+                adapter=mock_adapter,
+                success=True,
+                status_code=200,
+                error=None,
+            )
+
+        assert metadata["path_params"] == {"model": "gemini-2.5-flash", "stream": True}
+        assert metadata["gateway_execution_path"] == "executor_local"
+        assert metadata["rate_limit_scope"] == "user"
+
+    @pytest.mark.asyncio
+    async def test_apply_context_runtime_state_prefers_snapshot_balance(
+        self, pipeline: ApiRequestPipeline
+    ) -> None:
+        context = MagicMock()
+        context.prefetched_balance_remaining = 9.5
+        context.balance_remaining = None
+        context.management_token = None
+        context.quiet_logging = False
+
+        auth_state = SimpleNamespace(
+            user=MagicMock(id="user-1"),
+            api_key=MagicMock(id="key-1"),
+            management_token=None,
+        )
+
+        pipeline._calculate_balance_remaining_async = AsyncMock(
+            side_effect=AssertionError("prefetched snapshot should skip balance lookup")
+        )
+
+        await pipeline._apply_context_runtime_state_legacy(
+            context,
+            mode=ApiMode.STANDARD,
+            auth_state=auth_state,
+            quiet=True,
+        )
+
+        assert context.balance_remaining == 9.5
+        assert context.quiet_logging is True
 
 
 class TestPipelineAuthentication:
@@ -630,11 +737,94 @@ class TestPipelineAuthentication:
         with pytest.raises(BalanceInsufficientException):
             await pipeline._authenticate_client(mock_request, mock_db, mock_adapter)
 
+    @pytest.mark.asyncio
+    async def test_authenticate_client_gateway_marker_without_trusted_ids_falls_back_to_legacy(
+        self, pipeline: ApiRequestPipeline
+    ) -> None:
+        mock_user = MagicMock()
+        mock_user.id = "user-123"
+        mock_api_key = MagicMock()
+        mock_api_key.id = "key-123"
+
+        mock_request = MagicMock()
+        mock_request.headers = {"x-aether-gateway": "rust-phase3b"}
+        mock_request.client = SimpleNamespace(host="127.0.0.1")
+        mock_request.url.path = "/v1/chat/completions"
+        mock_request.state = MagicMock()
+
+        db_user = MagicMock()
+        db_user.id = "user-123"
+        db_user.is_active = True
+        db_user.is_deleted = False
+        db_api_key = MagicMock()
+        db_api_key.id = "key-123"
+        db_api_key.user_id = "user-123"
+        db_api_key.is_active = True
+        db_api_key.is_locked = False
+        db_api_key.is_standalone = False
+        db_api_key.expires_at = None
+
+        mock_db = MagicMock()
+        user_query = MagicMock()
+        user_query.filter.return_value.first.return_value = db_user
+        api_key_query = MagicMock()
+        api_key_query.filter.return_value.first.return_value = db_api_key
+        mock_db.query.side_effect = [user_query, api_key_query]
+
+        mock_adapter = MagicMock()
+        mock_adapter.extract_api_key = MagicMock(return_value="sk-test")
+
+        with patch.object(
+            pipeline.auth_service,
+            "authenticate_api_key_threadsafe",
+            new_callable=AsyncMock,
+            return_value=MagicMock(
+                user=mock_user,
+                api_key=mock_api_key,
+                access_allowed=True,
+                balance_remaining=12.5,
+            ),
+        ) as mock_auth:
+            user, api_key = await pipeline._authenticate_client(mock_request, mock_db, mock_adapter)
+
+        assert user == db_user
+        assert api_key == db_api_key
+        mock_adapter.extract_api_key.assert_called_once_with(mock_request)
+        mock_auth.assert_awaited_once_with("sk-test")
+        assert mock_request.state.prefetched_balance_remaining == 12.5
+
 
 class TestPipelineUserRateLimit:
     @pytest.fixture
     def pipeline(self) -> ApiRequestPipeline:
         return ApiRequestPipeline()
+
+    @pytest.mark.asyncio
+    async def test_apply_legacy_request_guards_skips_when_rust_completed_preflight(
+        self, pipeline: ApiRequestPipeline
+    ) -> None:
+        request = MagicMock()
+        request.headers = {
+            "x-aether-gateway": "rust-phase3b",
+            "x-aether-rate-limit-preflight": "true",
+        }
+        request.client = SimpleNamespace(host="127.0.0.1")
+        request.state = MagicMock()
+        db = MagicMock()
+        user = MagicMock(id="user-1")
+        api_key = MagicMock(id="key-1")
+        auth_state = SimpleNamespace(user=user, api_key=api_key, management_token=None)
+
+        pipeline._check_user_rate_limit = AsyncMock(
+            side_effect=AssertionError("trusted rust preflight should skip legacy limiter")
+        )
+
+        await pipeline._apply_legacy_request_guards(
+            request,
+            db,
+            mode=ApiMode.STANDARD,
+            auth_state=auth_state,
+        )
 
     @pytest.mark.asyncio
     async def test_check_user_rate_limit_uses_system_default_for_user_scope(
@@ -1126,6 +1316,65 @@ class TestPipelineAdminAuth:
         assert management_token is None
         mock_db.commit.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_authenticate_admin_uses_identity_helper_for_session_touch(
+        self, pipeline: ApiRequestPipeline
+    ) -> None:
+        created_at = datetime.now(timezone.utc)
+        mock_session = MagicMock()
+        mock_session.id = "session-123"
+
+        mock_user = MagicMock()
+        mock_user.id = "admin-123"
+        mock_user.is_active = True
+        mock_user.is_deleted = False
+        mock_user.role = UserRole.ADMIN
+        mock_user.email = "admin@example.com"
+        mock_user.created_at = created_at
+
+        mock_request = MagicMock()
+        mock_request.headers = {
+            "authorization": "Bearer valid-token",
+            "X-Client-Device-Id": "device-admin-123",
+        }
+        mock_request.state = MagicMock()
+
+        mock_db = MagicMock()
+        mock_db.query.return_value.filter.return_value.first.return_value = mock_user
+
+        with (
+            patch.object(
+                pipeline.auth_service,
+                "verify_token",
+                new_callable=AsyncMock,
+                return_value={
+                    "user_id": "admin-123",
+                    "created_at": created_at.isoformat(),
+                    "session_id": "session-123",
+                },
+            ),
+            patch(
+                "src.api.base.pipeline.get_request_identity_metadata",
+                return_value=MagicMock(client_ip="203.0.113.10", user_agent="admin-agent/1.0"),
+            ),
+            patch(
+                "src.api.base.pipeline.SessionService.get_active_session",
+                return_value=mock_session,
+            ),
+            patch(
+                "src.api.base.pipeline.SessionService.touch_session",
+                return_value=True,
+            ) as mock_touch,
+            patch("src.api.base.pipeline.SessionService.assert_session_device_matches"),
+        ):
+            await pipeline._authenticate_admin(mock_request, mock_db)
+
+        mock_touch.assert_called_once_with(
+            mock_session,
+            client_ip="203.0.113.10",
+            user_agent="admin-agent/1.0",
+        )
+
 
 class TestPipelineUserAuth:
     """测试普通用户 JWT 认证"""
@@ -1318,3 +1567,61 @@ class TestPipelineUserAuth:
         assert user == mock_user
         assert management_token is None
         mock_db.commit.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_authenticate_user_uses_identity_helper_for_session_touch(
+        self, pipeline: ApiRequestPipeline
+    ) -> None:
+        created_at = datetime.now(timezone.utc)
+        mock_session = MagicMock()
+        mock_session.id = "session-456"
+
+        mock_user = MagicMock()
+        mock_user.id = "user-123"
+        mock_user.is_active = True
+        mock_user.is_deleted = False
+        mock_user.email = "user@example.com"
+        mock_user.created_at = created_at
+
+        mock_request = MagicMock()
+        mock_request.headers = {
+            "authorization": "Bearer valid-token",
+            "X-Client-Device-Id": "device-user-456",
+        }
+        mock_request.state = MagicMock()
+
+        mock_db = MagicMock()
+        mock_db.query.return_value.filter.return_value.first.return_value = mock_user
+
+        with (
+            patch.object(
+                pipeline.auth_service,
+                "verify_token",
+                new_callable=AsyncMock,
+                return_value={
+                    "user_id": "user-123",
+                    "created_at": created_at.isoformat(),
+                    "session_id": "session-456",
+                },
+            ),
+            patch(
+                "src.api.base.pipeline.get_request_identity_metadata",
+                return_value=MagicMock(client_ip="198.51.100.25", user_agent="user-agent/2.0"),
+            ),
+            patch(
+                "src.api.base.pipeline.SessionService.get_active_session",
+                return_value=mock_session,
+            ),
+            patch(
+                "src.api.base.pipeline.SessionService.touch_session",
+                return_value=True,
+            ) as mock_touch,
+            patch("src.api.base.pipeline.SessionService.assert_session_device_matches"),
+        ):
+            await pipeline._authenticate_user(mock_request, mock_db)
+
+        mock_touch.assert_called_once_with(
+            mock_session,
+            client_ip="198.51.100.25",
+            user_agent="user-agent/2.0",
+        )

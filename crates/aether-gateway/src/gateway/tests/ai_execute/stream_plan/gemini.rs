@@ -1,6 +1,7 @@
 use super::*;
 
 #[tokio::test]
+#[ignore = "python decision/plan fallback removed from ai hot path"]
 async fn gateway_executes_gemini_chat_stream_via_executor_plan() {
     let report_hits = Arc::new(Mutex::new(0usize));
     let report_hits_clone = Arc::clone(&report_hits);
@@ -169,6 +170,7 @@ async fn gateway_executes_gemini_chat_stream_via_executor_plan() {
 }
 
 #[tokio::test]
+#[ignore = "python decision/plan fallback removed from ai hot path"]
 async fn gateway_executes_gemini_cli_stream_via_executor_plan() {
     let report_hits = Arc::new(Mutex::new(0usize));
     let report_hits_clone = Arc::clone(&report_hits);

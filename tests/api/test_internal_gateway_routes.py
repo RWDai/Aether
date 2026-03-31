@@ -4,7 +4,7 @@ import json
 import time
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 from fastapi import BackgroundTasks, FastAPI
@@ -75,6 +75,14 @@ def _wait_until(predicate: Any, *, timeout: float = 1.0, interval: float = 0.01)
             return
         time.sleep(interval)
     assert predicate()
+
+
+def _make_legacy_test_client(app: FastAPI) -> TestClient:
+    return TestClient(
+        app,
+        base_url="http://127.0.0.1",
+        headers={"x-aether-legacy-internal-gateway": "true"},
+    )
 
 
 def test_build_gateway_sync_telemetry_writer_uses_queue_writer_when_enabled(
@@ -316,7 +324,7 @@ def test_auth_context_route_returns_openai_bearer_auth_context(
         ),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/auth-context",
         json={
@@ -373,14 +381,17 @@ def test_execute_sync_route_returns_controlled_response(monkeypatch: pytest.Monk
     )
     monkeypatch.setattr("src.api.internal.gateway.get_pipeline", lambda: fake_pipeline)
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/execute-sync",
         json={
             "trace_id": "trace-sync-123",
             "method": "POST",
             "path": "/v1/chat/completions",
-            "headers": {"user-agent": "pytest"},
+            "headers": {
+                "user-agent": "pytest",
+                "x-aether-control-execute-fallback": "true",
+            },
             "body_json": {"model": "gpt-5", "messages": []},
             "auth_context": {
                 "user_id": "user-123",
@@ -440,7 +451,7 @@ def test_execute_sync_route_resolves_auth_context_when_missing(
     )
     monkeypatch.setattr("src.api.internal.gateway.get_pipeline", lambda: fake_pipeline)
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/execute-sync",
         json={
@@ -450,6 +461,7 @@ def test_execute_sync_route_resolves_auth_context_when_missing(
             "headers": {
                 "user-agent": "pytest",
                 "authorization": "Bearer client-key",
+                "x-aether-control-execute-fallback": "true",
             },
             "body_json": {"model": "gpt-5", "messages": []},
         },
@@ -467,7 +479,7 @@ def test_execute_sync_route_falls_back_for_stream_payload() -> None:
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr("src.api.internal.gateway.ensure_loopback", lambda request: None)
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/execute-sync",
         json={
@@ -484,10 +496,233 @@ def test_execute_sync_route_falls_back_for_stream_payload() -> None:
         },
     )
 
-    assert response.status_code == 409
-    assert response.headers[CONTROL_ACTION_HEADER] == CONTROL_ACTION_PROXY_PUBLIC
-    assert response.json() == {"action": CONTROL_ACTION_PROXY_PUBLIC}
+    assert response.status_code == 410
+    assert response.json() == {
+        "detail": "legacy internal gateway route removed; use public proxy"
+    }
     monkeypatch.undo()
+
+
+def test_execute_sync_route_requires_explicit_chat_cli_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_db] = lambda: object()
+    monkeypatch.setattr("src.api.internal.gateway.ensure_loopback", lambda request: None)
+
+    resolve_sync_adapter = Mock(return_value=(Mock(), {}))
+    monkeypatch.setattr("src.api.internal.gateway._resolve_gateway_sync_adapter", resolve_sync_adapter)
+
+    client = _make_legacy_test_client(app)
+    response = client.post(
+        "/api/internal/gateway/execute-sync",
+        json={
+            "trace_id": "trace-sync-no-opt-in",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "headers": {"user-agent": "pytest"},
+            "body_json": {"model": "gpt-5", "messages": []},
+            "auth_context": {
+                "user_id": "user-123",
+                "api_key_id": "key-123",
+                "access_allowed": True,
+            },
+        },
+    )
+
+    assert response.status_code == 410
+    assert response.json() == {
+        "detail": "legacy internal gateway route removed; use public proxy"
+    }
+    resolve_sync_adapter.assert_not_called()
+
+
+def test_execute_sync_route_requires_legacy_internal_gateway_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_db] = lambda: object()
+    monkeypatch.setattr("src.api.internal.gateway.ensure_loopback", lambda request: None)
+
+    resolve_sync_adapter = Mock(return_value=(Mock(), {}))
+    monkeypatch.setattr("src.api.internal.gateway._resolve_gateway_sync_adapter", resolve_sync_adapter)
+
+    client = TestClient(app, base_url="http://127.0.0.1")
+    response = client.post(
+        "/api/internal/gateway/execute-sync",
+        json={
+            "trace_id": "trace-sync-no-legacy-header",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "headers": {
+                "user-agent": "pytest",
+                "x-aether-control-execute-fallback": "true",
+            },
+            "body_json": {"model": "gpt-5", "messages": []},
+            "auth_context": {
+                "user_id": "user-123",
+                "api_key_id": "key-123",
+                "access_allowed": True,
+            },
+        },
+    )
+
+    assert response.status_code == 410
+    assert response.json() == {
+        "detail": "legacy internal gateway route removed; use public proxy"
+    }
+    resolve_sync_adapter.assert_not_called()
+
+
+def test_decision_sync_route_requires_legacy_internal_gateway_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_db] = lambda: object()
+    monkeypatch.setattr("src.api.internal.gateway.ensure_loopback", lambda request: None)
+
+    build_decision = AsyncMock(return_value=MagicMock())
+    monkeypatch.setattr("src.api.internal.gateway._build_openai_chat_sync_decision", build_decision)
+
+    client = TestClient(app, base_url="http://127.0.0.1")
+    response = client.post(
+        "/api/internal/gateway/decision-sync",
+        json={
+            "trace_id": "trace-decision-no-legacy-header",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "headers": {
+                "content-type": "application/json",
+                "authorization": "Bearer client-key",
+            },
+            "body_json": {"model": "gpt-5", "messages": []},
+            "auth_context": {
+                "user_id": "user-123",
+                "api_key_id": "key-123",
+                "access_allowed": True,
+            },
+        },
+    )
+
+    assert response.status_code == 410
+    assert response.json() == {
+        "detail": "legacy internal gateway route removed; use public proxy"
+    }
+    build_decision.assert_not_awaited()
+
+
+def test_plan_stream_route_requires_legacy_internal_gateway_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_db] = lambda: object()
+    monkeypatch.setattr("src.api.internal.gateway.ensure_loopback", lambda request: None)
+
+    build_plan = AsyncMock(return_value=MagicMock())
+    monkeypatch.setattr("src.api.internal.gateway._build_openai_chat_stream_plan", build_plan)
+
+    client = TestClient(app, base_url="http://127.0.0.1")
+    response = client.post(
+        "/api/internal/gateway/plan-stream",
+        json={
+            "trace_id": "trace-plan-no-legacy-header",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "headers": {
+                "content-type": "application/json",
+                "authorization": "Bearer client-key",
+            },
+            "body_json": {"model": "gpt-5", "messages": [], "stream": True},
+            "auth_context": {
+                "user_id": "user-123",
+                "api_key_id": "key-123",
+                "access_allowed": True,
+            },
+        },
+    )
+
+    assert response.status_code == 410
+    assert response.json() == {
+        "detail": "legacy internal gateway route removed; use public proxy"
+    }
+    build_plan.assert_not_awaited()
+
+
+def test_finalize_sync_route_requires_legacy_internal_gateway_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_db] = lambda: object()
+    monkeypatch.setattr("src.api.internal.gateway.ensure_loopback", lambda request: None)
+
+    finalize_mock = AsyncMock(return_value=JSONResponse(content={"ok": True}))
+    monkeypatch.setattr("src.api.internal.gateway._finalize_gateway_chat_sync", finalize_mock)
+
+    client = TestClient(app, base_url="http://127.0.0.1")
+    response = client.post(
+        "/api/internal/gateway/finalize-sync",
+        json={
+            "trace_id": "trace-finalize-no-legacy-header",
+            "report_kind": "openai_chat_sync_finalize",
+            "report_context": {
+                "user_id": "user-123",
+                "api_key_id": "key-123",
+                "client_api_format": "openai:chat",
+            },
+            "status_code": 200,
+            "headers": {"content-type": "application/json"},
+            "body_json": {"id": "upstream-123"},
+        },
+    )
+
+    assert response.status_code == 410
+    assert response.json() == {
+        "detail": "legacy internal gateway route removed; use public proxy"
+    }
+    finalize_mock.assert_not_awaited()
+
+
+def test_report_sync_route_requires_legacy_internal_gateway_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_db] = lambda: object()
+    monkeypatch.setattr("src.api.internal.gateway.ensure_loopback", lambda request: None)
+
+    record_mock = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        "src.api.internal.gateway._record_gateway_openai_chat_sync_success",
+        record_mock,
+    )
+
+    client = TestClient(app, base_url="http://127.0.0.1")
+    response = client.post(
+        "/api/internal/gateway/report-sync",
+        json={
+            "trace_id": "trace-report-no-legacy-header",
+            "report_kind": "openai_chat_sync_success",
+            "report_context": {"user_id": "user-123", "api_key_id": "key-123"},
+            "status_code": 200,
+            "headers": {"content-type": "application/json"},
+            "body_json": {
+                "id": "chatcmpl-123",
+                "object": "chat.completion",
+                "choices": [],
+            },
+        },
+    )
+
+    assert response.status_code == 410
+    assert response.json() == {
+        "detail": "legacy internal gateway route removed; use public proxy"
+    }
+    assert record_mock.await_count == 0
 
 
 def test_execute_stream_route_returns_controlled_stream(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -524,14 +759,17 @@ def test_execute_stream_route_returns_controlled_stream(monkeypatch: pytest.Monk
     )
     monkeypatch.setattr("src.api.internal.gateway.get_pipeline", lambda: fake_pipeline)
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/execute-stream",
         json={
             "trace_id": "trace-stream-123",
             "method": "POST",
             "path": "/v1/chat/completions",
-            "headers": {"user-agent": "pytest"},
+            "headers": {
+                "user-agent": "pytest",
+                "x-aether-control-execute-fallback": "true",
+            },
             "body_json": {"model": "gpt-5", "messages": [], "stream": True},
             "auth_context": {
                 "user_id": "user-123",

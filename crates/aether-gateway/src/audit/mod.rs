@@ -3,8 +3,6 @@ mod shadow;
 
 pub(crate) use http::get_auth_api_key_snapshot;
 pub(crate) use http::get_decision_trace;
-pub(crate) use http::get_request_audit_bundle;
 pub(crate) use http::get_request_candidate_trace;
-pub(crate) use http::get_request_usage_audit;
 pub(crate) use http::list_recent_shadow_results;
 pub(crate) use shadow::record_shadow_result_non_blocking;

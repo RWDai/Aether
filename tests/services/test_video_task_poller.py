@@ -25,30 +25,26 @@ async def test_poll_task_status_routes_gemini_video_to_gemini(
             external_task_id="operations/123",
         ),
     )
-    endpoint = SimpleNamespace(id="e1", base_url="https://example.com", api_format="gemini:video")
-    key = SimpleNamespace(id="k1", api_key="enc")
-
-    monkeypatch.setattr(adapter, "_get_endpoint", lambda _db, _id: endpoint)
-    monkeypatch.setattr(adapter, "_get_key", lambda _db, _id: key)
-    monkeypatch.setattr(
-        "src.services.task.video.poller_adapter.crypto_service.decrypt", lambda _v: "decrypted"
+    prepared_ctx = VideoPollContext(
+        task_id="task-1",
+        external_task_id="operations/123",
+        provider_api_format="gemini:video",
+        base_url="https://example.com",
+        upstream_key="decrypted",
+        headers={"authorization": "Bearer x"},
+        poll_count=0,
+        retry_count=0,
+        poll_interval_seconds=15,
+        max_poll_count=10,
+        current_status=VideoStatus.PROCESSING.value,
     )
-
-    auth_info = SimpleNamespace(auth_header="authorization", auth_value="Bearer x")
-    monkeypatch.setattr(
-        "src.services.task.video.poller_adapter.get_provider_auth",
-        AsyncMock(return_value=auth_info),
-    )
-
-    poll_gemini = AsyncMock(return_value=InternalVideoPollResult(status=VideoStatus.PROCESSING))
-    poll_openai = AsyncMock(return_value=InternalVideoPollResult(status=VideoStatus.PROCESSING))
-    monkeypatch.setattr(adapter, "_poll_gemini", poll_gemini)
-    monkeypatch.setattr(adapter, "_poll_openai", poll_openai)
+    poll_http = AsyncMock(return_value=InternalVideoPollResult(status=VideoStatus.PROCESSING))
+    monkeypatch.setattr(adapter, "prepare_poll_context", AsyncMock(return_value=prepared_ctx))
+    monkeypatch.setattr(adapter, "poll_task_http", poll_http)
 
     result = await adapter._poll_task_status(MagicMock(), task)
     assert result.status == VideoStatus.PROCESSING
-    assert poll_gemini.await_count == 1
-    assert poll_openai.await_count == 0
+    poll_http.assert_awaited_once_with(prepared_ctx)
 
 
 @pytest.mark.asyncio
@@ -129,8 +125,6 @@ async def test_video_poller_try_rust_payload_passes_proxy_snapshot(
 async def test_video_poller_openai_poll_prefers_rust_payload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from src.services.task.video import poller_adapter as mod
-
     adapter = VideoTaskPollerAdapter()
 
     rust_poll = AsyncMock(return_value={"id": "vid_1", "status": "processing"})
@@ -139,9 +133,6 @@ async def test_video_poller_openai_poll_prefers_rust_payload(
     normalized = InternalVideoPollResult(status=VideoStatus.PROCESSING, progress_percent=42)
     normalizer = MagicMock(return_value=normalized)
     monkeypatch.setattr(adapter._openai_normalizer, "video_poll_to_internal", normalizer)
-
-    get_upstream_client = AsyncMock(side_effect=AssertionError("python upstream client should not be used"))
-    monkeypatch.setattr(mod.HTTPClientPool, "get_upstream_client", get_upstream_client)
 
     ctx = VideoPollContext(
         task_id="task-1",
@@ -161,33 +152,16 @@ async def test_video_poller_openai_poll_prefers_rust_payload(
 
     assert result is normalized
     normalizer.assert_called_once_with({"id": "vid_1", "status": "processing"})
-    get_upstream_client.assert_not_awaited()
     rust_poll.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_video_poller_openai_poll_fallback_uses_transport_aware_client(
+async def test_video_poller_openai_poll_requires_rust_executor_when_payload_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from src.services.task.video import poller_adapter as mod
-
     adapter = VideoTaskPollerAdapter()
 
     monkeypatch.setattr(adapter, "_try_rust_poll_payload", AsyncMock(return_value=None))
-
-    response = MagicMock()
-    response.status_code = 200
-    response.json.return_value = {"id": "vid_2", "status": "processing"}
-
-    client = MagicMock()
-    client.get = AsyncMock(return_value=response)
-
-    get_upstream_client = AsyncMock(return_value=client)
-    monkeypatch.setattr(mod.HTTPClientPool, "get_upstream_client", get_upstream_client)
-
-    normalized = InternalVideoPollResult(status=VideoStatus.PROCESSING, progress_percent=7)
-    normalizer = MagicMock(return_value=normalized)
-    monkeypatch.setattr(adapter._openai_normalizer, "video_poll_to_internal", normalizer)
 
     ctx = VideoPollContext(
         task_id="task-2",
@@ -205,14 +179,7 @@ async def test_video_poller_openai_poll_fallback_uses_transport_aware_client(
         delegate_config={"node_id": "node-1", "tunnel": True},
     )
 
-    result = await adapter._poll_openai_with_context(ctx)
+    with pytest.raises(Exception) as exc_info:
+        await adapter._poll_openai_with_context(ctx)
 
-    assert result is normalized
-    get_upstream_client.assert_awaited_once_with(
-        {"node_id": "node-1", "tunnel": True},
-        proxy_config={"enabled": True, "url": "http://proxy.test:8080"},
-    )
-    client.get.assert_awaited_once_with(
-        "https://api.openai.com/v1/videos/vid_2",
-        headers={"authorization": "Bearer test"},
-    )
+    assert "Rust executor" in str(exc_info.value)

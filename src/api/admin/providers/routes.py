@@ -1078,6 +1078,12 @@ async def get_pool_status(
     db: Session = Depends(get_db),
 ) -> PoolStatusResponse:
     """获取 Provider 的号池状态。"""
+    adapter = AdminProviderPoolStatusAdapter(provider_id=provider_id)
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+
+
+async def _get_pool_status_response(db: Session, provider_id: str) -> PoolStatusResponse:
+    """获取 Provider 的号池状态。"""
     provider = db.query(Provider).filter(Provider.id == provider_id).first()
     if not provider:
         raise NotFoundException("提供商不存在", "provider")
@@ -1157,6 +1163,12 @@ async def clear_pool_cooldown(
     db: Session = Depends(get_db),
 ) -> dict[str, str]:
     """手动清除指定 Key 的号池冷却状态。"""
+    adapter = AdminProviderClearPoolCooldownAdapter(provider_id=provider_id, key_id=key_id)
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+
+
+async def _clear_pool_cooldown_response(db: Session, provider_id: str, key_id: str) -> dict[str, str]:
+    """手动清除指定 Key 的号池冷却状态。"""
     provider = db.query(Provider).filter(Provider.id == provider_id).first()
     if not provider:
         raise NotFoundException("提供商不存在", "provider")
@@ -1183,6 +1195,12 @@ async def reset_pool_cost(
     db: Session = Depends(get_db),
 ) -> dict[str, str]:
     """重置指定 Key 的号池成本窗口。"""
+    adapter = AdminProviderResetPoolCostAdapter(provider_id=provider_id, key_id=key_id)
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+
+
+async def _reset_pool_cost_response(db: Session, provider_id: str, key_id: str) -> dict[str, str]:
+    """重置指定 Key 的号池成本窗口。"""
     provider = db.query(Provider).filter(Provider.id == provider_id).first()
     if not provider:
         raise NotFoundException("提供商不存在", "provider")
@@ -1199,3 +1217,29 @@ async def reset_pool_cost(
 
     await pool_redis.clear_cost(str(provider.id), str(key.id))
     return {"message": f"已重置 Key {key.name or key_id} 的成本窗口"}
+
+
+class AdminProviderPoolStatusAdapter(AdminApiAdapter):
+    def __init__(self, provider_id: str):
+        self.provider_id = provider_id
+
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        return await _get_pool_status_response(context.db, self.provider_id)
+
+
+class AdminProviderClearPoolCooldownAdapter(AdminApiAdapter):
+    def __init__(self, provider_id: str, key_id: str):
+        self.provider_id = provider_id
+        self.key_id = key_id
+
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        return await _clear_pool_cooldown_response(context.db, self.provider_id, self.key_id)
+
+
+class AdminProviderResetPoolCostAdapter(AdminApiAdapter):
+    def __init__(self, provider_id: str, key_id: str):
+        self.provider_id = provider_id
+        self.key_id = key_id
+
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        return await _reset_pool_cost_response(context.db, self.provider_id, self.key_id)

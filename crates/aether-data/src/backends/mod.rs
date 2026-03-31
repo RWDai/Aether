@@ -129,6 +129,14 @@ mod tests {
         assert!(backends.leases().postgres().is_none());
         assert!(backends.locks().redis().is_none());
         assert!(backends.read().auth_api_keys().is_none());
+        assert!(backends.read().auth_modules().is_none());
+        assert!(backends.read().billing().is_none());
+        assert!(backends.read().gemini_file_mappings().is_none());
+        assert!(backends.read().global_models().is_none());
+        assert!(backends.read().management_tokens().is_none());
+        assert!(backends.read().oauth_providers().is_none());
+        assert!(backends.read().proxy_nodes().is_none());
+        assert!(backends.read().minimal_candidate_selection().is_none());
         assert!(backends.read().request_candidates().is_none());
         assert!(backends.read().provider_catalog().is_none());
         assert!(backends.read().usage().is_none());
@@ -137,6 +145,7 @@ mod tests {
         assert!(backends.transactions().postgres().is_none());
         assert!(backends.workers().redis().is_none());
         assert!(backends.write().shadow_results().is_none());
+        assert!(backends.write().usage().is_none());
     }
 
     #[tokio::test]
@@ -160,13 +169,31 @@ mod tests {
         assert!(backends.postgres().is_some());
         assert!(backends.leases().postgres().is_some());
         assert!(backends.read().auth_api_keys().is_some());
+        assert!(backends.read().auth_modules().is_some());
+        assert!(backends.read().billing().is_some());
+        assert!(backends.read().gemini_file_mappings().is_some());
+        assert!(backends.read().global_models().is_some());
+        assert!(backends.read().management_tokens().is_some());
+        assert!(backends.read().oauth_providers().is_some());
+        assert!(backends.read().proxy_nodes().is_some());
+        assert!(backends.read().minimal_candidate_selection().is_some());
         assert!(backends.read().request_candidates().is_some());
         assert!(backends.read().provider_catalog().is_some());
+        assert!(backends.read().provider_quotas().is_some());
         assert!(backends.read().usage().is_some());
         assert!(backends.read().video_tasks().is_some());
+        assert!(backends.read().wallets().is_some());
         assert!(backends.read().shadow_results().is_some());
         assert!(backends.transactions().postgres().is_some());
         assert!(backends.write().shadow_results().is_some());
+        assert!(backends.write().auth_modules().is_some());
+        assert!(backends.write().gemini_file_mappings().is_some());
+        assert!(backends.write().management_tokens().is_some());
+        assert!(backends.write().oauth_providers().is_some());
+        assert!(backends.write().proxy_nodes().is_some());
+        assert!(backends.write().provider_quotas().is_some());
+        assert!(backends.write().usage().is_some());
+        assert!(backends.write().wallets().is_some());
         assert!(backends.config().postgres.is_some());
     }
 
@@ -188,8 +215,12 @@ mod tests {
         assert!(backends.locks().redis().is_some());
         assert!(backends.workers().redis().is_some());
         assert!(backends.read().auth_api_keys().is_none());
+        assert!(backends.read().auth_modules().is_none());
+        assert!(backends.read().global_models().is_none());
+        assert!(backends.read().oauth_providers().is_none());
         assert!(backends.transactions().postgres().is_none());
         assert!(backends.write().shadow_results().is_none());
+        assert!(backends.write().usage().is_none());
         assert!(backends.config().redis.is_some());
     }
 }

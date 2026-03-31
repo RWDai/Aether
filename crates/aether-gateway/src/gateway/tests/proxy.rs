@@ -8,6 +8,7 @@ async fn gateway_proxies_method_path_body_and_generates_trace_id() {
         path: String,
         trace_id: String,
         execution_path: String,
+        python_dependency_reason: String,
         host: String,
         forwarded_for: String,
         body: String,
@@ -44,6 +45,12 @@ async fn gateway_proxies_method_path_body_and_generates_trace_id() {
                             .and_then(|value| value.to_str().ok())
                             .unwrap_or_default()
                             .to_string(),
+                        python_dependency_reason: parts
+                            .headers
+                            .get(PYTHON_DEPENDENCY_REASON_HEADER)
+                            .and_then(|value| value.to_str().ok())
+                            .unwrap_or_default()
+                            .to_string(),
                         host: parts
                             .headers
                             .get(http::header::HOST)
@@ -73,8 +80,9 @@ async fn gateway_proxies_method_path_body_and_generates_trace_id() {
 
     let client = reqwest::Client::new();
     let response = client
-        .post(format!("{gateway_url}/v1/chat/completions?stream=true"))
+        .post(format!("{gateway_url}/does/not/exist?stream=true"))
         .header(http::header::HOST, "api.example.com")
+        .header(PYTHON_DEPENDENCY_REASON_HEADER, "forged")
         .body("{\"hello\":\"world\"}")
         .send()
         .await
@@ -95,6 +103,13 @@ async fn gateway_proxies_method_path_body_and_generates_trace_id() {
             .and_then(|value| value.to_str().ok()),
         Some(EXECUTION_PATH_PUBLIC_PROXY_PASSTHROUGH)
     );
+    assert_eq!(
+        response
+            .headers()
+            .get(PYTHON_DEPENDENCY_REASON_HEADER)
+            .and_then(|value| value.to_str().ok()),
+        Some("proxy_passthrough")
+    );
 
     let response_trace_id = response
         .headers()
@@ -110,12 +125,13 @@ async fn gateway_proxies_method_path_body_and_generates_trace_id() {
         .clone()
         .expect("upstream request should be captured");
     assert_eq!(seen_request.method, "POST");
-    assert_eq!(seen_request.path, "/v1/chat/completions?stream=true");
+    assert_eq!(seen_request.path, "/does/not/exist?stream=true");
     assert_eq!(seen_request.body, "{\"hello\":\"world\"}");
     assert_eq!(
         seen_request.execution_path,
         EXECUTION_PATH_PUBLIC_PROXY_PASSTHROUGH
     );
+    assert!(seen_request.python_dependency_reason.is_empty());
     assert_eq!(seen_request.host, "api.example.com");
     assert_eq!(seen_request.forwarded_for, "127.0.0.1");
     assert_eq!(seen_request.trace_id, response_trace_id);

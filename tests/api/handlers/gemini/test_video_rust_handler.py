@@ -14,6 +14,7 @@ import src.services.proxy_node.resolver as resolver_mod
 import src.services.request.rust_executor_client as rust_client_mod
 from src.api.handlers.gemini.video_handler import GeminiVeoHandler
 from src.core.api_format.conversion.internal_video import VideoStatus
+from src.core.exceptions import ProviderNotAvailableException
 from src.services.request.rust_executor_client import RustExecutorStreamResult
 
 
@@ -82,12 +83,6 @@ async def test_handle_create_task_uses_rust_sync_helper(
             "x-goog-api-key": upstream_key
         },
     )
-    monkeypatch.setattr(
-        video_mod.HTTPClientPool,
-        "get_default_client_async",
-        AsyncMock(side_effect=AssertionError("python fallback should not run")),
-    )
-
     async def _fake_rust_sync(**kwargs: object) -> httpx.Response:
         assert kwargs["method"] == "POST"
         assert kwargs["provider_id"] == "prov-1"
@@ -207,12 +202,6 @@ async def test_handle_download_content_uses_rust_executor_with_proxy_snapshot(
         )
 
     monkeypatch.setattr(rust_client_mod.RustExecutorClient, "execute_stream", _fake_execute_stream)
-    monkeypatch.setattr(
-        video_mod.HTTPClientPool,
-        "get_default_client_async",
-        AsyncMock(side_effect=AssertionError("python fallback should not run")),
-    )
-
     response = await handler.handle_download_content(
         task_id="operations/ext-1",
         http_request=SimpleNamespace(),
@@ -224,3 +213,39 @@ async def test_handle_download_content_uses_rust_executor_with_proxy_snapshot(
     body = b"".join([chunk async for chunk in response.body_iterator])
     assert body == b"gemini-video"
     assert dummy_ctx.closed is True
+
+
+@pytest.mark.asyncio
+async def test_handle_download_content_raises_when_rust_backend_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(video_mod.config, "executor_backend", "python")
+    handler = _make_handler()
+
+    monkeypatch.setattr(
+        handler,
+        "_get_task_by_external_id",
+        lambda task_id: SimpleNamespace(
+            id=task_id,
+            status=VideoStatus.COMPLETED.value,
+            video_url="https://storage.example.com/video.mp4",
+            video_expires_at=datetime.now(timezone.utc).replace(year=2099),
+            model="veo-3",
+        ),
+    )
+    monkeypatch.setattr(
+        handler,
+        "_get_endpoint_and_key",
+        lambda task: (
+            SimpleNamespace(id="ep-1", provider_id="prov-1", proxy=None),
+            SimpleNamespace(id="key-1", api_key=None, proxy=None),
+        ),
+    )
+
+    with pytest.raises(ProviderNotAvailableException):
+        await handler.handle_download_content(
+            task_id="operations/ext-1",
+            http_request=SimpleNamespace(),
+            original_headers={},
+            query_params=None,
+        )

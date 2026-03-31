@@ -120,6 +120,12 @@ class VertexAuthService:
         Raises:
             VertexAuthError: 获取 Token 失败
         """
+        logger.warning(
+            "[VertexAuth] Skip Python token exchange; Rust-only path required for {}",
+            _mask_email(self.client_email),
+        )
+        raise VertexAuthError("Vertex Service Account 认证仅支持 Rust executor")
+
         # 检查缓存
         cache_key = self.client_email
         if cache_key in self._token_cache:

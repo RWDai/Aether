@@ -66,6 +66,12 @@ class MaintenanceScheduler:
             return 5
         return max(1, minutes)
 
+    @staticmethod
+    def _has_python_startup_tasks() -> bool:
+        return bool(
+            config.pending_cleanup_python_enabled or config.antigravity_ua_refresh_python_enabled
+        )
+
     def _get_checkin_time(self) -> tuple[int, int]:
         """获取签到任务的执行时间
 
@@ -155,123 +161,165 @@ class MaintenanceScheduler:
             self._registered_job_ids.append(job_id)
 
         # 注册定时任务
-        # 统计聚合任务 - UTC 00:05 执行
-        _add_cron(
-            "stats_aggregation",
-            func=self._scheduled_stats_aggregation,
-            hour=0,
-            minute=5,
-            name="统计数据聚合",
-            timezone="UTC",
-        )
-        # 小时统计聚合任务 - 每小时 05 分执行（UTC）
-        _add_cron(
-            "stats_hourly_aggregation",
-            func=self._scheduled_hourly_stats_aggregation,
-            hour="*",
-            minute=5,
-            name="统计小时数据聚合",
-            timezone="UTC",
-        )
-        _add_cron(
-            "wallet_daily_usage_aggregation",
-            func=self._scheduled_wallet_daily_usage_aggregation,
-            hour=0,
-            minute=10,
-            name="钱包每日消费汇总",
-        )
-        # 清理任务 - 凌晨 3 点执行
-        _add_cron(
-            "usage_cleanup",
-            func=self._scheduled_cleanup,
-            hour=3,
-            minute=0,
-            name="使用记录清理",
-        )
+        if config.stats_aggregation_python_enabled:
+            # 统计聚合任务 - UTC 00:05 执行
+            _add_cron(
+                "stats_aggregation",
+                func=self._scheduled_stats_aggregation,
+                hour=0,
+                minute=5,
+                name="统计数据聚合",
+                timezone="UTC",
+            )
+        else:
+            logger.info("每日统计聚合已切到 Rust gateway，Python 调度器跳过注册")
+        if config.stats_hourly_aggregation_python_enabled:
+            # 小时统计聚合任务 - 每小时 05 分执行（UTC）
+            _add_cron(
+                "stats_hourly_aggregation",
+                func=self._scheduled_hourly_stats_aggregation,
+                hour="*",
+                minute=5,
+                name="统计小时数据聚合",
+                timezone="UTC",
+            )
+        else:
+            logger.info("小时统计聚合已切到 Rust gateway，Python 调度器跳过注册")
+        if config.wallet_daily_usage_aggregation_python_enabled:
+            _add_cron(
+                "wallet_daily_usage_aggregation",
+                func=self._scheduled_wallet_daily_usage_aggregation,
+                hour=0,
+                minute=10,
+                name="钱包每日消费汇总",
+            )
+        else:
+            logger.info("钱包每日消费汇总已切到 Rust gateway，Python 调度器跳过注册")
+        if config.usage_cleanup_python_enabled:
+            # 清理任务 - 凌晨 3 点执行
+            _add_cron(
+                "usage_cleanup",
+                func=self._scheduled_cleanup,
+                hour=3,
+                minute=0,
+                name="使用记录清理",
+            )
+        else:
+            logger.info("使用记录清理已切到 Rust gateway，Python 调度器跳过注册")
 
-        # 连接池监控 - 每 5 分钟
-        _add_interval(
-            "pool_monitor",
-            func=self._scheduled_monitor,
-            minutes=5,
-            name="连接池监控",
-        )
+        if config.pool_monitor_python_enabled:
+            # 连接池监控 - 每 5 分钟
+            _add_interval(
+                "pool_monitor",
+                func=self._scheduled_monitor,
+                minutes=5,
+                name="连接池监控",
+            )
+        else:
+            logger.info("连接池监控已切到 Rust gateway，Python 调度器跳过注册")
 
-        # HTTP 代理/Tunnel 客户端空闲清理 - 默认每 5 分钟
-        _add_interval(
-            "http_client_idle_cleanup",
-            func=self._scheduled_http_client_idle_cleanup,
-            minutes=self._get_http_client_idle_cleanup_interval_minutes(),
-            name="HTTP客户端空闲清理",
-        )
+        if config.http_client_idle_cleanup_python_enabled:
+            # HTTP 代理/Tunnel 客户端空闲清理 - 默认每 5 分钟
+            _add_interval(
+                "http_client_idle_cleanup",
+                func=self._scheduled_http_client_idle_cleanup,
+                minutes=self._get_http_client_idle_cleanup_interval_minutes(),
+                name="HTTP客户端空闲清理",
+            )
+        else:
+            logger.info("HTTP 客户端空闲清理默认跳过 Python 调度注册")
 
-        # Pending 状态清理 - 每 5 分钟
-        _add_interval(
-            "pending_cleanup",
-            func=self._scheduled_pending_cleanup,
-            minutes=5,
-            name="Pending状态清理",
-        )
+        if config.pending_cleanup_python_enabled:
+            # Pending 状态清理 - 每 5 分钟
+            _add_interval(
+                "pending_cleanup",
+                func=self._scheduled_pending_cleanup,
+                minutes=5,
+                name="Pending状态清理",
+            )
+        else:
+            logger.info("Pending 状态清理已切到 Rust gateway，Python 调度器跳过注册")
 
-        # 审计日志清理 - 凌晨 4 点执行
-        _add_cron(
-            "audit_cleanup",
-            func=self._scheduled_audit_cleanup,
-            hour=4,
-            minute=0,
-            name="审计日志清理",
-        )
+        if config.audit_cleanup_python_enabled:
+            # 审计日志清理 - 凌晨 4 点执行
+            _add_cron(
+                "audit_cleanup",
+                func=self._scheduled_audit_cleanup,
+                hour=4,
+                minute=0,
+                name="审计日志清理",
+            )
+        else:
+            logger.info("审计日志清理已切到 Rust gateway，Python 调度器跳过注册")
 
-        # Gemini 文件映射清理 - 每小时执行
-        _add_interval(
-            "gemini_file_mapping_cleanup",
-            func=self._scheduled_gemini_file_mapping_cleanup,
-            hours=1,
-            name="Gemini文件映射清理",
-        )
+        if config.gemini_file_mapping_cleanup_python_enabled:
+            # Gemini 文件映射清理 - 每小时执行
+            _add_interval(
+                "gemini_file_mapping_cleanup",
+                func=self._scheduled_gemini_file_mapping_cleanup,
+                hours=1,
+                name="Gemini文件映射清理",
+            )
+        else:
+            logger.info("Gemini 文件映射清理已切到 Rust gateway，Python 调度器跳过注册")
 
-        # 请求候选记录清理 - 凌晨 3:30 执行
-        _add_cron(
-            "candidate_cleanup",
-            func=self._scheduled_candidate_cleanup,
-            hour=3,
-            minute=30,
-            name="请求候选记录清理",
-        )
+        if config.request_candidate_cleanup_python_enabled:
+            # 请求候选记录清理 - 凌晨 3:30 执行
+            _add_cron(
+                "candidate_cleanup",
+                func=self._scheduled_candidate_cleanup,
+                hour=3,
+                minute=30,
+                name="请求候选记录清理",
+            )
+        else:
+            logger.info("请求候选记录清理已切到 Rust gateway，Python 调度器跳过注册")
 
-        # 数据库表维护 - 每周日凌晨 5 点执行 VACUUM ANALYZE
-        _add_cron(
-            "db_maintenance",
-            func=self._scheduled_db_maintenance,
-            day_of_week="sun",
-            hour=5,
-            minute=0,
-            name="数据库表维护",
-        )
+        if config.db_maintenance_python_enabled:
+            # 数据库表维护 - 每周日凌晨 5 点执行 VACUUM ANALYZE
+            _add_cron(
+                "db_maintenance",
+                func=self._scheduled_db_maintenance,
+                day_of_week="sun",
+                hour=5,
+                minute=0,
+                name="数据库表维护",
+            )
+        else:
+            logger.info("数据库维护已切到 Rust gateway，Python 调度器跳过注册")
 
-        # Antigravity User-Agent 版本刷新 - 每 6 小时
-        _add_interval(
-            "antigravity_ua_refresh",
-            func=self._scheduled_antigravity_ua_refresh,
-            hours=6,
-            name="Antigravity UA版本刷新",
-        )
+        if config.antigravity_ua_refresh_python_enabled:
+            # Antigravity User-Agent 版本刷新 - 每 6 小时
+            _add_interval(
+                "antigravity_ua_refresh",
+                func=self._scheduled_antigravity_ua_refresh,
+                hours=6,
+                name="Antigravity UA版本刷新",
+            )
+        else:
+            logger.info("Antigravity UA 版本刷新默认跳过 Python 调度注册")
 
-        # Provider 签到任务 - 根据配置时间执行
-        checkin_hour, checkin_minute = self._get_checkin_time()
-        _add_cron(
-            self.CHECKIN_JOB_ID,
-            func=self._scheduled_provider_checkin,
-            hour=checkin_hour,
-            minute=checkin_minute,
-            name="Provider签到",
-        )
+        if config.provider_checkin_python_enabled:
+            # Provider 签到任务 - 根据配置时间执行
+            checkin_hour, checkin_minute = self._get_checkin_time()
+            _add_cron(
+                self.CHECKIN_JOB_ID,
+                func=self._scheduled_provider_checkin,
+                hour=checkin_hour,
+                minute=checkin_minute,
+                name="Provider签到",
+            )
+        else:
+            logger.info("Provider 签到已切到 Rust gateway，Python 调度器跳过注册")
 
         # 启动时执行一次初始化任务
-        if config.maintenance_startup_tasks_enabled:
+        if config.maintenance_startup_tasks_enabled and self._has_python_startup_tasks():
             from src.utils.async_utils import safe_create_task
 
             self._startup_task = safe_create_task(self._run_startup_tasks())
+        elif config.maintenance_startup_tasks_enabled:
+            self._startup_task = None
+            logger.info("维护调度器启动任务已无剩余 Python owner，跳过创建")
         else:
             self._startup_task = None
             logger.info("维护调度器启动任务已禁用（MAINTENANCE_STARTUP_TASKS_ENABLED=false）")
@@ -282,20 +330,25 @@ class MaintenanceScheduler:
         # 增加延迟时间避免与 UsageQueueConsumer 等后台任务竞争数据库连接
         await asyncio.sleep(10)
 
-        # 刷新 Antigravity User-Agent 版本号（不阻塞其他启动任务）
-        try:
-            from src.services.provider.adapters.antigravity.client import refresh_user_agent
+        if config.antigravity_ua_refresh_python_enabled:
+            # 刷新 Antigravity User-Agent 版本号（不阻塞其他启动任务）
+            try:
+                from src.services.provider.adapters.antigravity.client import refresh_user_agent
 
-            await refresh_user_agent()
-        except Exception as e:
-            logger.debug("启动时刷新 Antigravity UA 版本失败（不影响运行）: {}", e)
+                await refresh_user_agent()
+            except Exception as e:
+                logger.debug("启动时刷新 Antigravity UA 版本失败（不影响运行）: {}", e)
+        else:
+            logger.info("启动时 Antigravity UA 刷新默认跳过")
 
-        try:
-            logger.info("启动时清理残留的 pending/streaming 请求...")
-            await self._perform_pending_cleanup()
-        except Exception as e:
-            logger.exception(f"启动时 pending 清理执行出错: {e}")
-
+        if config.pending_cleanup_python_enabled:
+            try:
+                logger.info("启动时清理残留的 pending/streaming 请求...")
+                await self._perform_pending_cleanup()
+            except Exception as e:
+                logger.exception(f"启动时 pending 清理执行出错: {e}")
+        else:
+            logger.info("启动时 pending 清理已切到 Rust gateway，Python 宿主跳过执行")
     async def stop(self) -> Any:
         """停止调度器"""
         if not self.running:
@@ -1393,6 +1446,24 @@ class MaintenanceScheduler:
                 batch_db.close()
 
         return total_deleted
+
+
+def should_start_python_maintenance_scheduler() -> bool:
+    return bool(
+        config.audit_cleanup_python_enabled
+        or config.antigravity_ua_refresh_python_enabled
+        or config.db_maintenance_python_enabled
+        or config.gemini_file_mapping_cleanup_python_enabled
+        or config.http_client_idle_cleanup_python_enabled
+        or config.pending_cleanup_python_enabled
+        or config.pool_monitor_python_enabled
+        or config.provider_checkin_python_enabled
+        or config.request_candidate_cleanup_python_enabled
+        or config.stats_aggregation_python_enabled
+        or config.stats_hourly_aggregation_python_enabled
+        or config.usage_cleanup_python_enabled
+        or config.wallet_daily_usage_aggregation_python_enabled
+    )
 
 
 # 全局单例

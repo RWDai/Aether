@@ -5,7 +5,21 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict, dataclass
+
 from fastapi import Request
+
+TRACE_ID_HEADER = "x-trace-id"
+_MISSING = object()
+
+
+@dataclass(frozen=True)
+class RequestIdentityMetadata:
+    """请求身份元数据（最小集合）。"""
+
+    request_id: str | None
+    client_ip: str
+    user_agent: str
 
 
 def get_client_ip(request: Request) -> str:
@@ -71,7 +85,47 @@ def get_request_id(request: Request) -> str | None:
     Returns:
         Optional[str]: 请求ID，如果不存在则返回 None
     """
-    return getattr(request.state, "request_id", None)
+    request_id = getattr(request.state, "request_id", None)
+    if request_id:
+        return request_id
+
+    trace_id = request.headers.get(TRACE_ID_HEADER)
+    if trace_id:
+        return trace_id.strip() or None
+
+    return None
+
+
+def update_request_state(
+    request: Request,
+    *,
+    request_id: object = _MISSING,
+    user_id: object = _MISSING,
+    api_key_id: object = _MISSING,
+    management_token_id: object = _MISSING,
+    user_session_id: object = _MISSING,
+    prefetched_balance_remaining: object = _MISSING,
+    gateway_execution_path: object = _MISSING,
+    rate_limit_scope: object = _MISSING,
+) -> None:
+    """集中维护请求级 runtime state，减少散点赋值。"""
+
+    if request_id is not _MISSING:
+        request.state.request_id = request_id
+    if user_id is not _MISSING:
+        request.state.user_id = user_id
+    if api_key_id is not _MISSING:
+        request.state.api_key_id = api_key_id
+    if management_token_id is not _MISSING:
+        request.state.management_token_id = management_token_id
+    if user_session_id is not _MISSING:
+        request.state.user_session_id = user_session_id
+    if prefetched_balance_remaining is not _MISSING:
+        request.state.prefetched_balance_remaining = prefetched_balance_remaining
+    if gateway_execution_path is not _MISSING:
+        request.state.gateway_execution_path = gateway_execution_path
+    if rate_limit_scope is not _MISSING:
+        request.state.rate_limit_scope = rate_limit_scope
 
 
 def get_request_metadata(request: Request) -> dict:
@@ -84,16 +138,25 @@ def get_request_metadata(request: Request) -> dict:
     Returns:
         dict: 包含请求元数据的字典
     """
+    identity = get_request_identity_metadata(request)
     return {
-        "client_ip": get_client_ip(request),
-        "user_agent": get_user_agent(request),
-        "request_id": get_request_id(request),
+        **asdict(identity),
         "method": request.method,
         "path": request.url.path,
         "query_params": str(request.query_params) if request.query_params else None,
         "content_type": request.headers.get("Content-Type"),
         "content_length": request.headers.get("Content-Length"),
     }
+
+
+def get_request_identity_metadata(request: Request) -> RequestIdentityMetadata:
+    """集中读取 request_id/client_ip/user_agent，避免散点访问。"""
+
+    return RequestIdentityMetadata(
+        request_id=get_request_id(request),
+        client_ip=get_client_ip(request),
+        user_agent=get_user_agent(request),
+    )
 
 
 def extract_ip_from_headers(headers: dict) -> str:

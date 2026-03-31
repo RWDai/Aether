@@ -1,6 +1,7 @@
 use crate::redis::{
-    RedisClient, RedisClientConfig, RedisClientFactory, RedisKeyspace, RedisLockRunner,
-    RedisLockRunnerConfig, RedisStreamRunner, RedisStreamRunnerConfig,
+    RedisClient, RedisClientConfig, RedisClientFactory, RedisKeyspace, RedisKvRunner,
+    RedisKvRunnerConfig, RedisLockRunner, RedisLockRunnerConfig, RedisStreamRunner,
+    RedisStreamRunnerConfig,
 };
 use crate::DataLayerError;
 
@@ -46,12 +47,18 @@ impl RedisBackend {
     ) -> Result<RedisStreamRunner, DataLayerError> {
         RedisStreamRunner::new(self.client_clone(), self.keyspace(), config)
     }
+
+    pub fn kv_runner(&self, config: RedisKvRunnerConfig) -> Result<RedisKvRunner, DataLayerError> {
+        RedisKvRunner::new(self.client_clone(), self.keyspace(), config)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::RedisBackend;
-    use crate::redis::{RedisClientConfig, RedisLockRunnerConfig, RedisStreamRunnerConfig};
+    use crate::redis::{
+        RedisClientConfig, RedisKvRunnerConfig, RedisLockRunnerConfig, RedisStreamRunnerConfig,
+    };
 
     #[test]
     fn backend_retains_config_client_and_shared_runners() {
@@ -72,5 +79,8 @@ mod tests {
         let _stream_runner = backend
             .stream_runner(RedisStreamRunnerConfig::default())
             .expect("stream runner should build");
+        let _kv_runner = backend
+            .kv_runner(RedisKvRunnerConfig::default())
+            .expect("kv runner should build");
     }
 }

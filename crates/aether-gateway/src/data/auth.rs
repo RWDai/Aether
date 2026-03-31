@@ -12,6 +12,7 @@ pub(crate) struct StoredGatewayAuthApiKeySnapshot {
     pub(crate) user_auth_source: String,
     pub(crate) user_is_active: bool,
     pub(crate) user_is_deleted: bool,
+    pub(crate) user_rate_limit: Option<i32>,
     pub(crate) user_allowed_providers: Option<Vec<String>>,
     pub(crate) user_allowed_api_formats: Option<Vec<String>>,
     pub(crate) user_allowed_models: Option<Vec<String>>,
@@ -40,6 +41,7 @@ impl StoredGatewayAuthApiKeySnapshot {
             user_auth_source: snapshot.user_auth_source,
             user_is_active: snapshot.user_is_active,
             user_is_deleted: snapshot.user_is_deleted,
+            user_rate_limit: snapshot.user_rate_limit,
             user_allowed_providers: snapshot.user_allowed_providers,
             user_allowed_api_formats: snapshot.user_allowed_api_formats,
             user_allowed_models: snapshot.user_allowed_models,
@@ -56,6 +58,24 @@ impl StoredGatewayAuthApiKeySnapshot {
             api_key_allowed_models: snapshot.api_key_allowed_models,
             currently_usable,
         }
+    }
+
+    pub(crate) fn effective_allowed_providers(&self) -> Option<&[String]> {
+        self.api_key_allowed_providers
+            .as_deref()
+            .or(self.user_allowed_providers.as_deref())
+    }
+
+    pub(crate) fn effective_allowed_api_formats(&self) -> Option<&[String]> {
+        self.api_key_allowed_api_formats
+            .as_deref()
+            .or(self.user_allowed_api_formats.as_deref())
+    }
+
+    pub(crate) fn effective_allowed_models(&self) -> Option<&[String]> {
+        self.api_key_allowed_models
+            .as_deref()
+            .or(self.user_allowed_models.as_deref())
     }
 }
 
@@ -75,10 +95,25 @@ pub(crate) async fn read_auth_api_key_snapshot(
         .map(|snapshot| StoredGatewayAuthApiKeySnapshot::from_stored(snapshot, now_unix_secs)))
 }
 
+pub(crate) async fn read_auth_api_key_snapshot_by_key_hash(
+    state: &GatewayDataState,
+    key_hash: &str,
+    now_unix_secs: u64,
+) -> Result<Option<StoredGatewayAuthApiKeySnapshot>, DataLayerError> {
+    let snapshot = state
+        .find_auth_api_key_snapshot(AuthApiKeyLookupKey::KeyHash(key_hash))
+        .await?;
+    Ok(snapshot
+        .map(|snapshot| StoredGatewayAuthApiKeySnapshot::from_stored(snapshot, now_unix_secs)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::GatewayDataState;
-    use super::{read_auth_api_key_snapshot, StoredGatewayAuthApiKeySnapshot};
+    use super::{
+        read_auth_api_key_snapshot, read_auth_api_key_snapshot_by_key_hash,
+        StoredGatewayAuthApiKeySnapshot,
+    };
     use aether_data::repository::auth::{
         InMemoryAuthApiKeySnapshotRepository, StoredAuthApiKeySnapshot,
     };
@@ -134,6 +169,7 @@ mod tests {
                 user_auth_source: "local".to_string(),
                 user_is_active: true,
                 user_is_deleted: false,
+                user_rate_limit: None,
                 user_allowed_providers: Some(vec!["openai".to_string()]),
                 user_allowed_api_formats: Some(vec!["openai:chat".to_string()]),
                 user_allowed_models: Some(vec!["gpt-4.1".to_string()]),
@@ -150,6 +186,35 @@ mod tests {
                 api_key_allowed_models: Some(vec!["gpt-4.1".to_string()]),
                 currently_usable: true,
             }
+        );
+    }
+
+    #[tokio::test]
+    async fn reads_auth_snapshot_by_key_hash() {
+        let repository = Arc::new(InMemoryAuthApiKeySnapshotRepository::seed(vec![(
+            Some("hash-lookup".to_string()),
+            sample_snapshot("key-1", "user-1"),
+        )]));
+        let state = GatewayDataState::with_auth_api_key_reader_for_tests(repository);
+
+        let snapshot = read_auth_api_key_snapshot_by_key_hash(&state, "hash-lookup", 150)
+            .await
+            .expect("read should succeed")
+            .expect("snapshot should exist");
+
+        assert_eq!(snapshot.user_id, "user-1");
+        assert_eq!(snapshot.api_key_id, "key-1");
+        assert_eq!(
+            snapshot.effective_allowed_providers(),
+            Some(&["openai".to_string()][..])
+        );
+        assert_eq!(
+            snapshot.effective_allowed_api_formats(),
+            Some(&["openai:chat".to_string()][..])
+        );
+        assert_eq!(
+            snapshot.effective_allowed_models(),
+            Some(&["gpt-4.1".to_string()][..])
         );
     }
 }

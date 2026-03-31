@@ -69,6 +69,10 @@ where
             .map(|entries| entries.len())
             .unwrap_or(0)
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 impl<K, V> ExpiringMap<K, V>
@@ -81,9 +85,7 @@ where
             return None;
         };
 
-        let Some(entry) = entries.get(key).cloned() else {
-            return None;
-        };
+        let entry = entries.get(key).cloned()?;
 
         if entry.inserted_at.elapsed() > ttl {
             entries.remove(key);

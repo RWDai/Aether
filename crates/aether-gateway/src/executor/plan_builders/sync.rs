@@ -1,8 +1,9 @@
-use super::shared::{
-    augment_sync_report_context, build_openai_chat_url, build_openai_cli_url,
-    build_openai_passthrough_headers,
-};
+use super::shared::augment_sync_report_context;
 use super::*;
+use crate::gateway::provider_transport::{
+    build_openai_chat_url, build_openai_cli_url, build_openai_passthrough_headers,
+    ensure_upstream_auth_header,
+};
 
 pub(crate) fn build_openai_chat_sync_plan_from_decision(
     parts: &http::request::Parts,
@@ -136,6 +137,7 @@ pub(crate) fn build_openai_chat_sync_plan_from_decision(
     } else {
         payload.provider_request_headers.clone()
     };
+    ensure_upstream_auth_header(&mut provider_request_headers, &auth_header, &auth_value);
     if payload.upstream_is_stream {
         provider_request_headers
             .entry("accept".to_string())
@@ -232,19 +234,10 @@ pub(crate) fn build_passthrough_sync_plan_from_decision(
     else {
         return Ok(None);
     };
-    let provider_request_body_value = payload
-        .provider_request_body
-        .clone()
-        .unwrap_or(serde_json::Value::Null);
-    let provider_request_body_for_report = provider_request_body_value.clone();
-    let request_body = match provider_request_body_value {
-        serde_json::Value::Null => RequestBody {
-            json_body: None,
-            body_bytes_b64: None,
-            body_ref: None,
-        },
-        other => RequestBody::from_json(other),
-    };
+    let (request_body, provider_request_body_for_report) = resolve_passthrough_sync_request_body(
+        payload.provider_request_body.clone(),
+        payload.provider_request_body_base64.clone(),
+    );
 
     let plan = ExecutionPlan {
         request_id,
@@ -290,6 +283,42 @@ pub(crate) fn build_passthrough_sync_plan_from_decision(
     }))
 }
 
+fn resolve_passthrough_sync_request_body(
+    provider_request_body: Option<serde_json::Value>,
+    provider_request_body_base64: Option<String>,
+) -> (RequestBody, serde_json::Value) {
+    if let Some(body_bytes_b64) = provider_request_body_base64
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+    {
+        return (
+            RequestBody {
+                json_body: None,
+                body_bytes_b64: Some(body_bytes_b64.clone()),
+                body_ref: None,
+            },
+            serde_json::json!({"body_bytes_b64": body_bytes_b64}),
+        );
+    }
+
+    match provider_request_body.unwrap_or(serde_json::Value::Null) {
+        serde_json::Value::Null => (
+            RequestBody {
+                json_body: None,
+                body_bytes_b64: None,
+                body_ref: None,
+            },
+            serde_json::Value::Null,
+        ),
+        other => {
+            let report_body = other.clone();
+            (RequestBody::from_json(other), report_body)
+        }
+    }
+}
+
 pub(crate) fn build_openai_cli_sync_plan_from_decision(
     parts: &http::request::Parts,
     _body_json: &serde_json::Value,
@@ -327,20 +356,17 @@ pub(crate) fn build_openai_cli_sync_plan_from_decision(
     else {
         return Ok(None);
     };
-    let Some(_auth_header) = payload
+    let auth_header = payload
         .auth_header
         .clone()
-        .filter(|value| !value.trim().is_empty())
-    else {
-        return Ok(None);
-    };
-    let Some(_auth_value) = payload
+        .filter(|value| !value.trim().is_empty());
+    let auth_value = payload
         .auth_value
         .clone()
-        .filter(|value| !value.trim().is_empty())
-    else {
+        .filter(|value| !value.trim().is_empty());
+    if auth_header.is_some() != auth_value.is_some() {
         return Ok(None);
-    };
+    }
     let Some(provider_api_format) = payload
         .provider_api_format
         .clone()
@@ -376,6 +402,9 @@ pub(crate) fn build_openai_cli_sync_plan_from_decision(
     };
 
     let mut provider_request_headers = payload.provider_request_headers.clone();
+    if let (Some(auth_header), Some(auth_value)) = (auth_header.as_deref(), auth_value.as_deref()) {
+        ensure_upstream_auth_header(&mut provider_request_headers, auth_header, auth_value);
+    }
     if payload.upstream_is_stream && !provider_request_headers.contains_key("accept") {
         provider_request_headers.insert("accept".to_string(), "text/event-stream".to_string());
     }
@@ -460,20 +489,17 @@ pub(crate) fn build_standard_sync_plan_from_decision(
     else {
         return Ok(None);
     };
-    let Some(_auth_header) = payload
+    let auth_header = payload
         .auth_header
         .clone()
-        .filter(|value| !value.trim().is_empty())
-    else {
-        return Ok(None);
-    };
-    let Some(_auth_value) = payload
+        .filter(|value| !value.trim().is_empty());
+    let auth_value = payload
         .auth_value
         .clone()
-        .filter(|value| !value.trim().is_empty())
-    else {
+        .filter(|value| !value.trim().is_empty());
+    if auth_header.is_some() != auth_value.is_some() {
         return Ok(None);
-    };
+    }
     let Some(provider_api_format) = payload
         .provider_api_format
         .clone()
@@ -493,6 +519,9 @@ pub(crate) fn build_standard_sync_plan_from_decision(
     };
 
     let mut provider_request_headers = payload.provider_request_headers.clone();
+    if let (Some(auth_header), Some(auth_value)) = (auth_header.as_deref(), auth_value.as_deref()) {
+        ensure_upstream_auth_header(&mut provider_request_headers, auth_header, auth_value);
+    }
     if payload.upstream_is_stream {
         provider_request_headers
             .entry("accept".to_string())
@@ -579,20 +608,17 @@ pub(crate) fn build_gemini_sync_plan_from_decision(
     else {
         return Ok(None);
     };
-    let Some(_auth_header) = payload
+    let auth_header = payload
         .auth_header
         .clone()
-        .filter(|value| !value.trim().is_empty())
-    else {
-        return Ok(None);
-    };
-    let Some(_auth_value) = payload
+        .filter(|value| !value.trim().is_empty());
+    let auth_value = payload
         .auth_value
         .clone()
-        .filter(|value| !value.trim().is_empty())
-    else {
+        .filter(|value| !value.trim().is_empty());
+    if auth_header.is_some() != auth_value.is_some() {
         return Ok(None);
-    };
+    }
     let Some(provider_api_format) = payload
         .provider_api_format
         .clone()
@@ -612,6 +638,9 @@ pub(crate) fn build_gemini_sync_plan_from_decision(
     };
 
     let mut provider_request_headers = payload.provider_request_headers.clone();
+    if let (Some(auth_header), Some(auth_value)) = (auth_header.as_deref(), auth_value.as_deref()) {
+        ensure_upstream_auth_header(&mut provider_request_headers, auth_header, auth_value);
+    }
     if payload.upstream_is_stream {
         provider_request_headers
             .entry("accept".to_string())

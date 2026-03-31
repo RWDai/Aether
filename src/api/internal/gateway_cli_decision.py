@@ -82,7 +82,11 @@ async def _build_cli_sync_decision(
         resolve_effective_proxy,
         resolve_proxy_info_async,
     )
-    from src.services.request.executor_plan import ExecutionPlanTimeouts, ExecutionProxySnapshot
+    from src.services.request.executor_plan import (
+        ExecutionPlanTimeouts,
+        ExecutionProxySnapshot,
+        should_bypass_remote_executor_url,
+    )
 
     if str(payload.method or "").strip().upper() != "POST":
         return None
@@ -192,6 +196,12 @@ async def _build_cli_sync_decision(
         needs_conversion=bool(getattr(candidate, "needs_conversion", False)),
         output_limit=getattr(candidate, "output_limit", None),
     )
+    if should_bypass_remote_executor_url(
+        upstream_request.url,
+        provider_api_format=provider_api_format,
+        client_api_format=client_api_format,
+    ):
+        return None
     upstream_is_stream = bool(upstream_request.upstream_is_stream)
     provider_request_body = dict(upstream_request.payload or {})
     provider_request_headers = {
@@ -329,7 +339,11 @@ async def _build_cli_stream_decision(
         resolve_effective_proxy,
         resolve_proxy_info_async,
     )
-    from src.services.request.executor_plan import ExecutionPlanTimeouts, ExecutionProxySnapshot
+    from src.services.request.executor_plan import (
+        ExecutionPlanTimeouts,
+        ExecutionProxySnapshot,
+        should_bypass_remote_executor_url,
+    )
 
     if str(payload.method or "").strip().upper() != "POST":
         return None
@@ -444,6 +458,12 @@ async def _build_cli_stream_decision(
         needs_conversion=bool(getattr(candidate, "needs_conversion", False)),
         output_limit=getattr(candidate, "output_limit", None),
     )
+    if should_bypass_remote_executor_url(
+        upstream_request.url,
+        provider_api_format=provider_api_format,
+        client_api_format=client_api_format,
+    ):
+        return None
     if not bool(upstream_request.upstream_is_stream):
         return None
     if gateway_module._stream_executor_requires_python_rewrite(

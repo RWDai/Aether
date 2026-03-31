@@ -60,6 +60,88 @@ class _GatewayProxy:
 
 gateway_module = _GatewayProxy()
 
+LEGACY_CHAT_CLI_CONTROL_EXECUTE_FALLBACK_HEADER = "x-aether-control-execute-fallback"
+LEGACY_CHAT_CLI_INTERNAL_GATEWAY_HEADER = "x-aether-legacy-internal-gateway"
+_LEGACY_CHAT_CLI_INTERNAL_GATEWAY_TRUE_VALUES = {"1", "true", "yes", "on"}
+_LEGACY_CHAT_CLI_REPORT_KIND_PREFIXES = (
+    "openai_chat_",
+    "claude_chat_",
+    "gemini_chat_",
+    "openai_cli_",
+    "openai_compact_",
+    "claude_cli_",
+    "gemini_cli_",
+)
+
+
+def _is_legacy_chat_cli_control_route(decision: GatewayRouteDecision) -> bool:
+    return decision.route_class == "ai_public" and decision.route_kind in {
+        "chat",
+        "cli",
+        "compact",
+    }
+
+
+def _request_allows_legacy_chat_cli_internal_gateway(request: Request) -> bool:
+    for key, value in request.headers.items():
+        normalized_key = str(key or "").strip().lower()
+        if normalized_key not in {
+            LEGACY_CHAT_CLI_INTERNAL_GATEWAY_HEADER,
+            LEGACY_CHAT_CLI_CONTROL_EXECUTE_FALLBACK_HEADER,
+        }:
+            continue
+        return (
+            str(value or "").strip().lower()
+            in _LEGACY_CHAT_CLI_INTERNAL_GATEWAY_TRUE_VALUES
+        )
+    return False
+
+
+def _allows_legacy_chat_cli_internal_route(
+    request: Request,
+    decision: GatewayRouteDecision,
+) -> bool:
+    if not _is_legacy_chat_cli_control_route(decision):
+        return True
+    return _request_allows_legacy_chat_cli_internal_gateway(request)
+
+
+def _is_legacy_chat_cli_report_kind(report_kind: str | None) -> bool:
+    normalized = str(report_kind or "").strip().lower()
+    if not normalized:
+        return False
+    return normalized.startswith(_LEGACY_CHAT_CLI_REPORT_KIND_PREFIXES)
+
+
+def _allows_legacy_chat_cli_report_route(request: Request, report_kind: str | None) -> bool:
+    if not _is_legacy_chat_cli_report_kind(report_kind):
+        return True
+    return _request_allows_legacy_chat_cli_internal_gateway(request)
+
+
+def _build_retired_internal_gateway_response() -> JSONResponse:
+    return JSONResponse(
+        status_code=410,
+        content={"detail": "legacy internal gateway route removed; use public proxy"},
+    )
+
+
+def _allows_legacy_chat_cli_control_execute(
+    request: Request,
+    payload: GatewayExecuteRequest,
+    decision: GatewayRouteDecision,
+) -> bool:
+    if not _is_legacy_chat_cli_control_route(decision):
+        return True
+    if not _allows_legacy_chat_cli_internal_route(request, decision):
+        return False
+
+    for key, value in (payload.headers or {}).items():
+        if str(key or "").strip().lower() != LEGACY_CHAT_CLI_CONTROL_EXECUTE_FALLBACK_HEADER:
+            continue
+        return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+    return False
+
 
 async def _execute_gateway_control_request(
     *,
@@ -77,6 +159,8 @@ async def _execute_gateway_control_request(
             db=db,
             require_stream=require_stream,
         )
+    if not _allows_legacy_chat_cli_control_execute(request, payload, decision):
+        return gateway_module._build_retired_internal_gateway_response()
 
     adapter, path_params = gateway_module._resolve_gateway_sync_adapter(decision, payload.path)
     if adapter is None:
@@ -344,10 +428,13 @@ def _build_gateway_request_context(
         api_key=api_key,
         request_id=request_id,
         start_time=time.time(),
+        request_method=str(payload.method or request.method or "GET").upper(),
+        request_path=str(payload.path or request.url.path or "/"),
         client_ip=request.client.host if request.client else "127.0.0.1",
         user_agent=str(original_headers.get("user-agent") or "unknown"),
         original_headers=original_headers,
         query_params=gateway_module._parse_query_string(payload.query_string),
+        request_content_type=str(original_headers.get("content-type") or "").strip() or None,
         raw_body=raw_body,
         json_body=(dict(payload.body_json) if payload.body_json else None),
         balance_remaining=balance_remaining,

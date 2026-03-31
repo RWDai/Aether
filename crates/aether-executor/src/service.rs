@@ -14,7 +14,7 @@ use reqwest::tls::Version;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::ExecutorServiceError;
+use crate::{error::format_upstream_request_error, ExecutorServiceError};
 
 const HUB_RELAY_CONTENT_TYPE: &str = "application/vnd.aether.tunnel-envelope";
 const HUB_RELAY_ERROR_HEADER: &str = "x-aether-tunnel-error";
@@ -57,10 +57,9 @@ impl SyncExecutor {
         let response = send_request(&plan, body_bytes).await?;
         let status_code = response.status().as_u16();
         let headers = collect_response_headers(response.headers());
-        let body_bytes = response
-            .bytes()
-            .await
-            .map_err(ExecutorServiceError::UpstreamRequest)?;
+        let body_bytes = response.bytes().await.map_err(|err| {
+            ExecutorServiceError::UpstreamRequest(format_upstream_request_error(&err))
+        })?;
         let elapsed_ms = started_at.elapsed().as_millis() as u64;
         let upstream_bytes = body_bytes.len() as u64;
 
@@ -160,7 +159,7 @@ async fn send_request(
     request
         .send()
         .await
-        .map_err(ExecutorServiceError::UpstreamRequest)
+        .map_err(|err| ExecutorServiceError::UpstreamRequest(format_upstream_request_error(&err)))
 }
 
 async fn send_via_tunnel_relay(

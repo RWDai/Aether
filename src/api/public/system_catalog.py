@@ -6,6 +6,7 @@ System Catalog / 健康检查相关端点
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -14,12 +15,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func
 from sqlalchemy.orm import Session, load_only, selectinload
 
+from src.api.base.adapter import ApiAdapter, ApiMode
+from src.api.base.context import ApiRequestContext
+from src.api.base.pipeline import get_pipeline
 from src.api.handlers.base.request_builder import (
     PassthroughRequestBuilder,
     build_test_request_body,
     get_provider_auth,
 )
-from src.clients.http_client import HTTPClientPool
 from src.clients.redis_client import get_redis_client
 from src.config.settings import config
 from src.core.logger import logger
@@ -30,6 +33,14 @@ from src.services.provider.provider_context import resolve_provider_proxy
 from src.services.provider.transport import build_provider_url
 
 router = APIRouter(tags=["System Catalog"])
+pipeline = get_pipeline()
+
+
+class PublicSystemCatalogApiAdapter(ApiAdapter):
+    mode = ApiMode.PUBLIC
+
+    def authorize(self, context: ApiRequestContext) -> None:  # type: ignore[override]
+        return None
 
 
 # ============== 辅助函数 ==============
@@ -161,7 +172,7 @@ async def _try_rust_test_connection_response(
     api_format: str,
     model_name: str,
     proxy_snapshot: Any,
-) -> httpx.Response | None:
+) -> httpx.Response:
     import json
 
     from src.services.request.executor_plan import (
@@ -175,7 +186,10 @@ async def _try_rust_test_connection_response(
     )
 
     if config.executor_backend != "rust":
-        return None
+        raise HTTPException(
+            status_code=503,
+            detail="System catalog test-connection requires Rust executor",
+        )
 
     try:
         result = await RustExecutorClient().execute_sync_json(
@@ -206,8 +220,11 @@ async def _try_rust_test_connection_response(
             )
         )
     except (RustExecutorClientError, httpx.HTTPError, json.JSONDecodeError) as exc:
-        logger.warning("Rust test-connection fallback url={}: {}", url, exc)
-        return None
+        logger.warning("Rust test-connection unavailable url={}: {}", url, exc)
+        raise HTTPException(
+            status_code=503,
+            detail="System catalog test-connection requires Rust executor",
+        ) from exc
 
     response_headers = dict(result.headers)
     if result.response_json is not None:
@@ -226,12 +243,7 @@ async def _try_rust_test_connection_response(
     )
 
 
-# ============== 端点 ==============
-
-
-@router.get("/v1/health")
-async def service_health(db: Session = Depends(get_db)) -> Any:
-    """返回服务健康状态与依赖信息"""
+async def _service_health_response(db: Session) -> dict[str, Any]:
     active_providers = (
         db.query(func.count(Provider.id)).filter(Provider.is_active.is_(True)).scalar() or 0
     )
@@ -262,9 +274,7 @@ async def service_health(db: Session = Depends(get_db)) -> Any:
     }
 
 
-@router.get("/health")
-async def health_check() -> Any:
-    """简单健康检查端点（无需认证）"""
+def _health_check_response() -> dict[str, Any]:
     try:
         pool_status = get_pool_status()
         pool_health = {
@@ -288,10 +298,7 @@ async def health_check() -> Any:
     }
 
 
-@router.get("/")
-async def root(db: Session = Depends(get_db)) -> Any:
-    """Root endpoint - 服务信息概览"""
-    # 按优先级选择最高优先级的提供商
+def _root_response(db: Session) -> dict[str, Any]:
     top_provider = (
         db.query(Provider)
         .options(load_only(Provider.id, Provider.name, Provider.provider_priority))
@@ -319,14 +326,13 @@ async def root(db: Session = Depends(get_db)) -> Any:
     }
 
 
-@router.get("/v1/providers")
-async def list_providers(
-    db: Session = Depends(get_db),
-    include_models: bool = Query(False),
-    include_endpoints: bool = Query(False),
-    active_only: bool = Query(True),
-) -> Any:
-    """列出所有 Provider"""
+def _list_providers_response(
+    db: Session,
+    *,
+    include_models: bool,
+    include_endpoints: bool,
+    active_only: bool,
+) -> dict[str, Any]:
     load_options = [
         load_only(Provider.id, Provider.name, Provider.is_active, Provider.provider_priority)
     ]
@@ -369,14 +375,13 @@ async def list_providers(
     }
 
 
-@router.get("/v1/providers/{provider_identifier}")
-async def provider_detail(
+def _provider_detail_response(
+    db: Session,
+    *,
     provider_identifier: str,
-    db: Session = Depends(get_db),
-    include_models: bool = Query(False),
-    include_endpoints: bool = Query(False),
-) -> Any:
-    """获取单个 Provider 详情"""
+    include_models: bool,
+    include_endpoints: bool,
+) -> dict[str, Any]:
     load_options = [
         load_only(Provider.id, Provider.name, Provider.is_active, Provider.provider_priority)
     ]
@@ -416,21 +421,18 @@ async def provider_detail(
     return _serialize_provider(provider, include_models, include_endpoints)
 
 
-@router.get("/v1/test-connection")
-@router.get("/test-connection")
-async def test_connection(
+async def _test_connection_response(
+    *,
     request: Request,
-    db: Session = Depends(get_db),
-    provider: str | None = Query(None),
-    model: str = Query("claude-3-haiku-20240307"),
-    api_format: str | None = Query(None),
-) -> Any:
-    """测试 Provider 连接"""
+    db: Session,
+    provider: str | None,
+    model: str,
+    api_format: str | None,
+) -> dict[str, Any]:
     selected_provider = _select_provider(db, provider)
     if not selected_provider:
         raise HTTPException(status_code=503, detail="No active provider available")
 
-    # Determine endpoint format: prefer explicit api_format; otherwise use the provider's first active endpoint.
     active_endpoints: list[ProviderEndpoint] = [
         ep for ep in (selected_provider.endpoints or []) if getattr(ep, "is_active", False)
     ]
@@ -452,7 +454,6 @@ async def test_connection(
         endpoint = active_endpoints[0]
         format_value = endpoint.api_format or "claude:chat"
 
-    # Pick an active ProviderAPIKey that supports this format (best-effort).
     active_keys: list[ProviderAPIKey] = [
         k for k in (selected_provider.api_keys or []) if getattr(k, "is_active", False)
     ]
@@ -461,17 +462,14 @@ async def test_connection(
 
     def _key_supports_format(k: ProviderAPIKey) -> bool:
         formats = getattr(k, "api_formats", None)
-        # None => supports all formats; [] => supports none
         if formats is None:
             return True
         if isinstance(formats, list):
             return str(format_value) in {str(x) for x in formats}
-        # unexpected type: be permissive
         return True
 
     key = next((k for k in active_keys if _key_supports_format(k)), active_keys[0])
 
-    # Build a safe test request body in the endpoint's format (via format conversion registry).
     payload = build_test_request_body(
         format_value,
         request_data={
@@ -482,7 +480,6 @@ async def test_connection(
     )
 
     try:
-        # 获取认证信息（处理 Service Account 等异步认证场景）
         auth_info = await get_provider_auth(endpoint, key)
 
         request_builder = PassthroughRequestBuilder()
@@ -522,12 +519,10 @@ async def test_connection(
             proxy_snapshot=proxy_snapshot,
         )
         if resp is None:
-            client = await HTTPClientPool.get_upstream_client(
-                delegate_cfg,
-                proxy_config=proxy_config,
+            raise HTTPException(
+                status_code=503,
+                detail="System catalog test-connection requires Rust executor",
             )
-            resp = await client.post(url, json=provider_payload, headers=provider_headers)
-
         resp.raise_for_status()
         response = resp.json()
 
@@ -539,6 +534,161 @@ async def test_connection(
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "response_id": response.get("id", "unknown"),
         }
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error(f"API connectivity test failed: {exc}")
         raise HTTPException(status_code=503, detail=str(exc))
+
+
+class PublicServiceHealthAdapter(PublicSystemCatalogApiAdapter):
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        return await _service_health_response(context.db)
+
+
+class PublicSimpleHealthCheckAdapter(PublicSystemCatalogApiAdapter):
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        del context
+        return _health_check_response()
+
+
+class PublicRootCatalogAdapter(PublicSystemCatalogApiAdapter):
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        return _root_response(context.db)
+
+
+@dataclass
+class PublicProvidersListAdapter(PublicSystemCatalogApiAdapter):
+    include_models: bool
+    include_endpoints: bool
+    active_only: bool
+
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        return _list_providers_response(
+            context.db,
+            include_models=self.include_models,
+            include_endpoints=self.include_endpoints,
+            active_only=self.active_only,
+        )
+
+
+@dataclass
+class PublicProviderDetailAdapter(PublicSystemCatalogApiAdapter):
+    provider_identifier: str
+    include_models: bool
+    include_endpoints: bool
+
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        return _provider_detail_response(
+            context.db,
+            provider_identifier=self.provider_identifier,
+            include_models=self.include_models,
+            include_endpoints=self.include_endpoints,
+        )
+
+
+@dataclass
+class PublicTestConnectionAdapter(PublicSystemCatalogApiAdapter):
+    provider: str | None
+    model: str
+    api_format: str | None
+
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        return await _test_connection_response(
+            request=context.request,
+            db=context.db,
+            provider=self.provider,
+            model=self.model,
+            api_format=self.api_format,
+        )
+
+
+# ============== 端点 ==============
+
+
+@router.get("/v1/health")
+async def service_health(request: Request, db: Session = Depends(get_db)) -> Any:
+    """返回服务健康状态与依赖信息"""
+    adapter = PublicServiceHealthAdapter()
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=ApiMode.PUBLIC)
+
+
+@router.get("/health")
+async def health_check(request: Request, db: Session = Depends(get_db)) -> Any:
+    """简单健康检查端点（无需认证）"""
+    adapter = PublicSimpleHealthCheckAdapter()
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=ApiMode.PUBLIC)
+
+
+@router.get("/")
+async def root(request: Request, db: Session = Depends(get_db)) -> Any:
+    """Root endpoint - 服务信息概览"""
+    adapter = PublicRootCatalogAdapter()
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=ApiMode.PUBLIC)
+
+
+@router.get("/v1/providers")
+async def list_providers(
+    request: Request,
+    db: Session = Depends(get_db),
+    include_models: bool = Query(False),
+    include_endpoints: bool = Query(False),
+    active_only: bool = Query(True),
+) -> Any:
+    """列出所有 Provider"""
+    adapter = PublicProvidersListAdapter(
+        include_models=include_models,
+        include_endpoints=include_endpoints,
+        active_only=active_only,
+    )
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=ApiMode.PUBLIC)
+
+
+@router.get("/v1/providers/{provider_identifier}")
+async def provider_detail(
+    provider_identifier: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    include_models: bool = Query(False),
+    include_endpoints: bool = Query(False),
+) -> Any:
+    """获取单个 Provider 详情"""
+    adapter = PublicProviderDetailAdapter(
+        provider_identifier=provider_identifier,
+        include_models=include_models,
+        include_endpoints=include_endpoints,
+    )
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=ApiMode.PUBLIC)
+
+
+@router.get("/v1/test-connection")
+async def test_connection(
+    request: Request,
+    db: Session = Depends(get_db),
+    provider: str | None = Query(None),
+    model: str = Query("claude-3-haiku-20240307"),
+    api_format: str | None = Query(None),
+) -> Any:
+    """测试 Provider 连接"""
+    adapter = PublicTestConnectionAdapter(
+        provider=provider,
+        model=model,
+        api_format=api_format,
+    )
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=ApiMode.PUBLIC)
+
+
+@router.get("/test-connection")
+async def test_connection_legacy(
+    request: Request,
+    db: Session = Depends(get_db),
+    provider: str | None = Query(None),
+    model: str = Query("claude-3-haiku-20240307"),
+    api_format: str | None = Query(None),
+) -> Any:
+    """测试 Provider 连接（legacy alias，已弃用）"""
+    del request, db, provider, model, api_format
+    raise HTTPException(
+        status_code=410,
+        detail="Deprecated endpoint. Please use /v1/test-connection.",
+    )

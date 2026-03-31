@@ -241,6 +241,7 @@
   <ProviderDetailDrawer
     :open="providerDrawerOpen"
     :provider-id="selectedProviderId"
+    :initial-provider="selectedProvider"
     @update:open="providerDrawerOpen = $event"
     @edit="openEditProviderDialog"
     @toggle-status="toggleProviderStatus"
@@ -313,6 +314,10 @@ const priorityDialogOpen = ref(false)
 const priorityMode = ref<'provider' | 'global_key'>('provider')
 const providerDrawerOpen = ref(false)
 const selectedProviderId = ref<string | null>(null)
+const selectedProvider = computed<ProviderWithEndpointsSummary | null>(() => {
+  if (!selectedProviderId.value) return null
+  return providers.value.find(provider => provider.id === selectedProviderId.value) ?? null
+})
 const providerDeleteProgress = ref<ProviderDeleteProgressState | null>(null)
 let deletePollAbort: AbortController | null = null
 

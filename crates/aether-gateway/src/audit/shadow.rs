@@ -146,6 +146,8 @@ mod tests {
             auth_endpoint_signature: Some("openai:chat".to_string()),
             executor_candidate: true,
             auth_context: None,
+            admin_principal: None,
+            local_auth_rejection: None,
         }
     }
 

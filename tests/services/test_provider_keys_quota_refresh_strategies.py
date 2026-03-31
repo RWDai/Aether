@@ -89,6 +89,18 @@ def _install_module(monkeypatch: pytest.MonkeyPatch, name: str, attrs: dict[str,
     monkeypatch.setitem(sys.modules, name, module)
 
 
+def _patch_rust_codex_response(
+    monkeypatch: pytest.MonkeyPatch,
+    module: Any,
+    response: Any | None,
+) -> None:
+    monkeypatch.setattr(
+        module,
+        "_try_rust_codex_quota_response",
+        AsyncMock(return_value=response),
+    )
+
+
 @pytest.mark.asyncio
 async def test_codex_refresher_endpoint_missing_returns_error() -> None:
     key = SimpleNamespace(id="k1", name="K1")
@@ -128,15 +140,12 @@ async def test_codex_refresher_http_non_200_returns_error(
         "src.services.proxy_node.resolver",
         {
             "resolve_effective_proxy": lambda provider_proxy, key_proxy: None,
-            "build_proxy_client_kwargs": lambda proxy, timeout: {"timeout": timeout},
         },
     )
     monkeypatch.setattr(module, "get_provider_auth", _fake_auth_info)
     monkeypatch.setattr(module.crypto_service, "decrypt", lambda _v: "sk-test")
     response = _FakeResponse(status_code=503, payload={"x": 1})
-    monkeypatch.setattr(
-        module.httpx, "AsyncClient", lambda **kwargs: _FakeAsyncClient(response, **kwargs)
-    )
+    _patch_rust_codex_response(monkeypatch, module, response)
 
     result = await refresh_codex_key_quota(
         db=cast(Any, _FakeDB()),
@@ -241,15 +250,12 @@ async def test_codex_refresher_http_401_marks_auth_invalid_without_disabling_key
         "src.services.proxy_node.resolver",
         {
             "resolve_effective_proxy": lambda provider_proxy, key_proxy: None,
-            "build_proxy_client_kwargs": lambda proxy, timeout: {"timeout": timeout},
         },
     )
     monkeypatch.setattr(module, "get_provider_auth", _fake_auth_info)
     monkeypatch.setattr(module.crypto_service, "decrypt", lambda _v: "sk-test")
     response = _FakeResponse(status_code=401, payload={"error": {"message": "token expired"}})
-    monkeypatch.setattr(
-        module.httpx, "AsyncClient", lambda **kwargs: _FakeAsyncClient(response, **kwargs)
-    )
+    _patch_rust_codex_response(monkeypatch, module, response)
 
     result = await refresh_codex_key_quota(
         db=cast(Any, _FakeDB()),
@@ -295,7 +301,6 @@ async def test_codex_refresher_http_402_sets_quota_exhausted_metadata(
         "src.services.proxy_node.resolver",
         {
             "resolve_effective_proxy": lambda provider_proxy, key_proxy: None,
-            "build_proxy_client_kwargs": lambda proxy, timeout: {"timeout": timeout},
         },
     )
     monkeypatch.setattr(module, "get_provider_auth", _fake_auth_info)
@@ -309,9 +314,7 @@ async def test_codex_refresher_http_402_sets_quota_exhausted_metadata(
         ),
     )
     response = _FakeResponse(status_code=402, payload={"error": {"message": "payment required"}})
-    monkeypatch.setattr(
-        module.httpx, "AsyncClient", lambda **kwargs: _FakeAsyncClient(response, **kwargs)
-    )
+    _patch_rust_codex_response(monkeypatch, module, response)
 
     result = await refresh_codex_key_quota(
         db=cast(Any, _FakeDB()),
@@ -362,7 +365,6 @@ async def test_codex_refresher_success_preserves_refresh_failed_marker(
         "src.services.proxy_node.resolver",
         {
             "resolve_effective_proxy": lambda provider_proxy, key_proxy: None,
-            "build_proxy_client_kwargs": lambda proxy, timeout: {"timeout": timeout},
         },
     )
     monkeypatch.setattr(module, "get_provider_auth", _fake_auth_info)
@@ -379,9 +381,7 @@ async def test_codex_refresher_success_preserves_refresh_failed_marker(
         module, "parse_codex_wham_usage_response", lambda _data: {"used_percent": 10.0}
     )
     response = _FakeResponse(status_code=200, payload={"ok": True})
-    monkeypatch.setattr(
-        module.httpx, "AsyncClient", lambda **kwargs: _FakeAsyncClient(response, **kwargs)
-    )
+    _patch_rust_codex_response(monkeypatch, module, response)
 
     result = await refresh_codex_key_quota(
         db=cast(Any, _FakeDB()),
@@ -430,7 +430,6 @@ async def test_codex_refresher_quota_exhausted_preserves_refresh_failed_marker(
         "src.services.proxy_node.resolver",
         {
             "resolve_effective_proxy": lambda provider_proxy, key_proxy: None,
-            "build_proxy_client_kwargs": lambda proxy, timeout: {"timeout": timeout},
         },
     )
     monkeypatch.setattr(module, "get_provider_auth", _fake_auth_info)
@@ -444,9 +443,7 @@ async def test_codex_refresher_quota_exhausted_preserves_refresh_failed_marker(
         ),
     )
     response = _FakeResponse(status_code=402, payload={"error": {"message": "payment required"}})
-    monkeypatch.setattr(
-        module.httpx, "AsyncClient", lambda **kwargs: _FakeAsyncClient(response, **kwargs)
-    )
+    _patch_rust_codex_response(monkeypatch, module, response)
 
     result = await refresh_codex_key_quota(
         db=cast(Any, _FakeDB()),
@@ -490,7 +487,6 @@ async def test_codex_refresher_http_403_token_invalidated_marks_oauth_expired(
         "src.services.proxy_node.resolver",
         {
             "resolve_effective_proxy": lambda provider_proxy, key_proxy: None,
-            "build_proxy_client_kwargs": lambda proxy, timeout: {"timeout": timeout},
         },
     )
     monkeypatch.setattr(module, "get_provider_auth", _fake_auth_info)
@@ -499,9 +495,7 @@ async def test_codex_refresher_http_403_token_invalidated_marks_oauth_expired(
         status_code=403,
         payload={"error": {"message": "Authentication token has been invalidated."}},
     )
-    monkeypatch.setattr(
-        module.httpx, "AsyncClient", lambda **kwargs: _FakeAsyncClient(response, **kwargs)
-    )
+    _patch_rust_codex_response(monkeypatch, module, response)
 
     result = await refresh_codex_key_quota(
         db=cast(Any, _FakeDB()),
@@ -541,7 +535,6 @@ async def test_codex_refresher_http_403_generic_marks_soft_request_failed(
         "src.services.proxy_node.resolver",
         {
             "resolve_effective_proxy": lambda provider_proxy, key_proxy: None,
-            "build_proxy_client_kwargs": lambda proxy, timeout: {"timeout": timeout},
         },
     )
     monkeypatch.setattr(module, "get_provider_auth", _fake_auth_info)
@@ -550,9 +543,7 @@ async def test_codex_refresher_http_403_generic_marks_soft_request_failed(
         status_code=403,
         payload={"error": {"message": "Access forbidden for this account."}},
     )
-    monkeypatch.setattr(
-        module.httpx, "AsyncClient", lambda **kwargs: _FakeAsyncClient(response, **kwargs)
-    )
+    _patch_rust_codex_response(monkeypatch, module, response)
 
     result = await refresh_codex_key_quota(
         db=cast(Any, _FakeDB()),
@@ -599,7 +590,6 @@ async def test_codex_refresher_success_updates_metadata(
         "src.services.proxy_node.resolver",
         {
             "resolve_effective_proxy": lambda provider_proxy, key_proxy: None,
-            "build_proxy_client_kwargs": lambda proxy, timeout: {"timeout": timeout},
         },
     )
     monkeypatch.setattr(module, "get_provider_auth", _fake_auth_info)
@@ -608,9 +598,7 @@ async def test_codex_refresher_success_updates_metadata(
         module, "parse_codex_wham_usage_response", lambda _data: {"used_percent": 10.0}
     )
     response = _FakeResponse(status_code=200, payload={"ok": True})
-    monkeypatch.setattr(
-        module.httpx, "AsyncClient", lambda **kwargs: _FakeAsyncClient(response, **kwargs)
-    )
+    _patch_rust_codex_response(monkeypatch, module, response)
 
     result = await refresh_codex_key_quota(
         db=cast(Any, _FakeDB()),
@@ -647,7 +635,6 @@ async def test_codex_refresher_parse_error_is_diagnostic(
         "src.services.proxy_node.resolver",
         {
             "resolve_effective_proxy": lambda provider_proxy, key_proxy: None,
-            "build_proxy_client_kwargs": lambda proxy, timeout: {"timeout": timeout},
         },
     )
     monkeypatch.setattr(module, "get_provider_auth", _fake_auth_info)
@@ -660,9 +647,7 @@ async def test_codex_refresher_parse_error_is_diagnostic(
         ),
     )
     response = _FakeResponse(status_code=200, payload={"ok": True})
-    monkeypatch.setattr(
-        module.httpx, "AsyncClient", lambda **kwargs: _FakeAsyncClient(response, **kwargs)
-    )
+    _patch_rust_codex_response(monkeypatch, module, response)
 
     result = await refresh_codex_key_quota(
         db=cast(Any, _FakeDB()),
@@ -706,7 +691,6 @@ async def test_codex_refresher_oauth_missing_plan_type_adds_account_header(
         "src.services.proxy_node.resolver",
         {
             "resolve_effective_proxy": lambda provider_proxy, key_proxy: None,
-            "build_proxy_client_kwargs": lambda proxy, timeout: {"timeout": timeout},
         },
     )
     monkeypatch.setattr(module, "get_provider_auth", _fake_auth_info)
@@ -717,12 +701,11 @@ async def test_codex_refresher_oauth_missing_plan_type_adds_account_header(
         module.crypto_service, "decrypt", lambda _v: json.dumps({"account_id": "acc-1"})
     )
 
-    def _client_factory(**kwargs: Any) -> _FakeAsyncClient:
-        client = _FakeAsyncClient(response, **kwargs)
-        client_ref["client"] = client
-        return client
+    async def _fake_rust_response(**kwargs: Any) -> Any:
+        client_ref["client"] = SimpleNamespace(last_headers=dict(kwargs["headers"]))
+        return response
 
-    monkeypatch.setattr(module.httpx, "AsyncClient", _client_factory)
+    monkeypatch.setattr(module, "_try_rust_codex_quota_response", _fake_rust_response)
 
     result = await refresh_codex_key_quota(
         db=cast(Any, _FakeDB()),
@@ -766,7 +749,6 @@ async def test_codex_refresher_oauth_uppercase_free_does_not_add_account_header(
         "src.services.proxy_node.resolver",
         {
             "resolve_effective_proxy": lambda provider_proxy, key_proxy: None,
-            "build_proxy_client_kwargs": lambda proxy, timeout: {"timeout": timeout},
         },
     )
     monkeypatch.setattr(module, "get_provider_auth", _fake_auth_info)
@@ -779,12 +761,11 @@ async def test_codex_refresher_oauth_uppercase_free_does_not_add_account_header(
         lambda _v: json.dumps({"account_id": "acc-1", "plan_type": "FREE"}),
     )
 
-    def _client_factory(**kwargs: Any) -> _FakeAsyncClient:
-        client = _FakeAsyncClient(response, **kwargs)
-        client_ref["client"] = client
-        return client
+    async def _fake_rust_response(**kwargs: Any) -> Any:
+        client_ref["client"] = SimpleNamespace(last_headers=dict(kwargs["headers"]))
+        return response
 
-    monkeypatch.setattr(module.httpx, "AsyncClient", _client_factory)
+    monkeypatch.setattr(module, "_try_rust_codex_quota_response", _fake_rust_response)
 
     result = await refresh_codex_key_quota(
         db=cast(Any, _FakeDB()),
@@ -1216,7 +1197,6 @@ async def test_codex_refresher_http_402_workspace_deactivated_marks_account_bloc
         "src.services.proxy_node.resolver",
         {
             "resolve_effective_proxy": lambda provider_proxy, key_proxy: None,
-            "build_proxy_client_kwargs": lambda proxy, timeout: {"timeout": timeout},
         },
     )
     monkeypatch.setattr(module, "get_provider_auth", _fake_auth_info)
@@ -1230,9 +1210,7 @@ async def test_codex_refresher_http_402_workspace_deactivated_marks_account_bloc
         ),
     )
     response = _FakeResponse(status_code=402, payload={"detail": {"code": "deactivated_workspace"}})
-    monkeypatch.setattr(
-        module.httpx, "AsyncClient", lambda **kwargs: _FakeAsyncClient(response, **kwargs)
-    )
+    _patch_rust_codex_response(monkeypatch, module, response)
 
     result = await refresh_codex_key_quota(
         db=cast(Any, _FakeDB()),

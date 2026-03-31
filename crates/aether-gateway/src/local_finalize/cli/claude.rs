@@ -1,9 +1,11 @@
 use base64::Engine as _;
 
+use crate::gateway::kiro_stream::KiroToClaudeCliStreamState;
+
 use super::super::chat::aggregate_claude_stream_sync_response;
 use super::super::common::{
     build_generated_tool_call_id, build_local_success_outcome, canonicalize_tool_arguments,
-    local_finalize_allows_envelope, unwrap_local_finalize_response_value,
+    local_finalize_allows_envelope, parse_stream_json_events, unwrap_local_finalize_response_value,
     LocalCoreSyncFinalizeOutcome,
 };
 use super::super::*;
@@ -51,10 +53,11 @@ pub(crate) fn maybe_build_local_claude_cli_stream_sync_response(
     let body_bytes = base64::engine::general_purpose::STANDARD
         .decode(body_base64)
         .map_err(|err| GatewayError::Internal(err.to_string()))?;
-    let body_json = match aggregate_claude_stream_sync_response(&body_bytes) {
-        Some(body_json) => body_json,
-        None => return Ok(None),
-    };
+    let body_json =
+        match aggregate_provider_claude_cli_stream_sync_response(&body_bytes, report_context)? {
+            Some(body_json) => body_json,
+            None => return Ok(None),
+        };
     let Some(body_json) = unwrap_local_finalize_response_value(body_json, report_context)? else {
         return Ok(None);
     };
@@ -62,6 +65,38 @@ pub(crate) fn maybe_build_local_claude_cli_stream_sync_response(
     Ok(Some(build_local_success_outcome(
         trace_id, decision, payload, body_json,
     )?))
+}
+
+fn aggregate_provider_claude_cli_stream_sync_response(
+    body_bytes: &[u8],
+    report_context: &Value,
+) -> Result<Option<Value>, GatewayError> {
+    if report_context
+        .get("envelope_name")
+        .and_then(Value::as_str)
+        .is_some_and(|value| value.eq_ignore_ascii_case("kiro:generateAssistantResponse"))
+    {
+        let mut rewriter = KiroToClaudeCliStreamState::new(report_context);
+        let mut rewritten = rewriter.push_chunk(report_context, body_bytes)?;
+        rewritten.extend(rewriter.finish(report_context)?);
+        if rewritten_stream_contains_error_event(&rewritten) {
+            return Ok(None);
+        }
+        return Ok(aggregate_claude_stream_sync_response(&rewritten));
+    }
+
+    Ok(aggregate_claude_stream_sync_response(body_bytes))
+}
+
+fn rewritten_stream_contains_error_event(body: &[u8]) -> bool {
+    parse_stream_json_events(body).is_some_and(|events| {
+        events.iter().any(|event| {
+            event
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|value| value.eq_ignore_ascii_case("error"))
+        })
+    })
 }
 
 pub(crate) fn convert_claude_cli_response_to_openai_cli(

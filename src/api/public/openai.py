@@ -20,6 +20,15 @@ router = APIRouter(tags=["OpenAI API"])
 pipeline = get_pipeline()
 
 
+async def _run_openai_route_shell(adapter: Any, http_request: Request, db: Session) -> Any:
+    return await pipeline.run(
+        adapter=adapter,
+        http_request=http_request,
+        db=db,
+        mode=adapter.mode,
+    )
+
+
 @router.post("/v1/chat/completions")
 async def create_chat_completion(
     http_request: Request,
@@ -46,13 +55,7 @@ async def create_chat_completion(
     from src.api.handlers.openai import OpenAIChatAdapter
 
     adapter = OpenAIChatAdapter()
-    return await pipeline.run(
-        adapter=adapter,
-        http_request=http_request,
-        db=db,
-        mode=adapter.mode,
-        api_format_hint=adapter.allowed_api_formats[0],
-    )
+    return await _run_openai_route_shell(adapter, http_request, db)
 
 
 @router.post("/v1/responses/compact")
@@ -71,13 +74,7 @@ async def create_responses_compact(
     from src.api.handlers.openai_cli import OpenAICompactAdapter
 
     adapter = OpenAICompactAdapter()
-    return await pipeline.run(
-        adapter=adapter,
-        http_request=http_request,
-        db=db,
-        mode=adapter.mode,
-        api_format_hint=adapter.allowed_api_formats[0],
-    )
+    return await _run_openai_route_shell(adapter, http_request, db)
 
 
 @router.post("/v1/responses")
@@ -95,10 +92,4 @@ async def create_responses(
     from src.api.handlers.openai_cli import OpenAICliAdapter
 
     adapter = OpenAICliAdapter()
-    return await pipeline.run(
-        adapter=adapter,
-        http_request=http_request,
-        db=db,
-        mode=adapter.mode,
-        api_format_hint=adapter.allowed_api_formats[0],
-    )
+    return await _run_openai_route_shell(adapter, http_request, db)

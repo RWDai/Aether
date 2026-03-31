@@ -22,7 +22,6 @@ from src.api.handlers.base.request_builder import (
     get_provider_auth,
 )
 from src.api.handlers.base.video_handler_base import VideoHandlerBase, sanitize_error_message
-from src.clients.http_client import HTTPClientPool
 from src.config.settings import config
 from src.core.api_format import (
     ApiFamily,
@@ -40,6 +39,7 @@ from src.core.api_format.conversion.normalizers.openai import OpenAINormalizer
 from src.core.api_format.conversion.registry import format_conversion_registry
 from src.core.api_format.headers import HOP_BY_HOP_HEADERS
 from src.core.crypto import crypto_service
+from src.core.exceptions import ProviderNotAvailableException
 from src.core.logger import logger
 from src.models.database import ApiKey, ProviderAPIKey, ProviderEndpoint, User, VideoTask
 from src.services.billing.rule_service import BillingRuleLookupResult, BillingRuleService
@@ -189,7 +189,7 @@ class OpenAIVideoHandler(VideoHandlerBase):
                     original_body=original_request_body,
                 )
 
-                rust_response = await self._try_rust_sync_http_response(
+                return await self._try_rust_sync_http_response(
                     method="POST",
                     url=upstream_url,
                     headers=headers,
@@ -205,11 +205,6 @@ class OpenAIVideoHandler(VideoHandlerBase):
                     or "application/json",
                     log_label="OpenAIVideoCreate",
                 )
-                if rust_response is not None:
-                    return rust_response
-
-                client = await HTTPClientPool.get_default_client_async()
-                return await client.post(upstream_url, headers=headers, json=converted_body)
             else:
                 # 原始 OpenAI 格式
                 if endpoint_body_rules:
@@ -227,7 +222,7 @@ class OpenAIVideoHandler(VideoHandlerBase):
                     body=request_body,
                     original_body=original_request_body,
                 )
-                rust_response = await self._try_rust_sync_http_response(
+                return await self._try_rust_sync_http_response(
                     method="POST",
                     url=upstream_url,
                     headers=headers,
@@ -243,11 +238,6 @@ class OpenAIVideoHandler(VideoHandlerBase):
                     or "application/json",
                     log_label="OpenAIVideoCreate",
                 )
-                if rust_response is not None:
-                    return rust_response
-
-                client = await HTTPClientPool.get_default_client_async()
-                return await client.post(upstream_url, headers=headers, json=request_body)
 
         def _extract_task_id(payload: dict[str, Any]) -> str | None:
             # 根据响应格式提取 task ID
@@ -539,12 +529,11 @@ class OpenAIVideoHandler(VideoHandlerBase):
                         model_name=str(getattr(task, "model", "") or ""),
                         log_label="OpenAIVideoDelete",
                     )
-                    if response is None:
-                        client = await HTTPClientPool.get_default_client_async()
-                        response = await client.delete(upstream_url, headers=headers)
                     if response.status_code >= 400 and response.status_code != 404:
                         # 404 表示上游已删除，不算错误
                         return self._build_error_response(response)
+            except ProviderNotAvailableException:
+                raise
             except Exception as exc:
                 logger.warning(
                     "Failed to delete video from upstream task={}: {}",
@@ -626,10 +615,6 @@ class OpenAIVideoHandler(VideoHandlerBase):
             content_type=str(headers.get("content-type") or "").strip() or "application/json",
             log_label="OpenAIVideoRemix",
         )
-        if response is None:
-            client = await HTTPClientPool.get_default_client_async()
-            response = await client.post(upstream_url, headers=headers, json=request_body)
-
         if response.status_code >= 400:
             return self._build_error_response(response)
 
@@ -747,7 +732,7 @@ class OpenAIVideoHandler(VideoHandlerBase):
                 task_id,
                 task.video_url,
             )
-            rust_response = await self._try_rust_download_stream(
+            return await self._try_rust_download_stream(
                 url=task.video_url,
                 headers={},
                 task_id=task_id,
@@ -755,9 +740,6 @@ class OpenAIVideoHandler(VideoHandlerBase):
                 default_media_type="video/mp4",
                 default_error_message="Video not available",
             )
-            if rust_response is not None:
-                return rust_response
-            return await self._proxy_direct_url(task.video_url, task_id)
 
         if not task.external_task_id:
             raise HTTPException(status_code=500, detail="Task missing external_task_id")
@@ -778,14 +760,13 @@ class OpenAIVideoHandler(VideoHandlerBase):
         upstream_url = self._build_upstream_url(endpoint.base_url, content_path)
         headers = self._build_upstream_headers(original_headers, upstream_key, endpoint)
 
-        client = await HTTPClientPool.get_default_client_async()
         logger.debug(
             "[VideoDownload] Requesting upstream url={} task={} external_task_id={}",
             upstream_url,
             task_id,
             task.external_task_id,
         )
-        rust_response = await self._try_rust_download_stream(
+        return await self._try_rust_download_stream(
             url=upstream_url,
             headers=headers,
             task_id=task_id,
@@ -795,64 +776,6 @@ class OpenAIVideoHandler(VideoHandlerBase):
             model_name=str(getattr(task, "model", "") or "") or None,
             default_media_type="application/octet-stream",
             default_error_message="Upstream connection failed",
-        )
-        if rust_response is not None:
-            return rust_response
-
-        try:
-            # 使用 httpx 的 stream 方法并正确管理上下文
-            # 视频下载可能较大，设置 5 分钟超时
-            request = client.build_request(
-                "GET", upstream_url, headers=headers, timeout=httpx.Timeout(300.0)
-            )
-            response = await client.send(request, stream=True)
-        except Exception as exc:
-            logger.warning(
-                "[VideoDownload] Upstream connection failed task={} url={}: {}",
-                task_id,
-                upstream_url,
-                sanitize_error_message(str(exc)),
-            )
-            raise HTTPException(status_code=502, detail="Upstream connection failed") from exc
-
-        if response.status_code >= 400:
-            error_body = await response.aread()
-            await response.aclose()
-            content_type = response.headers.get("content-type", "")
-            if "application/json" in content_type:
-                try:
-                    data = json.loads(error_body)
-                    # 脱敏：移除可能的敏感信息
-                    if isinstance(data, dict) and isinstance(data.get("error"), dict):
-                        if "message" in data["error"]:
-                            data["error"]["message"] = sanitize_error_message(
-                                str(data["error"]["message"])
-                            )
-                    return JSONResponse(status_code=response.status_code, content=data)
-                except json.JSONDecodeError:
-                    pass
-            message = sanitize_error_message(error_body.decode(errors="ignore"))
-            return JSONResponse(
-                status_code=response.status_code,
-                content={"error": {"type": "upstream_error", "message": message}},
-            )
-
-        async def _iter_bytes() -> AsyncIterator[bytes]:
-            try:
-                async for chunk in response.aiter_bytes():
-                    yield chunk
-            finally:
-                await response.aclose()
-
-        # 过滤 hop-by-hop 和系统管理头部
-        safe_headers = {
-            k: v for k, v in response.headers.items() if k.lower() not in HOP_BY_HOP_HEADERS
-        }
-        return StreamingResponse(
-            _iter_bytes(),
-            status_code=response.status_code,
-            headers=safe_headers,
-            media_type=response.headers.get("content-type", "application/octet-stream"),
         )
 
     # ------------------------------------------------------------------
@@ -873,46 +796,6 @@ class OpenAIVideoHandler(VideoHandlerBase):
             raise HTTPException(status_code=500, detail="Failed to decrypt provider key")
         return upstream_key, candidate.endpoint, candidate.key
 
-    async def _proxy_direct_url(self, url: str, task_id: str) -> Response | StreamingResponse:
-        """代理直接的视频 URL（如 CDN URL），保持与官方 API 一致的流式返回行为"""
-        client = await HTTPClientPool.get_default_client_async()
-        try:
-            request = client.build_request("GET", url, timeout=httpx.Timeout(300.0))
-            response = await client.send(request, stream=True)
-        except Exception as exc:
-            logger.warning(
-                "[VideoDownload] Direct URL connection failed task={} url={}: {}",
-                task_id,
-                url,
-                sanitize_error_message(str(exc)),
-            )
-            raise HTTPException(status_code=502, detail="Video download failed") from exc
-
-        if response.status_code >= 400:
-            await response.aread()  # consume body before closing
-            await response.aclose()
-            return JSONResponse(
-                status_code=response.status_code,
-                content={"error": {"type": "upstream_error", "message": "Video not available"}},
-            )
-
-        async def _iter_bytes() -> AsyncIterator[bytes]:
-            try:
-                async for chunk in response.aiter_bytes():
-                    yield chunk
-            finally:
-                await response.aclose()
-
-        safe_headers = {
-            k: v for k, v in response.headers.items() if k.lower() not in HOP_BY_HOP_HEADERS
-        }
-        return StreamingResponse(
-            _iter_bytes(),
-            status_code=response.status_code,
-            headers=safe_headers,
-            media_type=response.headers.get("content-type", "video/mp4"),
-        )
-
     async def _try_rust_download_stream(
         self,
         *,
@@ -925,33 +808,50 @@ class OpenAIVideoHandler(VideoHandlerBase):
         model_name: str | None = None,
         default_media_type: str,
         default_error_message: str,
-    ) -> Response | StreamingResponse | None:
+    ) -> Response | StreamingResponse:
         if config.executor_backend != "rust":
-            return None
+            raise ProviderNotAvailableException(
+                "Video 下载仅支持 Rust executor",
+                provider_name="openai",
+                upstream_response=f"executor_backend={config.executor_backend}",
+            )
 
-        plan = ExecutionPlan(
-            request_id=str(self.request_id or ""),
-            candidate_id=None,
-            provider_name="openai",
-            provider_id=str(provider_id or ""),
-            endpoint_id=str(endpoint_id or ""),
-            key_id=str(key_id or ""),
-            method="GET",
-            url=url,
-            headers=dict(headers),
-            body=ExecutionPlanBody(),
-            stream=True,
-            provider_api_format=self.FORMAT_ID,
-            client_api_format=self.FORMAT_ID,
-            model_name=str(model_name or "") or "",
-            timeouts=ExecutionPlanTimeouts(
-                connect_ms=30_000,
-                read_ms=300_000,
-                write_ms=300_000,
-                pool_ms=30_000,
-                total_ms=None,
-            ),
-        )
+        try:
+            plan = ExecutionPlan(
+                request_id=str(self.request_id or ""),
+                candidate_id=None,
+                provider_name="openai",
+                provider_id=str(provider_id or ""),
+                endpoint_id=str(endpoint_id or ""),
+                key_id=str(key_id or ""),
+                method="GET",
+                url=url,
+                headers=dict(headers),
+                body=ExecutionPlanBody(),
+                stream=True,
+                provider_api_format=self.FORMAT_ID,
+                client_api_format=self.FORMAT_ID,
+                model_name=str(model_name or "") or "",
+                timeouts=ExecutionPlanTimeouts(
+                    connect_ms=30_000,
+                    read_ms=300_000,
+                    write_ms=300_000,
+                    pool_ms=30_000,
+                    total_ms=None,
+                ),
+            )
+        except Exception as exc:
+            logger.warning(
+                "[VideoDownload] Rust plan build failed task={} url={}: {}",
+                task_id,
+                url,
+                sanitize_error_message(str(exc)),
+            )
+            raise ProviderNotAvailableException(
+                "Rust executor 请求计划构建失败",
+                provider_name="openai",
+                upstream_response=sanitize_error_message(str(exc)),
+            ) from exc
 
         try:
             rust_stream = await RustExecutorClient().execute_stream(plan)
@@ -962,7 +862,11 @@ class OpenAIVideoHandler(VideoHandlerBase):
                 url,
                 sanitize_error_message(str(exc)),
             )
-            return None
+            raise ProviderNotAvailableException(
+                "执行器暂时不可用，请稍后重试",
+                provider_name="openai",
+                upstream_response=sanitize_error_message(str(exc)),
+            ) from exc
 
         safe_headers = {
             k: v for k, v in rust_stream.headers.items() if k.lower() not in HOP_BY_HOP_HEADERS

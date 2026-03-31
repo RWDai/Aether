@@ -33,7 +33,10 @@ pub(crate) fn should_skip_request_header(name: &str) -> bool {
             | "transfer-encoding"
             | "upgrade"
             | "x-aether-execution-path"
+            | "x-aether-python-dependency-reason"
             | "x-aether-control-execute-fallback"
+            | "x-aether-legacy-internal-gateway"
+            | "x-aether-rate-limit-preflight"
     )
 }
 

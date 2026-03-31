@@ -16,16 +16,14 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.api.admin import router as admin_router
+from src.api.admin import python_admin_router
 from src.api.announcements import router as announcement_router
 
 # API路由
 from src.api.auth import router as auth_router
 from src.api.dashboard import router as dashboard_router
-from src.api.internal import router as internal_router
 from src.api.monitoring import router as monitoring_router
 from src.api.payment import router as payment_router
-from src.api.public import router as public_router
 from src.api.user_me import router as me_router
 from src.api.wallet import router as wallet_router
 from src.clients.http_client import close_http_clients
@@ -245,11 +243,13 @@ async def _initialize_core_infrastructure(state: LifecycleState) -> None:
     logger.info("[OK] Codex 配额异步同步器已启动")
 
     # 初始化 Usage 队列消费者（可选）
-    if config.usage_queue_enabled:
+    if config.usage_queue_enabled and config.usage_queue_python_consumer_enabled:
         logger.info("初始化 Usage 队列消费者...")
         from src.services.usage.consumer_streams import start_usage_queue_consumer
 
         await start_usage_queue_consumer()
+    elif config.usage_queue_enabled:
+        logger.info("Usage 队列消费者已切到 Rust gateway，Python 宿主跳过启动")
 
 
 async def _initialize_plugins_and_modules(app: FastAPI, state: LifecycleState) -> None:
@@ -415,7 +415,10 @@ async def _start_background_services(state: LifecycleState) -> None:
     from src.services.provider_keys.pool_quota_probe_scheduler import (
         get_pool_quota_probe_scheduler,
     )
-    from src.services.system.maintenance_scheduler import get_maintenance_scheduler
+    from src.services.system.maintenance_scheduler import (
+        get_maintenance_scheduler,
+        should_start_python_maintenance_scheduler,
+    )
     from src.services.task.polling.task_poller import get_task_poller
     from src.services.usage.quota_scheduler import get_quota_scheduler
     from src.utils.task_coordinator import StartupTaskCoordinator
@@ -423,63 +426,75 @@ async def _start_background_services(state: LifecycleState) -> None:
     state.task_coordinator = StartupTaskCoordinator(state.redis_client)
 
     # 启动额度调度器
-    quota_scheduler_active = await state.task_coordinator.acquire("quota_scheduler")
-    if quota_scheduler_active:
-        state.quota_scheduler = get_quota_scheduler()
-        await state.quota_scheduler.start()
-        state.task_coordinator.register_lock_lost_callback(
-            "quota_scheduler",
-            _make_lock_lost_callback(
-                state,
-                lock_name="quota_scheduler",
-                service_name="月卡额度重置调度器",
-                state_attr="quota_scheduler",
-                stop=state.quota_scheduler.stop,
-            ),
-        )
-    else:
-        logger.info("检测到其他 worker 已运行额度调度器，本实例跳过")
+    if not config.quota_scheduler_python_enabled:
+        logger.info("月卡额度重置调度器已切到 Rust gateway，Python 宿主跳过启动")
         state.quota_scheduler = None
+    else:
+        quota_scheduler_active = await state.task_coordinator.acquire("quota_scheduler")
+        if quota_scheduler_active:
+            state.quota_scheduler = get_quota_scheduler()
+            await state.quota_scheduler.start()
+            state.task_coordinator.register_lock_lost_callback(
+                "quota_scheduler",
+                _make_lock_lost_callback(
+                    state,
+                    lock_name="quota_scheduler",
+                    service_name="月卡额度重置调度器",
+                    state_attr="quota_scheduler",
+                    stop=state.quota_scheduler.stop,
+                ),
+            )
+        else:
+            logger.info("检测到其他 worker 已运行额度调度器，本实例跳过")
+            state.quota_scheduler = None
 
     # 启动维护调度器
-    maintenance_scheduler_active = await state.task_coordinator.acquire("maintenance_scheduler")
-    if maintenance_scheduler_active:
-        state.maintenance_scheduler = get_maintenance_scheduler()
-        logger.info("启动系统维护调度器...")
-        await state.maintenance_scheduler.start()
-        state.task_coordinator.register_lock_lost_callback(
-            "maintenance_scheduler",
-            _make_lock_lost_callback(
-                state,
-                lock_name="maintenance_scheduler",
-                service_name="系统维护调度器",
-                state_attr="maintenance_scheduler",
-                stop=state.maintenance_scheduler.stop,
-            ),
-        )
-    else:
-        logger.info("检测到其他 worker 已运行维护调度器，本实例跳过")
+    if not should_start_python_maintenance_scheduler():
+        logger.info("维护调度器已无剩余 Python owner，Python 宿主跳过启动")
         state.maintenance_scheduler = None
+    else:
+        maintenance_scheduler_active = await state.task_coordinator.acquire("maintenance_scheduler")
+        if maintenance_scheduler_active:
+            state.maintenance_scheduler = get_maintenance_scheduler()
+            logger.info("启动系统维护调度器...")
+            await state.maintenance_scheduler.start()
+            state.task_coordinator.register_lock_lost_callback(
+                "maintenance_scheduler",
+                _make_lock_lost_callback(
+                    state,
+                    lock_name="maintenance_scheduler",
+                    service_name="系统维护调度器",
+                    state_attr="maintenance_scheduler",
+                    stop=state.maintenance_scheduler.stop,
+                ),
+            )
+        else:
+            logger.info("检测到其他 worker 已运行维护调度器，本实例跳过")
+            state.maintenance_scheduler = None
 
     # 启动模型自动获取调度器
-    model_fetch_scheduler_active = await state.task_coordinator.acquire("model_fetch_scheduler")
-    if model_fetch_scheduler_active:
-        state.model_fetch_scheduler = get_model_fetch_scheduler()
-        logger.info("启动模型自动获取调度器...")
-        await state.model_fetch_scheduler.start()
-        state.task_coordinator.register_lock_lost_callback(
-            "model_fetch_scheduler",
-            _make_lock_lost_callback(
-                state,
-                lock_name="model_fetch_scheduler",
-                service_name="模型自动获取调度器",
-                state_attr="model_fetch_scheduler",
-                stop=state.model_fetch_scheduler.stop,
-            ),
-        )
-    else:
-        logger.info("检测到其他 worker 已运行模型获取调度器，本实例跳过")
+    if not config.model_fetch_scheduler_python_enabled:
+        logger.info("模型自动获取调度器已切到 Rust gateway，Python 宿主跳过启动")
         state.model_fetch_scheduler = None
+    else:
+        model_fetch_scheduler_active = await state.task_coordinator.acquire("model_fetch_scheduler")
+        if model_fetch_scheduler_active:
+            state.model_fetch_scheduler = get_model_fetch_scheduler()
+            logger.info("启动模型自动获取调度器...")
+            await state.model_fetch_scheduler.start()
+            state.task_coordinator.register_lock_lost_callback(
+                "model_fetch_scheduler",
+                _make_lock_lost_callback(
+                    state,
+                    lock_name="model_fetch_scheduler",
+                    service_name="模型自动获取调度器",
+                    state_attr="model_fetch_scheduler",
+                    stop=state.model_fetch_scheduler.stop,
+                ),
+            )
+        else:
+            logger.info("检测到其他 worker 已运行模型获取调度器，本实例跳过")
+            state.model_fetch_scheduler = None
 
     # 启动号池额度主动探测调度器
     pool_quota_probe_scheduler_active = await state.task_coordinator.acquire(
@@ -504,24 +519,28 @@ async def _start_background_services(state: LifecycleState) -> None:
         state.pool_quota_probe_scheduler = None
 
     # 启动异步任务轮询服务（当前仅视频）
-    task_poller_active = await state.task_coordinator.acquire("task_poller:video")
-    if task_poller_active:
-        state.task_poller = get_task_poller()
-        logger.info("启动 TaskPoller（video）...")
-        await state.task_poller.start()
-        state.task_coordinator.register_lock_lost_callback(
-            "task_poller:video",
-            _make_lock_lost_callback(
-                state,
-                lock_name="task_poller:video",
-                service_name="TaskPoller（video）",
-                state_attr="task_poller",
-                stop=state.task_poller.stop,
-            ),
-        )
-    else:
-        logger.info("检测到其他 worker 已运行 TaskPoller（video），本实例跳过")
+    if not config.video_task_python_poller_enabled:
+        logger.info("TaskPoller（video）已切到 Rust gateway，Python 宿主跳过启动")
         state.task_poller = None
+    else:
+        task_poller_active = await state.task_coordinator.acquire("task_poller:video")
+        if task_poller_active:
+            state.task_poller = get_task_poller()
+            logger.info("启动 TaskPoller（video）...")
+            await state.task_poller.start()
+            state.task_coordinator.register_lock_lost_callback(
+                "task_poller:video",
+                _make_lock_lost_callback(
+                    state,
+                    lock_name="task_poller:video",
+                    service_name="TaskPoller（video）",
+                    state_attr="task_poller",
+                    stop=state.task_poller.stop,
+                ),
+            )
+        else:
+            logger.info("检测到其他 worker 已运行 TaskPoller（video），本实例跳过")
+            state.task_poller = None
 
     # 启动统一的定时任务调度器
     from src.services.system.scheduler import get_scheduler
@@ -530,8 +549,8 @@ async def _start_background_services(state: LifecycleState) -> None:
     state.task_scheduler.start()
 
 
-async def _run_startup(app: FastAPI) -> LifecycleState:
-    """执行完整启动流程并返回生命周期状态。"""
+async def _run_python_host_startup(app: FastAPI) -> LifecycleState:
+    """执行 Python 宿主运行时启动流程。"""
     _configure_uvicorn_access_log()
     _log_startup_banner()
     _validate_security_or_raise()
@@ -548,8 +567,8 @@ async def _run_startup(app: FastAPI) -> LifecycleState:
     return state
 
 
-async def _run_shutdown(state: LifecycleState) -> None:
-    """执行完整关闭流程。"""
+async def _run_python_host_shutdown(state: LifecycleState) -> None:
+    """执行 Python 宿主运行时关闭流程。"""
     logger.info("正在关闭服务...")
 
     # 停止启动预热任务
@@ -578,7 +597,7 @@ async def _run_shutdown(state: LifecycleState) -> None:
     logger.info("[OK] 批量提交器已停止，所有待提交数据已保存")
 
     # 停止 Usage 队列消费者
-    if config.usage_queue_enabled:
+    if config.usage_queue_enabled and config.usage_queue_python_consumer_enabled:
         logger.info("停止 Usage 队列消费者...")
         from src.services.usage.consumer_streams import stop_usage_queue_consumer
 
@@ -657,12 +676,12 @@ async def _run_shutdown(state: LifecycleState) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> Any:
-    """应用生命周期管理"""
-    state = await _run_startup(app)
+    """FastAPI 生命周期只管理 Python-only 宿主状态。"""
+    state = await _run_python_host_startup(app)
     try:
         yield  # 应用运行期间
     finally:
-        await _run_shutdown(state)
+        await _run_python_host_shutdown(state)
 
 
 from src import __version__ as app_version
@@ -729,27 +748,64 @@ openapi_tags = [
         "name": "Admin - System",
         "description": "系统配置管理（管理员）",
     },
-    {
-        "name": "Claude API",
-        "description": "Claude API 代理接口，兼容 Anthropic Claude API 格式",
-    },
-    {
-        "name": "OpenAI API",
-        "description": "OpenAI API 代理接口，兼容 OpenAI Chat Completions API 格式",
-    },
-    {
-        "name": "Gemini API",
-        "description": "Gemini API 代理接口，兼容 Google Gemini API 格式",
-    },
-    {
-        "name": "Gemini Files API",
-        "description": "Gemini Files API 代理接口，支持文件上传、查询、删除等操作",
-    },
-    {
-        "name": "System Catalog",
-        "description": "系统目录接口，用于获取可用模型列表等",
-    },
 ]
+
+
+def _register_exception_handlers(app: FastAPI) -> None:
+    """注册 Python 宿主全局异常处理器。"""
+    # 注意：异常处理器的注册顺序很重要，必须先注册更通用的异常类型，再注册具体的
+    # ProxyException 处理器的启用由配置控制：
+    # - propagate_provider_exceptions=True (默认): 不注册，让异常传播到路由层以记录 provider_request_headers
+    # - propagate_provider_exceptions=False: 注册全局处理器统一处理
+    if not config.propagate_provider_exceptions:
+        app.add_exception_handler(ProxyException, ExceptionHandlers.handle_proxy_exception)  # type: ignore[arg-type]
+    app.add_exception_handler(Exception, ExceptionHandlers.handle_generic_exception)  # type: ignore[arg-type]
+    app.add_exception_handler(HTTPException, ExceptionHandlers.handle_http_exception)  # type: ignore[arg-type]
+
+
+def _register_frontdoor_replaceable_middlewares(app: FastAPI) -> None:
+    """注册未来可由 Rust frontdoor 接管的宿主壳层中间件。"""
+    # CORS配置 - 使用环境变量配置允许的域名
+    # 生产环境必须通过 CORS_ORIGINS 环境变量显式指定允许的域名
+    # 开发环境默认允许本地前端访问
+    if config.cors_origins:
+        # CORS_ORIGINS=* 时自动禁用 credentials（浏览器规范要求）
+        allow_credentials = config.cors_allow_credentials and "*" not in config.cors_origins
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=config.cors_origins,  # 使用配置的白名单
+            allow_credentials=allow_credentials,
+            allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+            allow_headers=["*"],
+            expose_headers=["*"],
+        )
+        logger.info(
+            f"CORS已启用,允许的源: {config.cors_origins}, credentials: {allow_credentials}"
+        )
+    else:
+        # 没有配置CORS源,不允许跨域
+        logger.warning(
+            f"CORS未配置,不允许跨域请求。如需启用CORS,请设置 CORS_ORIGINS 环境变量(当前环境: {config.environment})"
+        )
+
+
+def _register_python_host_middlewares(app: FastAPI) -> None:
+    """注册仍依附于 Python 宿主的全局中间件。"""
+    # 添加插件中间件（包含认证、审计、速率限制等功能）
+    app.add_middleware(PluginMiddleware)
+
+
+def _register_python_only_host_routes(app: FastAPI) -> None:
+    """注册在当前阶段仍需留在 Python 的路由面。"""
+    app.include_router(auth_router)  # 认证相关
+    app.include_router(python_admin_router)  # 管理员端点
+    app.include_router(me_router)  # 用户个人端点
+    app.include_router(wallet_router)  # 钱包端点
+    app.include_router(payment_router)  # 支付回调端点
+    app.include_router(announcement_router)  # 公告系统
+    app.include_router(dashboard_router)  # 仪表盘端点
+    app.include_router(monitoring_router)  # 监控端点
+
 
 app = FastAPI(
     title="Aether AI Gateway",
@@ -761,85 +817,10 @@ app = FastAPI(
     openapi_tags=openapi_tags,
 )
 
-# 注册全局异常处理器
-# 注意：异常处理器的注册顺序很重要，必须先注册更通用的异常类型，再注册具体的
-# ProxyException 处理器的启用由配置控制：
-# - propagate_provider_exceptions=True (默认): 不注册，让异常传播到路由层以记录 provider_request_headers
-# - propagate_provider_exceptions=False: 注册全局处理器统一处理
-if not config.propagate_provider_exceptions:
-    app.add_exception_handler(ProxyException, ExceptionHandlers.handle_proxy_exception)  # type: ignore[arg-type]
-app.add_exception_handler(Exception, ExceptionHandlers.handle_generic_exception)  # type: ignore[arg-type]
-app.add_exception_handler(HTTPException, ExceptionHandlers.handle_http_exception)  # type: ignore[arg-type]
-
-# 添加插件中间件（包含认证、审计、速率限制等功能）
-app.add_middleware(PluginMiddleware)
-
-# CORS配置 - 使用环境变量配置允许的域名
-# 生产环境必须通过 CORS_ORIGINS 环境变量显式指定允许的域名
-# 开发环境默认允许本地前端访问
-if config.cors_origins:
-    # CORS_ORIGINS=* 时自动禁用 credentials（浏览器规范要求）
-    allow_credentials = config.cors_allow_credentials and "*" not in config.cors_origins
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=config.cors_origins,  # 使用配置的白名单
-        allow_credentials=allow_credentials,
-        allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-        allow_headers=["*"],
-        expose_headers=["*"],
-    )
-    logger.info(f"CORS已启用,允许的源: {config.cors_origins}, credentials: {allow_credentials}")
-else:
-    # 没有配置CORS源,不允许跨域
-    logger.warning(
-        f"CORS未配置,不允许跨域请求。如需启用CORS,请设置 CORS_ORIGINS 环境变量(当前环境: {config.environment})"
-    )
-
-# 注册路由
-app.include_router(auth_router)  # 认证相关
-app.include_router(admin_router)  # 管理员端点
-app.include_router(me_router)  # 用户个人端点
-app.include_router(wallet_router)  # 钱包端点
-app.include_router(payment_router)  # 支付回调端点
-app.include_router(announcement_router)  # 公告系统
-app.include_router(dashboard_router)  # 仪表盘端点
-app.include_router(public_router)  # 公开API端点（用户可查看提供商和模型）
-app.include_router(monitoring_router)  # 监控端点
-app.include_router(internal_router)  # Hub 本地控制面端点
-
-
-@app.get("/readyz", include_in_schema=False)
-async def readiness_check(request: Request) -> Any:
-    """就绪检查：可选绑定启动预热状态，用于流量门禁。"""
-    warmup_status = getattr(request.app.state, "startup_warmup_status", "unknown")
-    warmup_error = getattr(request.app.state, "startup_warmup_error", None)
-    started_at = getattr(request.app.state, "startup_warmup_started_at", None)
-
-    payload: dict[str, Any] = {
-        "status": "ready",
-        "warmup_status": warmup_status,
-        "gate_readiness": config.startup_warmup_gate_readiness,
-    }
-    if isinstance(started_at, (int, float)):
-        payload["warmup_elapsed_ms"] = int((time.monotonic() - started_at) * 1000)
-
-    if not config.startup_warmup_gate_readiness:
-        return payload
-    if warmup_status in {"ready", "disabled"}:
-        return payload
-
-    reason_map = {
-        "failed": "startup_warmup_failed",
-        "pending": "startup_warmup_pending",
-    }
-    detail = {
-        "status": "not_ready",
-        "reason": reason_map.get(warmup_status, "startup_warmup_pending"),
-        "warmup_status": warmup_status,
-    }
-    if warmup_error:
-        detail["warmup_error"] = warmup_error
-    raise HTTPException(status_code=503, detail=detail)
+_register_exception_handlers(app)
+_register_frontdoor_replaceable_middlewares(app)
+_register_python_host_middlewares(app)
+_register_python_only_host_routes(app)
 
 
 def main() -> Any:

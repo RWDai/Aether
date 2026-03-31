@@ -1,0 +1,325 @@
+async fn build_admin_global_model_routing_payload(
+    state: &AppState,
+    global_model_id: &str,
+) -> Option<serde_json::Value> {
+    if !state.has_global_model_data_reader() || !state.has_provider_catalog_data_reader() {
+        return None;
+    }
+    let global_model = state.get_admin_global_model_by_id(global_model_id).await.ok()??;
+    let provider_models = state
+        .list_admin_provider_models_by_global_model_id(global_model_id)
+        .await
+        .ok()?;
+    let provider_ids = provider_models
+        .iter()
+        .map(|model| model.provider_id.clone())
+        .collect::<Vec<_>>();
+    let providers = state
+        .read_provider_catalog_providers_by_ids(&provider_ids)
+        .await
+        .ok()?
+        .into_iter()
+        .map(|provider| (provider.id.clone(), provider))
+        .collect::<BTreeMap<_, _>>();
+    let endpoints = state
+        .list_provider_catalog_endpoints_by_provider_ids(&provider_ids)
+        .await
+        .ok()
+        .unwrap_or_default();
+    let keys = state
+        .list_provider_catalog_keys_by_provider_ids(&provider_ids)
+        .await
+        .ok()
+        .unwrap_or_default();
+    let mut endpoints_by_provider = BTreeMap::<String, Vec<StoredProviderCatalogEndpoint>>::new();
+    for endpoint in endpoints {
+        endpoints_by_provider
+            .entry(endpoint.provider_id.clone())
+            .or_default()
+            .push(endpoint);
+    }
+    let mut keys_by_provider = BTreeMap::<String, Vec<StoredProviderCatalogKey>>::new();
+    for key in keys {
+        keys_by_provider
+            .entry(key.provider_id.clone())
+            .or_default()
+            .push(key);
+    }
+
+    let scheduling_mode = state
+        .read_system_config_json_value("scheduling_mode")
+        .await
+        .ok()
+        .flatten()
+        .and_then(|value| value.as_str().map(ToOwned::to_owned))
+        .unwrap_or_else(|| "cache_affinity".to_string());
+    let priority_mode = state
+        .read_system_config_json_value("provider_priority_mode")
+        .await
+        .ok()
+        .flatten()
+        .and_then(|value| value.as_str().map(ToOwned::to_owned))
+        .unwrap_or_else(|| "provider".to_string());
+
+    let global_model_mappings = global_model
+        .config
+        .as_ref()
+        .and_then(|value| value.get("model_mappings"))
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let mut providers_payload = Vec::new();
+    let mut all_keys_whitelist = Vec::new();
+    for model in provider_models {
+        let Some(provider) = providers.get(&model.provider_id) else {
+            continue;
+        };
+        let mut endpoint_payloads = Vec::new();
+        let mut active_endpoints = 0usize;
+        for endpoint in endpoints_by_provider
+            .get(&provider.id)
+            .cloned()
+            .unwrap_or_default()
+        {
+            if endpoint.is_active {
+                active_endpoints += 1;
+            }
+            let mut endpoint_keys = keys_by_provider
+                .get(&provider.id)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|key| provider_catalog_key_supports_format(key, &endpoint.api_format))
+                .collect::<Vec<_>>();
+            endpoint_keys.sort_by(|left, right| {
+                left.internal_priority
+                    .cmp(&right.internal_priority)
+                    .then_with(|| left.id.cmp(&right.id))
+            });
+            let key_payloads = endpoint_keys
+                .iter()
+                .map(|key| {
+                    let effective_rpm = key.learned_rpm_limit.or(key.rpm_limit);
+                    let is_adaptive = key.rpm_limit.is_none();
+                    let allowed_models = json_string_list(key.allowed_models.as_ref());
+                    let circuit_breaker_formats = key
+                        .circuit_breaker_by_format
+                        .as_ref()
+                        .and_then(serde_json::Value::as_object)
+                        .map(|entries| {
+                            entries
+                                .iter()
+                                .filter_map(|(api_format, value)| {
+                                    value.get("open")
+                                        .and_then(serde_json::Value::as_bool)
+                                        .filter(|is_open| *is_open)
+                                        .map(|_| api_format.clone())
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    let next_probe_at = key
+                        .circuit_breaker_by_format
+                        .as_ref()
+                        .and_then(serde_json::Value::as_object)
+                        .and_then(|entries| entries.get(&endpoint.api_format))
+                        .and_then(|value| value.get("next_probe_at"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(ToOwned::to_owned);
+                    let payload = json!({
+                        "id": key.id,
+                        "name": key.name,
+                        "masked_key": masked_catalog_api_key(state, key),
+                        "is_active": key.is_active,
+                        "is_adaptive": is_adaptive,
+                        "effective_rpm": effective_rpm,
+                        "allowed_models": allowed_models,
+                        "health_score": provider_key_health_score(key, &endpoint.api_format),
+                        "circuit_breaker_open": is_provider_key_circuit_open(key, &endpoint.api_format),
+                        "circuit_breaker_formats": circuit_breaker_formats,
+                        "next_probe_at": next_probe_at,
+                    });
+                    all_keys_whitelist.push(json!({
+                        "key_id": &key.id,
+                        "key_name": &key.name,
+                        "masked_key": masked_catalog_api_key(state, key),
+                        "provider_id": &provider.id,
+                        "provider_name": &provider.name,
+                        "allowed_models": json_string_list(key.allowed_models.as_ref()),
+                    }));
+                    payload
+                })
+                .collect::<Vec<_>>();
+            endpoint_payloads.push(json!({
+                "id": endpoint.id,
+                "api_format": endpoint.api_format,
+                "base_url": endpoint.base_url,
+                "custom_path": endpoint.custom_path,
+                "is_active": endpoint.is_active,
+                "keys": key_payloads,
+                "total_keys": key_payloads.len(),
+                "active_keys": key_payloads.iter().filter(|value| value["is_active"] == json!(true)).count(),
+            }));
+        }
+        let model_mappings = model
+            .provider_model_mappings
+            .as_ref()
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        providers_payload.push(json!({
+            "id": &provider.id,
+            "name": &provider.name,
+            "model_id": &model.id,
+            "provider_priority": provider.provider_priority,
+            "billing_type": provider.billing_type.clone(),
+            "monthly_quota_usd": provider.monthly_quota_usd,
+            "monthly_used_usd": provider.monthly_used_usd,
+            "is_active": provider.is_active,
+            "provider_model_name": &model.provider_model_name,
+            "model_mappings": model_mappings,
+            "model_is_active": model.is_active,
+            "endpoints": endpoint_payloads,
+            "total_endpoints": endpoint_payloads.len(),
+            "active_endpoints": active_endpoints,
+        }));
+    }
+    providers_payload.sort_by(|left, right| {
+        left.get("provider_priority")
+            .and_then(serde_json::Value::as_i64)
+            .cmp(&right.get("provider_priority").and_then(serde_json::Value::as_i64))
+            .then_with(|| {
+                left.get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .cmp(&right.get("name").and_then(serde_json::Value::as_str))
+            })
+    });
+
+    let active_providers = providers_payload
+        .iter()
+        .filter(|provider| {
+            provider["is_active"] == json!(true) && provider["model_is_active"] == json!(true)
+        })
+        .count();
+    let total_providers = providers_payload.len();
+
+    Some(json!({
+        "global_model_id": &global_model.id,
+        "global_model_name": &global_model.name,
+        "display_name": &global_model.display_name,
+        "is_active": global_model.is_active,
+        "global_model_mappings": global_model_mappings,
+        "providers": providers_payload,
+        "total_providers": total_providers,
+        "active_providers": active_providers,
+        "scheduling_mode": scheduling_mode,
+        "priority_mode": priority_mode,
+        "all_keys_whitelist": all_keys_whitelist,
+    }))
+}
+
+async fn build_admin_assign_global_model_to_providers_payload(
+    state: &AppState,
+    global_model_id: &str,
+    provider_ids: Vec<String>,
+    create_models: bool,
+) -> Result<serde_json::Value, String> {
+    let global_model = resolve_admin_global_model_by_id_or_err(state, global_model_id).await?;
+    let providers = state
+        .read_provider_catalog_providers_by_ids(&provider_ids)
+        .await
+        .map_err(|err| format!("{err:?}"))?
+        .into_iter()
+        .map(|provider| (provider.id.clone(), provider))
+        .collect::<BTreeMap<_, _>>();
+
+    let mut success = Vec::new();
+    let mut errors = Vec::new();
+    for provider_id in provider_ids {
+        let provider_id = provider_id.trim().to_string();
+        if provider_id.is_empty() {
+            continue;
+        }
+        if !providers.contains_key(&provider_id) {
+            errors.push(json!({
+                "provider_id": provider_id,
+                "error": "Provider not found",
+            }));
+            continue;
+        }
+        let exists = state
+            .list_admin_provider_models(&AdminProviderModelListQuery {
+                provider_id: provider_id.clone(),
+                is_active: None,
+                offset: 0,
+                limit: 10_000,
+            })
+            .await
+            .map_err(|err| format!("{err:?}"))?
+            .into_iter()
+            .any(|model| model.global_model_id == global_model.id);
+        if exists {
+            errors.push(json!({
+                "provider_id": provider_id,
+                "error": "Model already exists",
+            }));
+            continue;
+        }
+        if !create_models {
+            errors.push(json!({
+                "provider_id": provider_id,
+                "error": "create_models disabled",
+            }));
+            continue;
+        }
+        let record = UpsertAdminProviderModelRecord::new(
+            Uuid::new_v4().to_string(),
+            provider_id.clone(),
+            global_model.id.clone(),
+            global_model.name.clone(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            true,
+            true,
+            None,
+        )
+        .map_err(|err| err.to_string())?;
+        let created = state
+            .create_admin_provider_model(&record)
+            .await
+            .map_err(|err| format!("{err:?}"))?;
+        if let Some(created) = created {
+            success.push(json!({
+                "provider_id": provider_id,
+                "provider_model_id": created.id,
+                "global_model_id": global_model.id,
+            }));
+        } else {
+            errors.push(json!({
+                "provider_id": provider_id,
+                "error": "Create provider model failed",
+            }));
+        }
+    }
+    let total_success = success.len();
+    let total_errors = errors.len();
+    Ok(json!({
+        "success": success,
+        "errors": errors,
+        "total_success": total_success,
+        "total_errors": total_errors,
+    }))
+}

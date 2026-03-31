@@ -1,10 +1,19 @@
+"""Internal routers still surfaced by the Python host."""
+
 from fastapi import APIRouter
 
-from .gateway import router as gateway_router
-from .hub import router as hub_router
 
-router = APIRouter()
-router.include_router(hub_router)
-router.include_router(gateway_router)
+def _build_python_internal_router() -> APIRouter:
+    """Internal APIs that still belong to the Python host/runtime."""
+    return APIRouter()
 
-__all__ = ["router"]
+
+# Legacy internal gateway bridge 与 internal hub 模块仍保留在 `src.api.internal.*`
+# 里给测试与过渡逻辑复用，但 Python host 已不再公开任何 `/api/internal/*` 路由。
+python_internal_router = _build_python_internal_router()
+router = python_internal_router
+
+__all__ = [
+    "python_internal_router",
+    "router",
+]

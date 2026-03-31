@@ -44,23 +44,25 @@ fn parse_args(args: Vec<String>) -> Result<HttpLoadProbeConfig, Box<dyn std::err
         }
     }
 
-    let mut config = HttpLoadProbeConfig::default();
-    config.url = url.ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, "missing required --url")
-    })?;
-    config.total_requests = total_requests.ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "missing required --requests",
-        )
-    })?;
-    config.concurrency = concurrency.ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "missing required --concurrency",
-        )
-    })?;
-    config.method = method;
+    let mut config = HttpLoadProbeConfig {
+        url: url.ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "missing required --url")
+        })?,
+        total_requests: total_requests.ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "missing required --requests",
+            )
+        })?,
+        concurrency: concurrency.ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "missing required --concurrency",
+            )
+        })?,
+        method,
+        ..HttpLoadProbeConfig::default()
+    };
     if let Some(timeout_ms) = timeout_ms {
         config.timeout = Duration::from_millis(timeout_ms);
     }

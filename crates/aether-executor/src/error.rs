@@ -1,5 +1,53 @@
+use std::error::Error as _;
+
 use http::method::InvalidMethod;
 use thiserror::Error;
+
+pub(crate) fn format_upstream_request_error(err: &reqwest::Error) -> String {
+    let mut kinds = Vec::new();
+    if err.is_connect() {
+        kinds.push("connect");
+    }
+    if err.is_timeout() {
+        kinds.push("timeout");
+    }
+    if err.is_redirect() {
+        kinds.push("redirect");
+    }
+    if err.is_body() {
+        kinds.push("body");
+    }
+    if err.is_decode() {
+        kinds.push("decode");
+    }
+    if err.is_request() {
+        kinds.push("request");
+    }
+
+    let mut detail = err.to_string();
+    let mut source = err.source();
+    while let Some(cause) = source {
+        let cause_text = cause.to_string();
+        if !cause_text.is_empty() && !detail.contains(&cause_text) {
+            detail.push_str(": ");
+            detail.push_str(&cause_text);
+        }
+        source = cause.source();
+    }
+
+    if let Some(url) = err.url() {
+        detail.push_str(" [url=");
+        detail.push_str(url.as_str());
+        detail.push(']');
+    }
+    if !kinds.is_empty() {
+        detail.push_str(" [kind=");
+        detail.push_str(&kinds.join(","));
+        detail.push(']');
+    }
+
+    detail
+}
 
 #[derive(Debug, Error)]
 pub enum ExecutorClientError {
@@ -46,7 +94,7 @@ pub enum ExecutorServiceError {
     #[error("executor overloaded: gate {gate} saturated at {limit}")]
     Overloaded { gate: &'static str, limit: usize },
     #[error("failed to execute upstream request: {0}")]
-    UpstreamRequest(reqwest::Error),
+    UpstreamRequest(String),
     #[error("hub relay request failed: {0}")]
     RelayError(String),
     #[error("upstream response is not valid JSON: {0}")]

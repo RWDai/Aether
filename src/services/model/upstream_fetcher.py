@@ -463,14 +463,12 @@ async def fetch_models_from_endpoints(
     Returns:
         (模型列表, 错误列表, 是否有成功)
     """
-    from src.services.proxy_node.resolver import build_proxy_client_kwargs
-
     all_models: list[dict] = []
     errors: list[str] = []
     has_success = False
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 
-    async def fetch_one(client: httpx.AsyncClient, config: dict) -> tuple[list, str | None, bool]:
+    async def fetch_one(config: dict) -> tuple[list, str | None, bool]:
         base_url = config["base_url"]
         if not base_url:
             return [], None, False
@@ -489,19 +487,9 @@ async def fetch_models_from_endpoints(
                     timeout=timeout,
                     proxy_config=proxy_config,
                 )
-                if rust_result is not None:
-                    models, error, success = rust_result
-                else:
-                    from src.core.api_format.capabilities import fetch_models_for_api_format
-
-                    models, error = await fetch_models_for_api_format(
-                        client,
-                        api_format=api_format,
-                        base_url=base_url,
-                        api_key=api_key_value,
-                        extra_headers=extra_headers,
-                    )
-                    success = error is None
+                if rust_result is None:
+                    return [], f"{api_format}: rust executor unavailable", False
+                models, error, success = rust_result
 
             for m in models:
                 if "api_format" not in m:
@@ -516,15 +504,12 @@ async def fetch_models_from_endpoints(
             logger.exception("获取 {} 模型出错", api_format)
             return [], f"{api_format}: error", False
 
-    async with httpx.AsyncClient(
-        **build_proxy_client_kwargs(proxy_config, timeout=timeout)
-    ) as client:
-        results = await asyncio.gather(*[fetch_one(client, c) for c in endpoint_configs])
-        for models, error, success in results:
-            all_models.extend(models)
-            if error:
-                errors.append(error)
-            if success:
-                has_success = True
+    results = await asyncio.gather(*[fetch_one(c) for c in endpoint_configs])
+    for models, error, success in results:
+        all_models.extend(models)
+        if error:
+            errors.append(error)
+        if success:
+            has_success = True
 
     return all_models, errors, has_success

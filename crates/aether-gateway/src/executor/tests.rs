@@ -1,19 +1,23 @@
+use aether_contracts::{ExecutionPlan, RequestBody};
 use axum::http::Request;
 use serde_json::json;
 
 use super::{
+    decision::{should_bypass_direct_executor_decision, should_bypass_direct_executor_plan},
     plan_builders::{
         build_gemini_stream_plan_from_decision, build_gemini_sync_plan_from_decision,
         build_openai_cli_stream_plan_from_decision, build_openai_cli_sync_plan_from_decision,
         build_passthrough_sync_plan_from_decision, build_standard_stream_plan_from_decision,
         build_standard_sync_plan_from_decision,
     },
+    submission::build_best_effort_local_core_error_body,
     submission::resolve_core_error_background_report_kind,
+    submission::resolve_core_success_background_report_kind,
     sync::{
         resolve_local_sync_error_background_report_kind,
         resolve_local_sync_success_background_report_kind,
     },
-    GatewayControlSyncDecisionResponse,
+    GatewayControlSyncDecisionResponse, GatewaySyncReportRequest,
 };
 
 fn test_parts() -> http::request::Parts {
@@ -51,6 +55,7 @@ fn missing_exact_provider_request_payload(
         extra_headers: Default::default(),
         provider_request_headers: Default::default(),
         provider_request_body: None,
+        provider_request_body_base64: None,
         content_type: Some("application/json".to_string()),
         proxy: None,
         tls_profile: None,
@@ -59,6 +64,29 @@ fn missing_exact_provider_request_payload(
         report_kind: Some("openai_chat_sync_success".to_string()),
         report_context: Some(json!({})),
         auth_context: None,
+    }
+}
+
+fn core_finalize_payload(
+    report_kind: &str,
+    client_api_format: &str,
+    provider_api_format: &str,
+    status_code: u16,
+    body_json: serde_json::Value,
+) -> GatewaySyncReportRequest {
+    GatewaySyncReportRequest {
+        trace_id: "trace-core-error-123".to_string(),
+        report_kind: report_kind.to_string(),
+        report_context: Some(json!({
+            "client_api_format": client_api_format,
+            "provider_api_format": provider_api_format,
+        })),
+        status_code,
+        headers: Default::default(),
+        body_json: Some(body_json),
+        client_body_json: None,
+        body_base64: None,
+        telemetry: None,
     }
 }
 
@@ -87,6 +115,111 @@ fn resolve_core_error_background_report_kind_maps_all_core_finalize_kinds() {
             "unexpected mapping for {report_kind}"
         );
     }
+}
+
+#[test]
+fn resolve_core_success_background_report_kind_maps_all_core_finalize_kinds() {
+    let cases = [
+        (
+            "openai_chat_sync_finalize",
+            Some("openai_chat_sync_success"),
+        ),
+        (
+            "claude_chat_sync_finalize",
+            Some("claude_chat_sync_success"),
+        ),
+        (
+            "gemini_chat_sync_finalize",
+            Some("gemini_chat_sync_success"),
+        ),
+        ("openai_cli_sync_finalize", Some("openai_cli_sync_success")),
+        (
+            "openai_compact_sync_finalize",
+            Some("openai_cli_sync_success"),
+        ),
+        ("claude_cli_sync_finalize", Some("claude_cli_sync_success")),
+        ("gemini_cli_sync_finalize", Some("gemini_cli_sync_success")),
+        ("openai_video_create_sync_finalize", None),
+        ("gemini_video_cancel_sync_finalize", None),
+        ("unknown_finalize_kind", None),
+    ];
+
+    for (report_kind, expected) in cases {
+        assert_eq!(
+            resolve_core_success_background_report_kind(report_kind),
+            expected.map(str::to_string),
+            "unexpected mapping for {report_kind}"
+        );
+    }
+}
+
+#[test]
+fn build_best_effort_local_core_error_body_converts_gemini_chat_error_to_openai_chat() {
+    let payload = core_finalize_payload(
+        "openai_chat_sync_finalize",
+        "openai:chat",
+        "gemini:chat",
+        429,
+        json!({
+            "error": {
+                "message": "rate limited",
+                "status": "RESOURCE_EXHAUSTED",
+                "code": 429
+            }
+        }),
+    );
+
+    let converted = build_best_effort_local_core_error_body(
+        &payload,
+        payload.body_json.as_ref().expect("body_json should exist"),
+    )
+    .expect("conversion should not error")
+    .expect("conversion should produce a client error body");
+
+    assert_eq!(
+        converted,
+        json!({
+            "error": {
+                "message": "rate limited",
+                "type": "rate_limit_error",
+                "code": "429"
+            }
+        })
+    );
+}
+
+#[test]
+fn build_best_effort_local_core_error_body_converts_claude_cli_error_to_openai_cli() {
+    let payload = core_finalize_payload(
+        "openai_cli_sync_finalize",
+        "openai:cli",
+        "claude:cli",
+        401,
+        json!({
+            "type": "error",
+            "error": {
+                "type": "authentication_error",
+                "message": "invalid auth token"
+            }
+        }),
+    );
+
+    let converted = build_best_effort_local_core_error_body(
+        &payload,
+        payload.body_json.as_ref().expect("body_json should exist"),
+    )
+    .expect("conversion should not error")
+    .expect("conversion should produce a client error body");
+
+    assert_eq!(
+        converted,
+        json!({
+            "error": {
+                "message": "invalid auth token",
+                "type": "authentication_error"
+            }
+        })
+    );
 }
 
 #[test]
@@ -248,4 +381,174 @@ fn passthrough_sync_plan_uses_provider_request_method_override() {
         plan_and_report.plan.url,
         "https://api.openai.example/v1/videos/ext-123"
     );
+}
+
+#[test]
+fn openai_cli_sync_plan_injects_auth_header_when_exact_headers_omit_it() {
+    let request = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .body(())
+        .expect("request");
+    let (parts, _) = request.into_parts();
+
+    let mut payload = missing_exact_provider_request_payload("openai_cli_sync");
+    payload.provider_name = Some("openai".to_string());
+    payload.provider_api_format = Some("openai:cli".to_string());
+    payload.client_api_format = Some("openai:cli".to_string());
+    payload.model_name = Some("gpt-5".to_string());
+    payload.upstream_url = Some("https://chatgpt.com/backend-api/codex/responses".to_string());
+    payload.provider_request_headers =
+        [("content-type".to_string(), "application/json".to_string())]
+            .into_iter()
+            .collect();
+    payload.provider_request_body = Some(json!({"model":"gpt-5"}));
+
+    let plan_and_report =
+        build_openai_cli_sync_plan_from_decision(&parts, &json!({}), payload, false)
+            .expect("builder should not error")
+            .expect("plan should be built");
+
+    assert_eq!(
+        plan_and_report
+            .plan
+            .headers
+            .get("authorization")
+            .map(String::as_str),
+        Some("Bearer test")
+    );
+}
+
+#[test]
+fn passthrough_sync_plan_uses_raw_body_bytes_when_decision_provides_base64_body() {
+    let request = Request::builder()
+        .method("POST")
+        .uri("/upload/v1beta/files?uploadType=resumable")
+        .body(())
+        .expect("request");
+    let (parts, _) = request.into_parts();
+
+    let mut payload = missing_exact_provider_request_payload("gemini_files_upload");
+    payload.provider_name = Some("gemini".to_string());
+    payload.provider_api_format = Some("gemini:files".to_string());
+    payload.client_api_format = Some("gemini:files".to_string());
+    payload.provider_request_method = Some("POST".to_string());
+    payload.upstream_url = Some(
+        "https://generativelanguage.googleapis.com/upload/v1beta/files?uploadType=resumable"
+            .to_string(),
+    );
+    payload.provider_request_headers = [
+        (
+            "content-type".to_string(),
+            "application/octet-stream".to_string(),
+        ),
+        ("x-goog-api-key".to_string(), "upstream-key".to_string()),
+    ]
+    .into_iter()
+    .collect();
+    payload.provider_request_body_base64 = Some("dXBsb2FkLWJ5dGVz".to_string());
+
+    let plan_and_report = build_passthrough_sync_plan_from_decision(&parts, payload)
+        .expect("builder should not error")
+        .expect("plan should be built");
+
+    assert_eq!(plan_and_report.plan.method, "POST");
+    assert_eq!(
+        plan_and_report.plan.url,
+        "https://generativelanguage.googleapis.com/upload/v1beta/files?uploadType=resumable"
+    );
+    assert_eq!(
+        plan_and_report.plan.body.body_bytes_b64.as_deref(),
+        Some("dXBsb2FkLWJ5dGVz")
+    );
+    assert_eq!(plan_and_report.plan.body.json_body, None);
+    assert_eq!(
+        plan_and_report
+            .plan
+            .headers
+            .get("content-type")
+            .map(String::as_str),
+        Some("application/octet-stream")
+    );
+}
+
+#[test]
+fn openai_cli_stream_plan_injects_auth_header_when_exact_headers_omit_it() {
+    let request = Request::builder()
+        .method("POST")
+        .uri("/v1/responses")
+        .body(())
+        .expect("request");
+    let (parts, _) = request.into_parts();
+
+    let mut payload = missing_exact_provider_request_payload("openai_cli_stream");
+    payload.provider_name = Some("openai".to_string());
+    payload.provider_api_format = Some("openai:cli".to_string());
+    payload.client_api_format = Some("openai:cli".to_string());
+    payload.model_name = Some("gpt-5".to_string());
+    payload.upstream_url = Some("https://chatgpt.com/backend-api/codex/responses".to_string());
+    payload.provider_request_headers =
+        [("content-type".to_string(), "application/json".to_string())]
+            .into_iter()
+            .collect();
+    payload.provider_request_body = Some(json!({"model":"gpt-5","stream":true}));
+
+    let plan_and_report =
+        build_openai_cli_stream_plan_from_decision(&parts, &json!({}), payload, false)
+            .expect("builder should not error")
+            .expect("plan should be built");
+
+    assert_eq!(
+        plan_and_report
+            .plan
+            .headers
+            .get("authorization")
+            .map(String::as_str),
+        Some("Bearer test")
+    );
+    assert_eq!(
+        plan_and_report
+            .plan
+            .headers
+            .get("accept")
+            .map(String::as_str),
+        Some("text/event-stream")
+    );
+}
+
+#[test]
+fn bypasses_direct_executor_for_codex_backendapi_variant() {
+    let mut payload = missing_exact_provider_request_payload("openai_cli_stream");
+    payload.provider_api_format = Some("openai:cli".to_string());
+    payload.client_api_format = Some("openai:cli".to_string());
+    payload.upstream_url = Some("https://chatgpt.com/backendapi/codex/responses".to_string());
+
+    assert!(should_bypass_direct_executor_decision(&payload));
+}
+
+#[test]
+fn bypasses_direct_executor_for_codex_plan_variant() {
+    let plan = ExecutionPlan {
+        request_id: "req-123".to_string(),
+        candidate_id: None,
+        provider_name: Some("codex".to_string()),
+        provider_id: "provider-123".to_string(),
+        endpoint_id: "endpoint-123".to_string(),
+        key_id: "key-123".to_string(),
+        method: "POST".to_string(),
+        url: "https://chatgpt.com/backendapi/codex/responses".to_string(),
+        headers: Default::default(),
+        content_type: Some("application/json".to_string()),
+        content_encoding: None,
+        body: RequestBody::from_json(json!({"model":"gpt-5.4"})),
+        stream: true,
+        client_api_format: "openai:cli".to_string(),
+        provider_api_format: "openai:cli".to_string(),
+        model_name: Some("gpt-5.4".to_string()),
+        proxy: None,
+        tls_profile: None,
+        timeouts: None,
+    };
+
+    assert!(should_bypass_direct_executor_plan(&plan));
 }

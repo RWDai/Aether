@@ -108,7 +108,7 @@ def _parse_version(version_str: str) -> tuple:
 
 
 @router.get("/version")
-async def get_system_version() -> Any:
+async def get_system_version(request: Request, db: Session = Depends(get_db)) -> Any:
     """
     获取系统版本信息
 
@@ -117,11 +117,12 @@ async def get_system_version() -> Any:
     **返回字段**:
     - `version`: 版本号字符串
     """
-    return {"version": _get_current_version()}
+    adapter = AdminSystemVersionAdapter()
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.get("/check-update")
-async def check_update() -> Any:
+async def check_update(request: Request, db: Session = Depends(get_db)) -> Any:
     """
     检查系统更新
 
@@ -136,140 +137,34 @@ async def check_update() -> Any:
     - `release_notes`: 更新日志 (Markdown 格式，来自 tag message)
     - `published_at`: 发布时间 (ISO 8601 格式)
     """
-    import httpx
-
-    from src.clients.http_client import HTTPClientPool
-
-    current_version = _get_current_version()
-    github_repo = "Aethersailor/Aether"
-    github_tags_url = f"https://api.github.com/repos/{github_repo}/tags"
-
-    def _make_empty_response(error: str | None = None) -> None:
-        return {
-            "current_version": current_version,
-            "latest_version": None,
-            "has_update": False,
-            "release_url": None,
-            "release_notes": None,
-            "published_at": None,
-            "error": error,
-        }
-
-    try:
-        async with HTTPClientPool.get_temp_client(
-            timeout=httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0)
-        ) as client:
-            # 获取 tags 列表
-            response = await client.get(
-                github_tags_url,
-                headers={
-                    "Accept": "application/vnd.github.v3+json",
-                    "User-Agent": f"Aether/{current_version}",
-                },
-                params={"per_page": 20},
-            )
-
-            if response.status_code != 200:
-                return _make_empty_response(f"GitHub API 返回错误: {response.status_code}")
-
-            tags = response.json()
-            if not tags:
-                return _make_empty_response()
-
-            # 筛选版本号格式的 tags 并排序
-            valid_tags = []
-            for tag in tags:
-                tag_name = tag.get("name", "")
-                if tag_name.startswith("v") or (tag_name and tag_name[0].isdigit()):
-                    valid_tags.append((tag, _parse_version(tag_name)))
-
-            if not valid_tags:
-                return _make_empty_response()
-
-            # 按版本号排序，取最大的
-            valid_tags.sort(key=lambda x: x[1], reverse=True)
-            latest_tag_info = valid_tags[0][0]
-            latest_tag_name = latest_tag_info.get("name", "")
-            latest_version = latest_tag_name.lstrip("v")
-
-            current_tuple = _parse_version(current_version)
-            latest_tuple = _parse_version(latest_version)
-            has_update = latest_tuple > current_tuple
-
-            # 获取 tag 的详细信息（包含 message 和时间）
-            release_notes = None
-            published_at = None
-
-            # 获取 tag 对应的 commit sha
-            tag_commit_sha = latest_tag_info.get("commit", {}).get("sha")
-            if tag_commit_sha:
-                # 尝试获取 annotated tag 的信息
-                tag_ref_url = (
-                    f"https://api.github.com/repos/{github_repo}/git/refs/tags/{latest_tag_name}"
-                )
-                ref_response = await client.get(
-                    tag_ref_url,
-                    headers={
-                        "Accept": "application/vnd.github.v3+json",
-                        "User-Agent": f"Aether/{current_version}",
-                    },
-                )
-
-                if ref_response.status_code == 200:
-                    ref_data = ref_response.json()
-                    # 检查是否是 annotated tag（type 为 "tag"）
-                    if ref_data.get("object", {}).get("type") == "tag":
-                        tag_object_url = ref_data.get("object", {}).get("url")
-                        if tag_object_url:
-                            tag_obj_response = await client.get(
-                                tag_object_url,
-                                headers={
-                                    "Accept": "application/vnd.github.v3+json",
-                                    "User-Agent": f"Aether/{current_version}",
-                                },
-                            )
-                            if tag_obj_response.status_code == 200:
-                                tag_obj_data = tag_obj_response.json()
-                                release_notes = tag_obj_data.get("message")
-                                # 获取 tagger 的时间
-                                tagger = tag_obj_data.get("tagger", {})
-                                published_at = tagger.get("date")
-
-                # 如果没有获取到时间，从 commit 获取
-                if not published_at:
-                    commit_url = (
-                        f"https://api.github.com/repos/{github_repo}/commits/{tag_commit_sha}"
-                    )
-                    commit_response = await client.get(
-                        commit_url,
-                        headers={
-                            "Accept": "application/vnd.github.v3+json",
-                            "User-Agent": f"Aether/{current_version}",
-                        },
-                    )
-                    if commit_response.status_code == 200:
-                        commit_data = commit_response.json()
-                        published_at = (
-                            commit_data.get("commit", {}).get("committer", {}).get("date")
-                        )
-
-            return {
-                "current_version": current_version,
-                "latest_version": latest_version,
-                "has_update": has_update,
-                "release_url": f"https://github.com/{github_repo}/releases/tag/{latest_tag_name}",
-                "release_notes": release_notes,
-                "published_at": published_at,
-                "error": None,
-            }
-
-    except httpx.TimeoutException:
-        return _make_empty_response("检查更新超时")
-    except Exception as e:
-        return _make_empty_response(f"检查更新失败: {str(e)}")
+    adapter = AdminSystemCheckUpdateAdapter()
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 pipeline = get_pipeline()
+
+
+def _build_check_update_unavailable_response() -> dict[str, Any]:
+    current_version = _get_current_version()
+    return {
+        "current_version": current_version,
+        "latest_version": None,
+        "has_update": False,
+        "release_url": None,
+        "release_notes": None,
+        "published_at": None,
+        "error": "检查更新需要 Rust 管理后端",
+    }
+
+
+class AdminSystemVersionAdapter(AdminApiAdapter):
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        return {"version": _get_current_version()}
+
+
+class AdminSystemCheckUpdateAdapter(AdminApiAdapter):
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        return _build_check_update_unavailable_response()
 
 
 @router.get("/settings")
@@ -2325,6 +2220,41 @@ class AdminImportUsersAdapter(AdminApiAdapter):
             return 0
         return int(value)
 
+    @staticmethod
+    def _normalize_imported_access_list(raw_value: Any) -> list[str] | None | Any:
+        if raw_value is None:
+            return None
+
+        candidate = raw_value
+        if isinstance(candidate, str):
+            normalized = candidate.strip()
+            if not normalized or normalized.lower() == "null":
+                return None
+            try:
+                decoded = json.loads(normalized)
+            except json.JSONDecodeError:
+                decoded = normalized
+            if isinstance(decoded, list):
+                candidate = decoded
+            elif isinstance(decoded, str):
+                candidate = [decoded]
+            elif decoded is None:
+                return None
+            else:
+                candidate = [normalized]
+
+        if not isinstance(candidate, list):
+            return candidate
+
+        normalized_items: list[str] = []
+        for item in candidate:
+            if not isinstance(item, str):
+                continue
+            value = item.strip()
+            if value:
+                normalized_items.append(value)
+        return normalized_items
+
     async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
         """导入用户数据"""
         import uuid
@@ -2392,9 +2322,15 @@ class AdminImportUsersAdapter(AdminApiAdapter):
                     key_encrypted=key_encrypted,
                     name=key_data.get("name"),
                     is_standalone=is_standalone or key_data.get("is_standalone", False),
-                    allowed_providers=key_data.get("allowed_providers"),
-                    allowed_api_formats=key_data.get("allowed_api_formats"),
-                    allowed_models=key_data.get("allowed_models"),
+                    allowed_providers=self._normalize_imported_access_list(
+                        key_data.get("allowed_providers")
+                    ),
+                    allowed_api_formats=self._normalize_imported_access_list(
+                        key_data.get("allowed_api_formats")
+                    ),
+                    allowed_models=self._normalize_imported_access_list(
+                        key_data.get("allowed_models")
+                    ),
                     rate_limit=self._normalize_imported_api_key_rate_limit(
                         key_data,
                         is_standalone=is_standalone or key_data.get("is_standalone", False),
@@ -2452,9 +2388,15 @@ class AdminImportUsersAdapter(AdminApiAdapter):
                             existing_user.password_hash = user_data["password_hash"]
                         if user_data.get("role"):
                             existing_user.role = UserRole(user_data["role"])
-                        existing_user.allowed_providers = user_data.get("allowed_providers")
-                        existing_user.allowed_api_formats = user_data.get("allowed_api_formats")
-                        existing_user.allowed_models = user_data.get("allowed_models")
+                        existing_user.allowed_providers = self._normalize_imported_access_list(
+                            user_data.get("allowed_providers")
+                        )
+                        existing_user.allowed_api_formats = self._normalize_imported_access_list(
+                            user_data.get("allowed_api_formats")
+                        )
+                        existing_user.allowed_models = self._normalize_imported_access_list(
+                            user_data.get("allowed_models")
+                        )
                         existing_user.rate_limit = imported_user_rate_limit
                         existing_user.model_capability_settings = user_data.get(
                             "model_capability_settings"
@@ -2489,9 +2431,15 @@ class AdminImportUsersAdapter(AdminApiAdapter):
                         username=user_data.get("username") or import_email.split("@")[0],
                         password_hash=user_data.get("password_hash", ""),
                         role=role,
-                        allowed_providers=user_data.get("allowed_providers"),
-                        allowed_api_formats=user_data.get("allowed_api_formats"),
-                        allowed_models=user_data.get("allowed_models"),
+                        allowed_providers=self._normalize_imported_access_list(
+                            user_data.get("allowed_providers")
+                        ),
+                        allowed_api_formats=self._normalize_imported_access_list(
+                            user_data.get("allowed_api_formats")
+                        ),
+                        allowed_models=self._normalize_imported_access_list(
+                            user_data.get("allowed_models")
+                        ),
                         rate_limit=imported_user_rate_limit,
                         model_capability_settings=user_data.get("model_capability_settings"),
                         is_active=user_data.get("is_active", True),
@@ -3136,35 +3084,22 @@ class AdminPurgeStatsAdapter(AdminApiAdapter):
 
 _AWS_REGIONS_CACHE_KEY = "aws_regions"
 _AWS_REGIONS_CACHE_TTL = 86400  # 24h
-_AWS_REGIONAL_TABLE_URL = "https://api.regional-table.region-services.aws.a2z.com"
-
 # 内存级 fallback（进程生命周期内有效，Redis 不可用时兜底）
 _aws_regions_mem_cache: list[str] | None = None
 
 
 async def _fetch_aws_regions() -> list[str]:
-    """从 AWS Regional Table API 提取去重排序的 region 列表"""
-    import httpx as _httpx
-
-    from src.clients.http_client import HTTPClientPool
-
-    client = await HTTPClientPool.get_default_client_async()
-    resp = await client.get(
-        _AWS_REGIONAL_TABLE_URL,
-        timeout=_httpx.Timeout(connect=10, read=15),
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    regions: set[str] = set()
-    for item in data.get("prices", []):
-        region = item.get("attributes", {}).get("aws:region", "")
-        if region:
-            regions.add(region)
-    return sorted(regions)
+    raise HTTPException(status_code=503, detail="AWS regions requires Rust admin backend")
 
 
 @router.get("/aws-regions")
-async def get_aws_regions() -> Any:
+async def get_aws_regions(request: Request, db: Session = Depends(get_db)) -> Any:
+    """获取 AWS 全部可用 Region 列表（缓存 24h）"""
+    adapter = AdminAwsRegionsAdapter()
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+
+
+async def _get_aws_regions_response() -> dict[str, Any]:
     """获取 AWS 全部可用 Region 列表（缓存 24h）"""
     global _aws_regions_mem_cache
 
@@ -3179,16 +3114,10 @@ async def get_aws_regions() -> Any:
     if _aws_regions_mem_cache:
         return {"regions": _aws_regions_mem_cache}
 
-    # 3. 远程获取
-    try:
-        regions = await _fetch_aws_regions()
-    except Exception as e:
-        logger.warning("获取 AWS Regions 失败: {}", e)
-        # 返回最基础的 fallback
-        return {"regions": ["us-east-1", "us-east-2", "us-west-1", "us-west-2", "eu-north-1"]}
+    # 3. Python 不再承担远程拉取职责
+    raise HTTPException(status_code=503, detail="AWS regions requires Rust admin backend")
 
-    # 写入缓存
-    _aws_regions_mem_cache = regions
-    await CacheService.set(_AWS_REGIONS_CACHE_KEY, regions, ttl_seconds=_AWS_REGIONS_CACHE_TTL)
 
-    return {"regions": regions}
+class AdminAwsRegionsAdapter(AdminApiAdapter):
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        return await _get_aws_regions_response()

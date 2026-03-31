@@ -146,33 +146,41 @@
               </div>
               <!-- 端点 API 格式 -->
               <div class="flex items-center gap-1.5 flex-wrap mt-3">
-                <template
-                  v-for="endpoint in endpoints"
-                  :key="endpoint.id"
-                >
-                  <span
-                    class="text-xs px-2 py-0.5 rounded-md border border-border bg-background hover:bg-accent hover:border-accent-foreground/20 cursor-pointer transition-colors font-medium"
-                    :class="{ 'opacity-40': !endpoint.is_active }"
-                    :title="`编辑 ${formatApiFormat(endpoint.api_format)} 端点`"
-                    @click="handleEditEndpoint(endpoint)"
-                  >{{ formatApiFormat(endpoint.api_format) }}</span>
+                <template v-if="loadingProviderEndpoints && endpoints.length === 0">
+                  <span class="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <Loader2 class="w-3.5 h-3.5 animate-spin" />
+                    加载端点中
+                  </span>
                 </template>
-                <span
-                  v-if="endpoints.length > 0"
-                  class="text-xs px-2 py-0.5 rounded-md border border-dashed border-border hover:bg-accent hover:border-accent-foreground/20 cursor-pointer transition-colors text-muted-foreground"
-                  title="编辑端点"
-                  @click="showAddEndpointDialog"
-                >编辑</span>
-                <Button
-                  v-else
-                  variant="outline"
-                  size="sm"
-                  class="h-7 text-xs"
-                  @click="showAddEndpointDialog"
-                >
-                  <Plus class="w-3 h-3 mr-1" />
-                  添加 API 端点
-                </Button>
+                <template v-else>
+                  <template
+                    v-for="endpoint in endpoints"
+                    :key="endpoint.id"
+                  >
+                    <span
+                      class="text-xs px-2 py-0.5 rounded-md border border-border bg-background hover:bg-accent hover:border-accent-foreground/20 cursor-pointer transition-colors font-medium"
+                      :class="{ 'opacity-40': !endpoint.is_active }"
+                      :title="`编辑 ${formatApiFormat(endpoint.api_format)} 端点`"
+                      @click="handleEditEndpoint(endpoint)"
+                    >{{ formatApiFormat(endpoint.api_format) }}</span>
+                  </template>
+                  <span
+                    v-if="endpoints.length > 0"
+                    class="text-xs px-2 py-0.5 rounded-md border border-dashed border-border hover:bg-accent hover:border-accent-foreground/20 cursor-pointer transition-colors text-muted-foreground"
+                    title="编辑端点"
+                    @click="showAddEndpointDialog"
+                  >编辑</span>
+                  <Button
+                    v-else
+                    variant="outline"
+                    size="sm"
+                    class="h-7 text-xs"
+                    @click="showAddEndpointDialog"
+                  >
+                    <Plus class="w-3 h-3 mr-1" />
+                    添加 API 端点
+                  </Button>
+                </template>
               </div>
             </div>
 
@@ -243,7 +251,15 @@
 
                 <!-- 密钥列表 -->
                 <div
-                  v-if="allKeys.length > 0"
+                  v-if="loadingProviderKeys && allKeys.length === 0"
+                  class="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground"
+                >
+                  <Loader2 class="w-4 h-4 animate-spin" />
+                  正在加载{{ isKeyManagedProviderType(provider.provider_type) ? '密钥' : '账号' }}
+                </div>
+
+                <div
+                  v-else-if="allKeys.length > 0"
                   ref="keysListRef"
                   class="divide-y divide-border/40"
                   :class="shouldPaginateKeys && 'flex flex-col'"
@@ -926,6 +942,7 @@
                 :provider="provider"
                 :models="providerModels"
                 :endpoints="endpoints"
+                :loading="loadingProviderModels"
                 @edit-model="handleEditModel"
                 @batch-assign="handleBatchAssign"
                 @refresh="loadEndpoints"
@@ -941,6 +958,7 @@
                 :provider-keys="providerKeys"
                 :models="providerModels"
                 :mapping-preview="providerMappingPreview"
+                :loading="loadingProviderEndpoints || loadingProviderKeys || loadingProviderModels || loadingProviderMappingPreview"
                 @refresh="handleModelMappingChanged"
               />
             </div>
@@ -1065,6 +1083,7 @@ import { useSmartPagination } from '@/composables/useSmartPagination'
 import {
   Plus,
   Key,
+  Loader2,
   Edit,
   Trash2,
   RefreshCw,
@@ -1155,6 +1174,7 @@ interface ProviderEndpointWithKeys extends ProviderEndpoint {
 interface Props {
   providerId: string | null
   open: boolean
+  initialProvider?: ProviderWithEndpointsSummary | null
 }
 
 const props = defineProps<Props>()
@@ -1176,6 +1196,10 @@ const endpoints = ref<ProviderEndpointWithKeys[]>([])
 const providerKeys = ref<EndpointAPIKey[]>([])  // Provider 级别的 keys
 const providerModels = ref<Model[]>([])  // Provider 级别的 models
 const providerMappingPreview = ref<ProviderMappingPreviewResponse | null>(null)  // 映射预览
+const loadingProviderEndpoints = ref(false)
+const loadingProviderKeys = ref(false)
+const loadingProviderModels = ref(false)
+const loadingProviderMappingPreview = ref(false)
 let providerLoadRequestId = 0
 let endpointsLoadRequestId = 0
 let mappingPreviewLoadRequestId = 0
@@ -1377,6 +1401,10 @@ watch(
   [() => props.providerId, () => props.open],
   async ([newId, newOpen], [_oldId, oldOpen]) => {
     if (newOpen && newId) {
+      if (props.initialProvider?.id === newId) {
+        provider.value = props.initialProvider
+        loading.value = false
+      }
       // mapping-preview 较慢，不阻塞首屏渲染
       void loadMappingPreview()
       await Promise.all([
@@ -1403,6 +1431,10 @@ watch(
       providerKeys.value = []  // 清空 Provider 级别的 keys
       providerModels.value = []
       providerMappingPreview.value = null
+      loadingProviderEndpoints.value = false
+      loadingProviderKeys.value = false
+      loadingProviderModels.value = false
+      loadingProviderMappingPreview.value = false
 
       // 重置分页状态
       resetKeysPagination()
@@ -2775,14 +2807,15 @@ async function loadSystemFormatConversionConfig() {
 async function loadProvider() {
   if (!props.providerId) return
   const requestId = ++providerLoadRequestId
+  const shouldShowSpinner = !provider.value || provider.value.id !== props.providerId
 
   try {
-    loading.value = true
-    // 并行加载 Provider 信息和系统级格式转换配置
-    const [providerData] = await Promise.all([
-      getProvider(props.providerId),
-      loadSystemFormatConversionConfig(),
-    ])
+    if (shouldShowSpinner) {
+      loading.value = true
+    }
+    // 系统级格式转换配置只影响一个图标状态，不应阻塞详情抽屉首屏。
+    void loadSystemFormatConversionConfig()
+    const providerData = await getProvider(props.providerId)
     if (requestId !== providerLoadRequestId) return
     provider.value = providerData
 
@@ -2793,7 +2826,7 @@ async function loadProvider() {
     if (requestId !== providerLoadRequestId) return
     showError(parseApiError(err, '加载失败'), '错误')
   } finally {
-    if (requestId === providerLoadRequestId) {
+    if (requestId === providerLoadRequestId && shouldShowSpinner) {
       loading.value = false
     }
   }
@@ -2802,22 +2835,14 @@ async function loadProvider() {
 // 加载端点列表
 async function loadEndpoints() {
   if (!props.providerId) return
+  const providerId = props.providerId
   const requestId = ++endpointsLoadRequestId
+  loadingProviderEndpoints.value = true
+  loadingProviderKeys.value = true
+  loadingProviderModels.value = true
 
-  try {
-    // 并行加载端点列表、Provider 级别的 keys 和 models
-    // mapping-preview 较慢，拆到 loadMappingPreview 独立加载，不阻塞首屏
-    const [endpointsList, providerKeysResult, modelsResult] = await Promise.all([
-      getProviderEndpoints(props.providerId),
-      getProviderKeys(props.providerId).catch(() => []),
-      getProviderModels(props.providerId).catch(() => []),
-    ])
-    if (requestId !== endpointsLoadRequestId) return
-
-    providerKeys.value = providerKeysResult
-    providerModels.value = modelsResult
-    // 按 API 格式排序
-    const sortedEndpoints = endpointsList.sort((a, b) => {
+  const sortEndpoints = (items: ProviderEndpoint[]): ProviderEndpointWithKeys[] => {
+    return [...items].sort((a, b) => {
       const aIdx = API_FORMAT_ORDER.indexOf(a.api_format)
       const bIdx = API_FORMAT_ORDER.indexOf(b.api_format)
       if (aIdx === -1 && bIdx === -1) return 0
@@ -2825,18 +2850,60 @@ async function loadEndpoints() {
       if (bIdx === -1) return -1
       return aIdx - bIdx
     })
-    endpoints.value = sortedEndpoints
-    syncCurrentSelections(sortedEndpoints, providerKeysResult)
-  } catch (err: unknown) {
-    if (requestId !== endpointsLoadRequestId) return
-    showError(parseApiError(err, '加载端点失败'), '错误')
   }
+
+  const endpointsPromise = getProviderEndpoints(providerId)
+    .then((endpointsList) => {
+      if (requestId !== endpointsLoadRequestId) return
+      const sortedEndpoints = sortEndpoints(endpointsList)
+      endpoints.value = sortedEndpoints
+      syncCurrentSelections(sortedEndpoints, providerKeys.value)
+    })
+    .catch((err: unknown) => {
+      if (requestId !== endpointsLoadRequestId) return
+      endpoints.value = []
+      syncCurrentSelections([], providerKeys.value)
+      showError(parseApiError(err, '加载端点失败'), '错误')
+    })
+    .finally(() => {
+      if (requestId === endpointsLoadRequestId) {
+        loadingProviderEndpoints.value = false
+      }
+    })
+
+  const providerKeysPromise = getProviderKeys(providerId)
+    .catch(() => [])
+    .then((providerKeysResult) => {
+      if (requestId !== endpointsLoadRequestId) return
+      providerKeys.value = providerKeysResult
+      syncCurrentSelections(endpoints.value, providerKeysResult)
+    })
+    .finally(() => {
+      if (requestId === endpointsLoadRequestId) {
+        loadingProviderKeys.value = false
+      }
+    })
+
+  const modelsPromise = getProviderModels(providerId)
+    .catch(() => [])
+    .then((modelsResult) => {
+      if (requestId !== endpointsLoadRequestId) return
+      providerModels.value = modelsResult
+    })
+    .finally(() => {
+      if (requestId === endpointsLoadRequestId) {
+        loadingProviderModels.value = false
+      }
+    })
+
+  await Promise.allSettled([endpointsPromise, providerKeysPromise, modelsPromise])
 }
 
 // 加载映射预览（独立于 loadEndpoints，不阻塞首屏渲染）
 async function loadMappingPreview() {
   if (!props.providerId) return
   const requestId = ++mappingPreviewLoadRequestId
+  loadingProviderMappingPreview.value = true
   try {
     const preview = await getProviderMappingPreview(props.providerId)
     if (requestId !== mappingPreviewLoadRequestId) return
@@ -2844,6 +2911,10 @@ async function loadMappingPreview() {
   } catch {
     if (requestId !== mappingPreviewLoadRequestId) return
     providerMappingPreview.value = null
+  } finally {
+    if (requestId === mappingPreviewLoadRequestId) {
+      loadingProviderMappingPreview.value = false
+    }
   }
 }
 

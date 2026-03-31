@@ -33,4 +33,8 @@ def is_codex_url(base_url: str) -> bool:
         bool: 是否是 Codex 端点
     """
     url = base_url.rstrip("/")
-    return "/backend-api/codex" in url or url.endswith("/codex")
+    return (
+        "/backend-api/codex" in url
+        or "/backendapi/codex" in url
+        or url.endswith("/codex")
+    )

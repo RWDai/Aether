@@ -2877,3 +2877,286 @@ async def test_build_openai_cli_stream_plan_rejects_force_rewrite_envelope(
     )
 
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_build_openai_cli_stream_plan_rejects_codex_transport_for_direct_executor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.api.handlers.openai_cli import OpenAICliAdapter
+
+    adapter = OpenAICliAdapter()
+    fake_context = SimpleNamespace(
+        path_params={},
+        request_id="req-cli-stream-codex-transport-123",
+        client_ip="127.0.0.1",
+        user_agent="pytest",
+        start_time=0.0,
+        original_headers={"content-type": "application/json", "authorization": "Bearer test-key"},
+        query_params={},
+        client_content_encoding=None,
+        extra={"perf": None},
+    )
+    fake_context.ensure_json_body_async = AsyncMock(
+        return_value={"model": "gpt-5", "input": "hello", "stream": True}
+    )
+    fake_candidate = SimpleNamespace(
+        provider=SimpleNamespace(
+            id="provider-cli-stream-codex-transport-123",
+            name="codex",
+            proxy=None,
+        ),
+        endpoint=SimpleNamespace(id="endpoint-cli-stream-codex-transport-123", api_format="openai:cli"),
+        key=SimpleNamespace(id="key-cli-stream-codex-transport-123", proxy=None),
+        mapping_matched_model="gpt-5",
+        needs_conversion=False,
+        output_limit=None,
+        request_candidate_id="cand-cli-stream-codex-transport-123",
+    )
+    fake_upstream_request = SimpleNamespace(
+        url="https://chatgpt.com/backend-api/codex/responses",
+        headers={"content-type": "application/json", "accept": "text/event-stream"},
+        payload={"model": "gpt-5", "input": "hello", "stream": True},
+        upstream_is_stream=True,
+        envelope=None,
+        tls_profile=None,
+    )
+
+    class FakeCliHandler:
+        primary_api_format = "openai:cli"
+
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        def extract_model_from_request(
+            self, body: dict[str, object], path_params: dict[str, str]
+        ) -> str:
+            return "gpt-5"
+
+        def _resolve_capability_requirements(self, **kwargs: object) -> None:
+            return None
+
+        async def _resolve_preferred_key_ids(self, **kwargs: object) -> None:
+            return None
+
+        async def _get_mapped_model(self, **kwargs: object) -> str:
+            return "gpt-5"
+
+        async def _build_upstream_request(self, **kwargs: object) -> SimpleNamespace:
+            return fake_upstream_request
+
+    monkeypatch.setattr(adapter, "authorize", lambda context: None)
+    monkeypatch.setattr(
+        type(adapter),
+        "HANDLER_CLASS",
+        property(lambda self: FakeCliHandler),
+    )
+    monkeypatch.setattr(
+        adapter,
+        "_merge_path_params",
+        lambda body, path_params: body,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "src.api.internal.gateway._resolve_gateway_sync_adapter",
+        lambda decision, path: (adapter, {}),
+    )
+    monkeypatch.setattr(
+        "src.api.internal.gateway._load_gateway_auth_models",
+        lambda db, auth_context: (
+            SimpleNamespace(id="user-cli-stream-codex-transport-123"),
+            SimpleNamespace(id="api-key-cli-stream-codex-transport-123"),
+        ),
+    )
+    monkeypatch.setattr(
+        "src.api.internal.gateway.get_pipeline",
+        lambda: SimpleNamespace(_check_user_rate_limit=AsyncMock(return_value=None)),
+    )
+    monkeypatch.setattr(
+        "src.api.internal.gateway._build_gateway_request_context",
+        lambda **kwargs: fake_context,
+    )
+    monkeypatch.setattr(
+        "src.api.internal.gateway._select_gateway_direct_candidate",
+        AsyncMock(return_value=fake_candidate),
+    )
+    monkeypatch.setattr(
+        "src.services.proxy_node.resolver.resolve_proxy_info_async",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "src.services.proxy_node.resolver.resolve_delegate_config_async",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "src.services.proxy_node.resolver.build_proxy_url_async",
+        AsyncMock(return_value=None),
+    )
+
+    decision = classify_gateway_route("POST", "/v1/responses")
+    auth_context = GatewayAuthContext(
+        user_id="user-cli-stream-codex-transport-123",
+        api_key_id="api-key-cli-stream-codex-transport-123",
+        access_allowed=True,
+    )
+    payload = GatewayExecuteRequest(
+        method="POST",
+        path="/v1/responses",
+        headers={"content-type": "application/json", "authorization": "Bearer test-key"},
+        body_json={"model": "gpt-5", "input": "hello", "stream": True},
+        auth_context=auth_context,
+    )
+
+    result = await _build_openai_cli_stream_plan(
+        request=SimpleNamespace(),
+        payload=payload,
+        db=object(),
+        auth_context=auth_context,
+        decision=decision,
+    )
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_build_openai_cli_sync_plan_rejects_codex_transport_for_direct_executor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.api.handlers.openai_cli import OpenAICliAdapter
+
+    adapter = OpenAICliAdapter()
+    fake_context = SimpleNamespace(
+        path_params={},
+        request_id="req-cli-sync-codex-transport-123",
+        client_ip="127.0.0.1",
+        user_agent="pytest",
+        start_time=0.0,
+        original_headers={"content-type": "application/json", "authorization": "Bearer test-key"},
+        query_params={},
+        client_content_encoding=None,
+        extra={"perf": None},
+    )
+    fake_context.ensure_json_body_async = AsyncMock(
+        return_value={"model": "gpt-5", "input": "hello"}
+    )
+    fake_candidate = SimpleNamespace(
+        provider=SimpleNamespace(
+            id="provider-cli-sync-codex-transport-123",
+            name="codex",
+            proxy=None,
+            request_timeout=None,
+        ),
+        endpoint=SimpleNamespace(id="endpoint-cli-sync-codex-transport-123", api_format="openai:cli"),
+        key=SimpleNamespace(id="key-cli-sync-codex-transport-123", proxy=None),
+        mapping_matched_model="gpt-5",
+        needs_conversion=False,
+        output_limit=None,
+        request_candidate_id="cand-cli-sync-codex-transport-123",
+    )
+    fake_upstream_request = SimpleNamespace(
+        url="https://chatgpt.com/backendapi/codex/responses",
+        headers={"content-type": "application/json"},
+        payload={"model": "gpt-5", "input": "hello"},
+        upstream_is_stream=False,
+        envelope=None,
+        tls_profile=None,
+    )
+
+    class FakeCliHandler:
+        primary_api_format = "openai:cli"
+
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        def extract_model_from_request(
+            self, body: dict[str, object], path_params: dict[str, str]
+        ) -> str:
+            return "gpt-5"
+
+        def _resolve_capability_requirements(self, **kwargs: object) -> None:
+            return None
+
+        async def _resolve_preferred_key_ids(self, **kwargs: object) -> None:
+            return None
+
+        async def _get_mapped_model(self, **kwargs: object) -> str:
+            return "gpt-5"
+
+        async def _build_upstream_request(self, **kwargs: object) -> SimpleNamespace:
+            return fake_upstream_request
+
+    monkeypatch.setattr(adapter, "authorize", lambda context: None)
+    monkeypatch.setattr(
+        type(adapter),
+        "HANDLER_CLASS",
+        property(lambda self: FakeCliHandler),
+    )
+    monkeypatch.setattr(
+        adapter,
+        "_merge_path_params",
+        lambda body, path_params: body,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "src.api.internal.gateway._resolve_gateway_sync_adapter",
+        lambda decision, path: (adapter, {}),
+    )
+    monkeypatch.setattr(
+        "src.api.internal.gateway._load_gateway_auth_models",
+        lambda db, auth_context: (
+            SimpleNamespace(id="user-cli-sync-codex-transport-123"),
+            SimpleNamespace(id="api-key-cli-sync-codex-transport-123"),
+        ),
+    )
+    monkeypatch.setattr(
+        "src.api.internal.gateway.get_pipeline",
+        lambda: SimpleNamespace(_check_user_rate_limit=AsyncMock(return_value=None)),
+    )
+    monkeypatch.setattr(
+        "src.api.internal.gateway._build_gateway_request_context",
+        lambda **kwargs: fake_context,
+    )
+    monkeypatch.setattr(
+        "src.api.internal.gateway._select_gateway_direct_candidate",
+        AsyncMock(return_value=fake_candidate),
+    )
+    monkeypatch.setattr(
+        "src.services.proxy_node.resolver.resolve_proxy_info_async",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "src.services.proxy_node.resolver.resolve_delegate_config_async",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "src.services.proxy_node.resolver.build_proxy_url_async",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "src.services.proxy_node.resolver.get_system_proxy_config_async",
+        AsyncMock(return_value=None),
+    )
+
+    decision = classify_gateway_route("POST", "/v1/responses")
+    auth_context = GatewayAuthContext(
+        user_id="user-cli-sync-codex-transport-123",
+        api_key_id="api-key-cli-sync-codex-transport-123",
+        access_allowed=True,
+    )
+    payload = GatewayExecuteRequest(
+        method="POST",
+        path="/v1/responses",
+        headers={"content-type": "application/json", "authorization": "Bearer test-key"},
+        body_json={"model": "gpt-5", "input": "hello"},
+        auth_context=auth_context,
+    )
+
+    result = await _build_openai_cli_sync_plan(
+        request=SimpleNamespace(),
+        payload=payload,
+        db=object(),
+        auth_context=auth_context,
+        decision=decision,
+    )
+
+    assert result is None

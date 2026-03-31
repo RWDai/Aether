@@ -309,6 +309,7 @@ async fn gateway_executes_kiro_claude_cli_stream_via_local_stream_rewrite() {
 }
 
 #[tokio::test]
+#[ignore = "python decision/plan fallback removed from ai hot path"]
 async fn gateway_executes_antigravity_gemini_cli_stream_via_executor_decision() {
     use base64::Engine as _;
 
@@ -561,6 +562,7 @@ async fn gateway_executes_antigravity_gemini_cli_stream_via_executor_decision() 
 }
 
 #[tokio::test]
+#[ignore = "python decision/plan fallback removed from ai hot path"]
 async fn gateway_executes_antigravity_gemini_chat_stream_via_executor_decision() {
     use base64::Engine as _;
 

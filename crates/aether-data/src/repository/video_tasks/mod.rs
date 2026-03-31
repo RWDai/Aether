@@ -3,8 +3,9 @@ mod sql;
 mod types;
 
 pub use memory::InMemoryVideoTaskRepository;
-pub use sql::SqlxVideoTaskReadRepository;
+pub use sql::{SqlxVideoTaskReadRepository, SqlxVideoTaskRepository};
 pub use types::{
-    StoredVideoTask, UpsertVideoTask, VideoTaskLookupKey, VideoTaskReadRepository,
-    VideoTaskRepository, VideoTaskStatus, VideoTaskWriteRepository,
+    StoredVideoTask, UpsertVideoTask, VideoTaskLookupKey, VideoTaskModelCount,
+    VideoTaskQueryFilter, VideoTaskReadRepository, VideoTaskRepository, VideoTaskStatus,
+    VideoTaskStatusCount, VideoTaskWriteRepository,
 };

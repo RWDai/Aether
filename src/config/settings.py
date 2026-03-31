@@ -241,6 +241,18 @@ class Config:
         # Usage 队列配置（Redis Streams）
         # 默认启用队列模式，通过 Redis Streams 异步写入 DB，提升响应性能
         self.usage_queue_enabled = os.getenv("USAGE_QUEUE_ENABLED", "true").lower() == "true"
+        # Python 宿主的 usage consumer 仅保留为显式回滚开关；默认 owner 为 Rust gateway。
+        self.usage_queue_python_consumer_enabled = (
+            os.getenv("USAGE_QUEUE_PYTHON_CONSUMER_ENABLED", "false").lower() == "true"
+        )
+        # Python 宿主的 quota scheduler 仅保留为显式回滚开关；默认 owner 为 Rust gateway。
+        self.quota_scheduler_python_enabled = (
+            os.getenv("QUOTA_SCHEDULER_PYTHON_ENABLED", "false").lower() == "true"
+        )
+        # Python 宿主的 model fetch scheduler 仅保留为显式回滚开关；默认 owner 为 Rust gateway。
+        self.model_fetch_scheduler_python_enabled = (
+            os.getenv("MODEL_FETCH_SCHEDULER_PYTHON_ENABLED", "false").lower() == "true"
+        )
         # 队列事件是否包含 headers/bodies 由系统配置（request_record_level）决定；
         # 最终写入 DB 前仍会按 SystemConfigService 做脱敏与截断。
         self.usage_queue_stream_key = os.getenv("USAGE_QUEUE_STREAM_KEY", "usage:events")
@@ -349,10 +361,15 @@ class Config:
         # VIDEO_MAX_POLL_COUNT: 最大轮询次数，默认 360 次（约 1 小时）
         # VIDEO_POLL_BATCH_SIZE: 每批处理任务数，默认 50
         # VIDEO_POLL_CONCURRENCY: 并发轮询数，默认 10
+        # VIDEO_TASK_PYTHON_POLLER_ENABLED: Python 宿主是否继续托管 video poller。
+        # 默认 false，owner 迁移到 Rust gateway；仅保留为显式回滚开关。
         self.video_poll_interval_seconds = int(os.getenv("VIDEO_POLL_INTERVAL_SECONDS", "10"))
         self.video_max_poll_count = int(os.getenv("VIDEO_MAX_POLL_COUNT", "360"))
         self.video_poll_batch_size = int(os.getenv("VIDEO_POLL_BATCH_SIZE", "50"))
         self.video_poll_concurrency = int(os.getenv("VIDEO_POLL_CONCURRENCY", "10"))
+        self.video_task_python_poller_enabled = (
+            os.getenv("VIDEO_TASK_PYTHON_POLLER_ENABLED", "false").lower() == "true"
+        )
 
         # Management Token 速率限制（每分钟每 IP）
         self.management_token_rate_limit = int(os.getenv("MANAGEMENT_TOKEN_RATE_LIMIT", "30"))
@@ -364,6 +381,48 @@ class Config:
         # MAINTENANCE_STARTUP_TASKS_ENABLED: 是否在启动时执行维护调度器初始化任务（清理、统计回填等）
         self.maintenance_startup_tasks_enabled = (
             os.getenv("MAINTENANCE_STARTUP_TASKS_ENABLED", "true").lower() == "true"
+        )
+        # 已迁到 Rust gateway 的 maintenance job 默认不再由 Python scheduler 托管；
+        # 仅保留为显式回滚开关。
+        self.audit_cleanup_python_enabled = (
+            os.getenv("AUDIT_CLEANUP_PYTHON_ENABLED", "false").lower() == "true"
+        )
+        self.db_maintenance_python_enabled = (
+            os.getenv("DB_MAINTENANCE_PYTHON_ENABLED", "false").lower() == "true"
+        )
+        self.gemini_file_mapping_cleanup_python_enabled = (
+            os.getenv("GEMINI_FILE_MAPPING_CLEANUP_PYTHON_ENABLED", "false").lower() == "true"
+        )
+        self.provider_checkin_python_enabled = (
+            os.getenv("PROVIDER_CHECKIN_PYTHON_ENABLED", "false").lower() == "true"
+        )
+        self.request_candidate_cleanup_python_enabled = (
+            os.getenv("REQUEST_CANDIDATE_CLEANUP_PYTHON_ENABLED", "false").lower() == "true"
+        )
+        self.pending_cleanup_python_enabled = (
+            os.getenv("PENDING_CLEANUP_PYTHON_ENABLED", "false").lower() == "true"
+        )
+        self.pool_monitor_python_enabled = (
+            os.getenv("POOL_MONITOR_PYTHON_ENABLED", "false").lower() == "true"
+        )
+        self.http_client_idle_cleanup_python_enabled = (
+            os.getenv("HTTP_CLIENT_IDLE_CLEANUP_PYTHON_ENABLED", "false").lower() == "true"
+        )
+        self.stats_aggregation_python_enabled = (
+            os.getenv("STATS_AGGREGATION_PYTHON_ENABLED", "false").lower() == "true"
+        )
+        self.stats_hourly_aggregation_python_enabled = (
+            os.getenv("STATS_HOURLY_AGGREGATION_PYTHON_ENABLED", "false").lower() == "true"
+        )
+        self.usage_cleanup_python_enabled = (
+            os.getenv("USAGE_CLEANUP_PYTHON_ENABLED", "false").lower() == "true"
+        )
+        self.wallet_daily_usage_aggregation_python_enabled = (
+            os.getenv("WALLET_DAILY_USAGE_AGGREGATION_PYTHON_ENABLED", "false").lower()
+            == "true"
+        )
+        self.antigravity_ua_refresh_python_enabled = (
+            os.getenv("ANTIGRAVITY_UA_REFRESH_PYTHON_ENABLED", "false").lower() == "true"
         )
 
         # 启动预热配置（降低懒加载导致的首请求延迟）

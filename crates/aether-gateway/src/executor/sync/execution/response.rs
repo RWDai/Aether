@@ -1,11 +1,11 @@
 use super::*;
 use crate::gateway::video_tasks::{LocalVideoTaskSnapshot, VideoTaskSyncReportMode};
 
-pub(super) struct LocalVideoSyncSuccessOutcome {
-    pub(super) response: Response<Body>,
-    pub(super) report_payload: GatewaySyncReportRequest,
-    pub(super) report_mode: VideoTaskSyncReportMode,
-    pub(super) local_task_snapshot: Option<LocalVideoTaskSnapshot>,
+pub(crate) struct LocalVideoSyncSuccessOutcome {
+    pub(crate) response: Response<Body>,
+    pub(crate) report_payload: GatewaySyncReportRequest,
+    pub(crate) report_mode: VideoTaskSyncReportMode,
+    pub(crate) local_task_snapshot: Option<LocalVideoTaskSnapshot>,
 }
 
 fn cloned_report_context_object(
@@ -37,7 +37,7 @@ fn build_local_video_success_response(
     )
 }
 
-pub(super) fn maybe_build_local_video_success_outcome(
+pub(crate) fn maybe_build_local_video_success_outcome(
     trace_id: &str,
     decision: &GatewayControlDecision,
     payload: &GatewaySyncReportRequest,
@@ -90,7 +90,7 @@ pub(super) fn maybe_build_local_video_success_outcome(
     }))
 }
 
-pub(super) fn maybe_build_local_sync_finalize_response(
+pub(crate) fn maybe_build_local_sync_finalize_response(
     trace_id: &str,
     decision: &GatewayControlDecision,
     payload: &GatewaySyncReportRequest,
@@ -143,7 +143,7 @@ pub(super) fn maybe_build_local_sync_finalize_response(
     )?))
 }
 
-pub(super) fn maybe_build_local_video_error_response(
+pub(crate) fn maybe_build_local_video_error_response(
     trace_id: &str,
     decision: &GatewayControlDecision,
     payload: &GatewaySyncReportRequest,

@@ -24,28 +24,40 @@ router = APIRouter(
 )
 
 
+def _ensure_legacy_internal_gateway_request(request: Request) -> Response | None:
+    if gateway_impl._request_allows_legacy_chat_cli_internal_gateway(request):
+        return None
+    return gateway_impl._build_retired_internal_gateway_response()
+
+
 @router.post("/resolve")
 async def resolve_gateway_route(
     request: Request, payload: GatewayResolveRequest
-) -> dict[str, object]:
+) -> Response:
     gateway_impl.ensure_loopback(request)
+    retired = _ensure_legacy_internal_gateway_request(request)
+    if retired is not None:
+        return retired
     decision = classify_gateway_route(payload.method, payload.path, payload.headers)
     decision.auth_context = await gateway_impl._resolve_auth_context(payload, decision)
-    return decision.model_dump(exclude_none=True)
+    return JSONResponse(status_code=200, content=decision.model_dump(exclude_none=True))
 
 
 @router.post("/auth-context")
 async def resolve_gateway_auth_context(
     request: Request,
     payload: GatewayAuthContextRequest,
-) -> dict[str, object]:
+) -> Response:
     gateway_impl.ensure_loopback(request)
+    retired = _ensure_legacy_internal_gateway_request(request)
+    if retired is not None:
+        return retired
     auth_context = await gateway_impl._resolve_auth_context_signature(
         headers=payload.headers,
         query_string=payload.query_string,
         auth_endpoint_signature=payload.auth_endpoint_signature,
     )
-    return {"auth_context": auth_context}
+    return JSONResponse(status_code=200, content={"auth_context": auth_context})
 
 
 @router.post("/decision-sync")
@@ -55,7 +67,12 @@ async def decide_gateway_sync(
     db: Session = Depends(get_db),
 ) -> Response:
     gateway_impl.ensure_loopback(request)
+    retired = _ensure_legacy_internal_gateway_request(request)
+    if retired is not None:
+        return retired
     decision = classify_gateway_route(payload.method, payload.path, payload.headers)
+    if not gateway_impl._allows_legacy_chat_cli_internal_route(request, decision):
+        return gateway_impl._build_retired_internal_gateway_response()
     auth_context = await gateway_impl._resolve_gateway_execute_auth_context(
         payload=payload,
         decision=decision,
@@ -100,7 +117,12 @@ async def decide_gateway_stream(
     db: Session = Depends(get_db),
 ) -> Response:
     gateway_impl.ensure_loopback(request)
+    retired = _ensure_legacy_internal_gateway_request(request)
+    if retired is not None:
+        return retired
     decision = classify_gateway_route(payload.method, payload.path, payload.headers)
+    if not gateway_impl._allows_legacy_chat_cli_internal_route(request, decision):
+        return gateway_impl._build_retired_internal_gateway_response()
     auth_context = await gateway_impl._resolve_gateway_execute_auth_context(
         payload=payload,
         decision=decision,
@@ -144,6 +166,9 @@ async def execute_gateway_sync(
     payload: GatewayExecuteRequest,
     db: Session = Depends(get_db),
 ) -> Response:
+    retired = _ensure_legacy_internal_gateway_request(request)
+    if retired is not None:
+        return retired
     return await gateway_impl._execute_gateway_control_request(
         request=request,
         payload=payload,
@@ -158,6 +183,9 @@ async def execute_gateway_stream(
     payload: GatewayExecuteRequest,
     db: Session = Depends(get_db),
 ) -> Response:
+    retired = _ensure_legacy_internal_gateway_request(request)
+    if retired is not None:
+        return retired
     return await gateway_impl._execute_gateway_control_request(
         request=request,
         payload=payload,
@@ -173,6 +201,12 @@ async def plan_gateway_stream(
     db: Session = Depends(get_db),
 ) -> Response:
     gateway_impl.ensure_loopback(request)
+    retired = _ensure_legacy_internal_gateway_request(request)
+    if retired is not None:
+        return retired
+    decision = classify_gateway_route(payload.method, payload.path, payload.headers)
+    if not gateway_impl._allows_legacy_chat_cli_internal_route(request, decision):
+        return gateway_impl._build_retired_internal_gateway_response()
     try:
         planned = await gateway_impl._build_gateway_stream_plan_response(
             request=request,
@@ -212,6 +246,12 @@ async def plan_gateway_sync(
     db: Session = Depends(get_db),
 ) -> Response:
     gateway_impl.ensure_loopback(request)
+    retired = _ensure_legacy_internal_gateway_request(request)
+    if retired is not None:
+        return retired
+    decision = classify_gateway_route(payload.method, payload.path, payload.headers)
+    if not gateway_impl._allows_legacy_chat_cli_internal_route(request, decision):
+        return gateway_impl._build_retired_internal_gateway_response()
     try:
         planned = await gateway_impl._build_gateway_sync_plan_response(
             request=request,
@@ -249,8 +289,13 @@ async def report_gateway_sync(
     request: Request,
     payload: GatewaySyncReportRequest,
     background_tasks: BackgroundTasks,
-) -> dict[str, bool]:
+) -> Response:
     gateway_impl.ensure_loopback(request)
+    retired = _ensure_legacy_internal_gateway_request(request)
+    if retired is not None:
+        return retired
+    if not gateway_impl._allows_legacy_chat_cli_report_route(request, payload.report_kind):
+        return gateway_impl._build_retired_internal_gateway_response()
     payload_copy = payload.model_copy(deep=True)
     if gateway_impl._gateway_sync_report_requires_inline(payload_copy):
         db, cleanup = gateway_impl._resolve_gateway_background_db(getattr(request, "app", None))
@@ -259,13 +304,13 @@ async def report_gateway_sync(
         finally:
             if cleanup is not None:
                 cleanup()
-        return {"ok": True}
+        return JSONResponse(status_code=200, content={"ok": True})
     background_tasks.add_task(
         gateway_impl._run_gateway_sync_report_background_with_session,
         payload_copy,
         getattr(request, "app", None),
     )
-    return {"ok": True}
+    return JSONResponse(status_code=200, content={"ok": True})
 
 
 @router.post("/finalize-sync")
@@ -275,6 +320,11 @@ async def finalize_gateway_sync(
     background_tasks: BackgroundTasks,
 ) -> Response:
     gateway_impl.ensure_loopback(request)
+    retired = _ensure_legacy_internal_gateway_request(request)
+    if retired is not None:
+        return retired
+    if not gateway_impl._allows_legacy_chat_cli_report_route(request, payload.report_kind):
+        return gateway_impl._build_retired_internal_gateway_response()
     fast_response = await gateway_impl._maybe_build_gateway_core_sync_fast_success_response(payload)
     if fast_response is not None:
         if payload.report_kind in {
@@ -321,11 +371,16 @@ async def report_gateway_stream(
     request: Request,
     payload: GatewayStreamReportRequest,
     background_tasks: BackgroundTasks,
-) -> dict[str, bool]:
+) -> Response:
     gateway_impl.ensure_loopback(request)
+    retired = _ensure_legacy_internal_gateway_request(request)
+    if retired is not None:
+        return retired
+    if not gateway_impl._allows_legacy_chat_cli_report_route(request, payload.report_kind):
+        return gateway_impl._build_retired_internal_gateway_response()
     background_tasks.add_task(
         gateway_impl._run_gateway_stream_report_background_with_session,
         payload.model_copy(deep=True),
         getattr(request, "app", None),
     )
-    return {"ok": True}
+    return JSONResponse(status_code=200, content={"ok": True})

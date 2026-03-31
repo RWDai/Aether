@@ -16,10 +16,12 @@ mod cli;
 mod common;
 
 use chat::{
-    maybe_build_local_claude_stream_sync_response, maybe_build_local_gemini_stream_sync_response,
+    maybe_build_local_claude_stream_sync_response, maybe_build_local_claude_sync_response,
+    maybe_build_local_gemini_stream_sync_response, maybe_build_local_gemini_sync_response,
     maybe_build_local_openai_chat_cross_format_stream_sync_response,
     maybe_build_local_openai_chat_cross_format_sync_response,
     maybe_build_local_openai_chat_stream_sync_response,
+    maybe_build_local_openai_chat_sync_response,
 };
 use cli::{
     maybe_build_local_claude_cli_stream_sync_response,
@@ -36,6 +38,7 @@ pub(super) use chat::{
 pub(super) use cli::{
     convert_claude_cli_response_to_openai_cli, convert_gemini_cli_response_to_openai_cli,
 };
+pub(crate) use common::unwrap_local_finalize_response_value;
 pub(crate) fn maybe_build_local_core_sync_finalize_response(
     trace_id: &str,
     decision: &GatewayControlDecision,
@@ -43,6 +46,11 @@ pub(crate) fn maybe_build_local_core_sync_finalize_response(
 ) -> Result<Option<LocalCoreSyncFinalizeOutcome>, GatewayError> {
     if let Some(response) =
         maybe_build_local_openai_chat_stream_sync_response(trace_id, decision, payload)?
+    {
+        return Ok(Some(response));
+    }
+    if let Some(response) =
+        maybe_build_local_openai_chat_sync_response(trace_id, decision, payload)?
     {
         return Ok(Some(response));
     }
@@ -76,9 +84,15 @@ pub(crate) fn maybe_build_local_core_sync_finalize_response(
     {
         return Ok(Some(response));
     }
+    if let Some(response) = maybe_build_local_claude_sync_response(trace_id, decision, payload)? {
+        return Ok(Some(response));
+    }
     if let Some(response) =
         maybe_build_local_gemini_stream_sync_response(trace_id, decision, payload)?
     {
+        return Ok(Some(response));
+    }
+    if let Some(response) = maybe_build_local_gemini_sync_response(trace_id, decision, payload)? {
         return Ok(Some(response));
     }
     if let Some(response) =

@@ -3,6 +3,11 @@ Provider 认证逻辑（OAuth / Service Account / Vertex AI）。
 
 从 api/handlers/base/request_builder.py 迁移到 services 层，
 消除 services→api 的反向依赖。
+
+注意：
+- AI request hot-path 逐步迁到 Rust 后，这里仍然保留 Python 侧的 OAuth
+  refresh / invalidation 状态持久化 owner。
+- 不要把新的 decision/control 路径继续扩展到这个模块。
 """
 
 from __future__ import annotations
@@ -68,6 +73,11 @@ def _persist_detached_oauth_invalid_state(
     invalid_at: Any,
     invalid_reason: str,
 ) -> None:
+    """持久化 oauth_invalid 状态。
+
+    这是 Python 仍保留的 status owner 之一：即使请求执行热路径迁到 Rust，
+    admin/manual repair 和 detached refresh 仍会依赖这条持久化路径。
+    """
     key.oauth_invalid_at = invalid_at
     key.oauth_invalid_reason = invalid_reason
 

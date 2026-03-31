@@ -47,6 +47,9 @@ _balance_refresh_semaphore: asyncio.Semaphore | None = None
 # 正在异步刷新余额的 provider 集合（per-provider 防重入）
 _refreshing_providers: set[str] = set()
 
+PROVIDER_OPS_CONNECT_RUST_ONLY_MESSAGE = "Provider 连接仅支持 Rust executor"
+PROVIDER_OPS_ACTION_RUST_ONLY_MESSAGE = "Provider 操作仅支持 Rust executor"
+
 
 def _get_balance_refresh_semaphore() -> asyncio.Semaphore:
     """获取余额刷新信号量（延迟初始化）"""
@@ -144,6 +147,19 @@ class ProviderOpsService:
                 pass
         finally:
             self.db.expire_on_commit = original_expire_on_commit
+
+    def _provider_ops_rust_only_connect_message(self) -> str:
+        return PROVIDER_OPS_CONNECT_RUST_ONLY_MESSAGE
+
+    def _provider_ops_rust_only_action_result(
+        self,
+        action_type: ProviderActionType,
+    ) -> ActionResult:
+        return ActionResult(
+            status=ActionStatus.NOT_SUPPORTED,
+            action_type=action_type,
+            message=PROVIDER_OPS_ACTION_RUST_ONLY_MESSAGE,
+        )
 
     @staticmethod
     def _build_ops_proxy_snapshot(
@@ -382,24 +398,10 @@ class ProviderOpsService:
         if not config:
             return False, "未配置操作设置"
 
-        # 获取架构
-        registry = get_registry()
-        architecture = registry.get_or_default(config.architecture_id)
-
         # 获取 base_url：优先从 config 读取
         base_url = config.base_url or self._get_provider_base_url(provider)
         if not base_url:
             return False, "Provider 未配置 base_url"
-
-        # 创建连接器
-        try:
-            connector = architecture.get_connector(
-                base_url=base_url,
-                auth_type=config.connector_auth_type,
-                config=config.connector_config,
-            )
-        except ValueError as e:
-            return False, str(e)
 
         # 使用提供的凭据或已保存的凭据
         if credentials:
@@ -410,27 +412,13 @@ class ProviderOpsService:
         if not actual_credentials:
             return False, "未提供凭据"
 
-        # Avoid holding a DB connection while awaiting network I/O.
-        self._release_db_connection_before_await()
-
-        # 建立连接
         logger.info(
-            "尝试连接: provider_id={}, credentials_keys={}",
+            "Provider ops connect blocked pending Rust cutover: provider_id={}, credentials_keys={}",
             provider_id,
             list(actual_credentials.keys()),
         )
-        # 注册凭据更新回调（Token Rotation 场景持久化新 refresh_token）
-        # 必须在 connect 之前注册，因为 connect 内部可能已经触发 Token Rotation
-        connector._on_credentials_updated = (
-            lambda updated, pid=provider_id: self._persist_updated_credentials(pid, updated)
-        )
-        success = await connector.connect(actual_credentials)
-        if success:
-            self._connectors[provider_id] = connector
-            return True, "连接成功"
-        else:
-            state = connector.get_state()
-            return False, state.last_error or "连接失败"
+        self._connectors.pop(provider_id, None)
+        return False, self._provider_ops_rust_only_connect_message()
 
     async def disconnect(self, provider_id: str) -> bool:
         """
@@ -488,28 +476,6 @@ class ProviderOpsService:
         Returns:
             操作结果
         """
-        # 检查连接状态
-        connector = self._connectors.get(provider_id)
-        if not connector:
-            # 尝试自动连接
-            success, message = await self.connect(provider_id)
-            if not success:
-                return ActionResult(
-                    status=ActionStatus.AUTH_FAILED,
-                    action_type=action_type,
-                    message=f"连接失败: {message}",
-                )
-            connector = self._connectors.get(provider_id)
-
-        # Avoid holding a DB connection while awaiting authentication checks.
-        self._release_db_connection_before_await()
-        if not connector or not await connector.is_authenticated():
-            return ActionResult(
-                status=ActionStatus.AUTH_EXPIRED,
-                action_type=action_type,
-                message="认证已过期，请重新连接",
-            )
-
         # 获取配置
         config = self.get_config(provider_id)
         if not config:
@@ -519,38 +485,12 @@ class ProviderOpsService:
                 message="未配置操作设置",
             )
 
-        # 获取架构
-        registry = get_registry()
-        architecture = registry.get_or_default(config.architecture_id)
-
-        # 检查是否支持该操作
-        if not architecture.supports_action(action_type):
-            return ActionResult(
-                status=ActionStatus.NOT_SUPPORTED,
-                action_type=action_type,
-                message=f"架构 {architecture.architecture_id} 不支持 {action_type.value} 操作",
-            )
-
-        # 合并操作配置
-        saved_action_config = config.actions.get(action_type.value, {}).get("config", {})
-        merged_config = {**saved_action_config, **(action_config or {})}
-
-        # 注入 credentials 元信息（如是否配置了 Cookie），供 Action 使用
-        decrypted_credentials = self._decrypt_credentials(config.connector_credentials)
-        if decrypted_credentials.get("cookie"):
-            merged_config["_has_cookie"] = True
-
-        # 创建操作实例
-        action = architecture.get_action(action_type, merged_config)
-
-        # Avoid holding a DB connection while awaiting the upstream action.
-        self._release_db_connection_before_await()
-
-        # 执行操作
-        async with connector.get_client() as client:
-            result = await action.execute(client)
-
-        return result
+        logger.info(
+            "Provider ops action blocked pending Rust cutover: provider_id={}, action_type={}",
+            provider_id,
+            action_type.value,
+        )
+        return self._provider_ops_rust_only_action_result(action_type)
 
     async def query_balance(
         self,
@@ -1113,8 +1053,6 @@ class ProviderOpsService:
         """
         import httpx
 
-        from src.utils.ssl_utils import get_ssl_context
-
         # Avoid holding a DB connection while awaiting verify pre-processing / network.
         self._release_db_connection_before_await()
 
@@ -1171,24 +1109,7 @@ class ProviderOpsService:
                 tunnel_node_id=tunnel_node_id,
             )
             if response is None:
-                # 构建 httpx client 参数
-                client_kwargs: dict[str, Any] = {
-                    "timeout": 30.0,
-                    "verify": get_ssl_context(),
-                }
-                if tunnel_node_id:
-                    from src.services.proxy_node.tunnel_transport import create_tunnel_transport
-
-                    client_kwargs["transport"] = create_tunnel_transport(
-                        tunnel_node_id, timeout=30.0
-                    )
-                    logger.debug("使用 tunnel 代理: node_id={}", tunnel_node_id)
-                elif proxy:
-                    client_kwargs["proxy"] = proxy
-                    logger.debug("使用代理: {}", proxy)
-
-                async with httpx.AsyncClient(**client_kwargs) as client:
-                    response = await client.get(verify_endpoint, headers=headers)
+                return {"success": False, "message": "认证验证仅支持 Rust executor"}
 
             logger.debug(
                 "验证响应: status={}, content_type={}",

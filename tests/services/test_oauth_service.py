@@ -11,6 +11,7 @@ from sqlalchemy.orm import sessionmaker
 
 from src.core.enums import AuthSource, UserRole
 from src.models.database import Base, OAuthProvider, User, UserOAuthLink
+from src.services.auth.oauth.models import OAuthFlowError
 from src.services.auth.oauth.service import OAuthService
 from src.services.auth.oauth.state import OAuthStateData
 
@@ -131,6 +132,127 @@ async def test_handle_callback_allows_bind_state_without_device_id(
     parsed = urlparse(result.redirect_url)
     assert result.refresh_token is None
     assert parse_qs(parsed.query)["oauth_bound"] == ["GitHub"]
+
+
+@pytest.mark.asyncio
+async def test_handle_callback_redirects_when_provider_http_is_rust_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = MagicMock()
+    provider = SimpleNamespace(
+        exchange_code=AsyncMock(
+            side_effect=OAuthFlowError("provider_unavailable", "OAuth 仅支持 Rust executor")
+        ),
+        get_user_info=AsyncMock(),
+    )
+    config = SimpleNamespace(
+        frontend_callback_url="https://app.example.com/auth/callback",
+        display_name="GitHub",
+        is_enabled=True,
+    )
+
+    monkeypatch.setattr(
+        "src.services.auth.oauth.service.OAuthService._require_module_active",
+        lambda _db: None,
+    )
+    monkeypatch.setattr(
+        "src.services.auth.oauth.service.OAuthService._get_provider_impl",
+        lambda _provider_type: provider,
+    )
+    monkeypatch.setattr(
+        "src.services.auth.oauth.service.OAuthService._get_provider_config",
+        lambda _db, _provider_type: config,
+    )
+    monkeypatch.setattr(
+        "src.services.auth.oauth.service.get_redis_client",
+        AsyncMock(return_value=object()),
+    )
+    monkeypatch.setattr(
+        "src.services.auth.oauth.service.consume_oauth_state",
+        AsyncMock(
+            return_value=OAuthStateData(
+                nonce="state-1",
+                provider_type="github",
+                action="login",
+                user_id=None,
+                client_device_id="device-1",
+                created_at=123,
+            )
+        ),
+    )
+
+    result = await OAuthService.handle_callback(
+        db=db,
+        provider_type="github",
+        state="state-1",
+        code="code-1",
+        error=None,
+        error_description=None,
+        client_ip=None,
+        user_agent="pytest-agent",
+        headers={},
+    )
+
+    parsed = urlparse(result.redirect_url)
+    params = parse_qs(parsed.query)
+    assert params["error_code"] == ["provider_unavailable"]
+    assert params["error_detail"] == ["OAuth 仅支持 Rust executor"]
+    provider.get_user_info.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_test_provider_config_returns_rust_only_failure_without_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = MagicMock()
+    monkeypatch.setattr(
+        "src.services.auth.oauth.service.OAuthService._get_provider_impl",
+        lambda _provider_type: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "src.services.auth.oauth.service.OAuthService._get_provider_config",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Python OAuth config probe should not read DB config")
+        ),
+    )
+
+    result = await OAuthService.test_provider_config(db, "github")
+    assert result == {
+        "authorization_url_reachable": False,
+        "token_url_reachable": False,
+        "secret_status": "unsupported",
+        "details": "OAuth 配置测试仅支持 Rust executor",
+    }
+
+
+@pytest.mark.asyncio
+async def test_test_provider_config_with_data_returns_rust_only_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = SimpleNamespace(
+        authorization_url="https://provider.example/authorize",
+        token_url="https://provider.example/token",
+    )
+    monkeypatch.setattr(
+        "src.services.auth.oauth.service.OAuthService._get_provider_impl",
+        lambda _provider_type: provider,
+    )
+
+    result = await OAuthService.test_provider_config_with_data(
+        provider_type="github",
+        client_id="client-id",
+        client_secret="secret",
+        authorization_url_override=None,
+        token_url_override=None,
+        redirect_uri="https://api.example.com/api/oauth/github/callback",
+    )
+
+    assert result == {
+        "authorization_url_reachable": False,
+        "token_url_reachable": False,
+        "secret_status": "unsupported",
+        "details": "OAuth 配置测试仅支持 Rust executor",
+    }
 
 
 def test_handle_login_sync_returns_user_snapshot_outside_db_session(

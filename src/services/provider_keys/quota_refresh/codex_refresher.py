@@ -336,10 +336,7 @@ async def refresh_codex_key_quota(
         headers["chatgpt-account-id"] = oauth_account_id
 
     # 解析代理配置（key 级别 > provider 级别 > 系统默认）
-    from src.services.proxy_node.resolver import (
-        build_proxy_client_kwargs,
-        resolve_effective_proxy,
-    )
+    from src.services.proxy_node.resolver import resolve_effective_proxy
 
     effective_proxy = resolve_effective_proxy(
         getattr(provider, "proxy", None),
@@ -357,10 +354,13 @@ async def refresh_codex_key_quota(
         proxy_snapshot=proxy_snapshot,
     )
     if response is None:
-        async with httpx.AsyncClient(
-            **build_proxy_client_kwargs(effective_proxy, timeout=30.0)
-        ) as client:
-            response = await client.get(codex_wham_usage_url, headers=headers)
+        return {
+            "key_id": key.id,
+            "key_name": key.name,
+            "status": "error",
+            "message": "Codex 配额刷新仅支持 Rust executor",
+            "status_code": 503,
+        }
 
     if response.status_code != 200:
         status_code = int(response.status_code)

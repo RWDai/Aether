@@ -5,8 +5,8 @@ from collections.abc import AsyncGenerator
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-import httpx
 import pytest
+from fastapi import Response
 from fastapi.responses import StreamingResponse
 
 import src.api.public.gemini_files as gemini_files_mod
@@ -127,12 +127,6 @@ async def test_proxy_request_passes_proxy_snapshot_to_rust_executor(
         "execute_sync_json",
         _fake_execute_sync_json,
     )
-    monkeypatch.setattr(
-        gemini_files_mod.HTTPClientPool,
-        "get_upstream_client",
-        AsyncMock(side_effect=AssertionError("python fallback should not run")),
-    )
-
     response = await gemini_files_mod._proxy_request(
         "GET",
         "https://generativelanguage.googleapis.com/v1beta/files",
@@ -150,57 +144,30 @@ async def test_proxy_request_passes_proxy_snapshot_to_rust_executor(
 
 
 @pytest.mark.asyncio
-async def test_proxy_request_fallback_uses_upstream_client_proxy_context(
+async def test_proxy_request_returns_503_when_rust_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class _FakeClient:
-        async def get(self, url: str, headers: dict[str, str]) -> httpx.Response:
-            assert url == "https://generativelanguage.googleapis.com/v1beta/files"
-            assert headers == {"x-goog-api-key": "upstream-key"}
-            return httpx.Response(
-                200,
-                request=httpx.Request("GET", url),
-                json={"files": []},
-            )
-
-    async def _fake_try_rust_sync_proxy_request(*args: object, **kwargs: object) -> None:
+    async def _fake_try_rust_sync_proxy_request(*args: object, **kwargs: object) -> Response:
         del args, kwargs
-        return None
-
-    async def _fake_get_upstream_client(
-        delegate_cfg: dict[str, object] | None,
-        *,
-        proxy_config: dict[str, object] | None = None,
-        tls_profile: str | None = None,
-    ) -> _FakeClient:
-        assert delegate_cfg == {"tunnel": True, "node_id": "node-1"}
-        assert proxy_config == {"enabled": True, "node_id": "node-1"}
-        assert tls_profile is None
-        return _FakeClient()
+        return gemini_files_mod._build_rust_unavailable_response()
 
     monkeypatch.setattr(
         gemini_files_mod,
         "_try_rust_sync_proxy_request",
         _fake_try_rust_sync_proxy_request,
     )
-    monkeypatch.setattr(
-        gemini_files_mod.HTTPClientPool,
-        "get_upstream_client",
-        _fake_get_upstream_client,
-    )
-
     response = await gemini_files_mod._proxy_request(
         "GET",
         "https://generativelanguage.googleapis.com/v1beta/files",
         {"x-goog-api-key": "upstream-key"},
         file_key_id="key-1",
         user_id="user-1",
-        proxy_config={"enabled": True, "node_id": "node-1"},
-        delegate_config={"tunnel": True, "node_id": "node-1"},
     )
 
-    assert response.status_code == 200
-    assert json.loads(response.body) == {"files": []}
+    body = json.loads(response.body)
+    assert response.status_code == 503
+    assert body["error"]["code"] == 503
+    assert body["error"]["status"] == "UNAVAILABLE"
 
 
 @pytest.mark.asyncio
@@ -275,13 +242,7 @@ async def test_download_file_uses_enriched_proxy_snapshot_for_regular_files(
         "execute_stream",
         _fake_execute_stream,
     )
-    monkeypatch.setattr(
-        gemini_files_mod.HTTPClientPool,
-        "get_upstream_client",
-        AsyncMock(side_effect=AssertionError("python fallback should not run")),
-    )
-
-    response = await gemini_files_mod.download_file(
+    response = await gemini_files_mod._download_file_response(
         "file-1",
         SimpleNamespace(
             headers={},
@@ -294,3 +255,71 @@ async def test_download_file_uses_enriched_proxy_snapshot_for_regular_files(
     body = b"".join([chunk async for chunk in response.body_iterator])
     assert body == b"file-bytes"
     assert dummy_ctx.closed is True
+
+
+@pytest.mark.asyncio
+async def test_download_file_returns_503_when_rust_stream_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(config, "executor_backend", "rust")
+    raw_ctx = UpstreamContext(
+        upstream_key="upstream-key",
+        base_url="https://generativelanguage.googleapis.com",
+        file_key_id="key-1",
+        user_id="user-1",
+        provider_id="prov-1",
+        endpoint_id="ep-1",
+    )
+    enriched_ctx = UpstreamContext(
+        upstream_key="upstream-key",
+        base_url="https://generativelanguage.googleapis.com",
+        file_key_id="key-1",
+        user_id="user-1",
+        provider_id="prov-1",
+        endpoint_id="ep-1",
+    )
+
+    monkeypatch.setattr(gemini_files_mod, "_extract_gemini_api_key", lambda request: "client-key")
+    monkeypatch.setattr(
+        gemini_files_mod,
+        "create_session",
+        lambda: _FakeDBContext(SimpleNamespace()),
+    )
+    monkeypatch.setattr(
+        gemini_files_mod.AuthService,
+        "authenticate_api_key",
+        lambda db, key: (SimpleNamespace(id="user-1"), SimpleNamespace(id="user-api-key")),
+    )
+    monkeypatch.setattr(gemini_files_mod, "_ensure_balance_access", lambda db, user, api_key: None)
+    monkeypatch.setattr(
+        gemini_files_mod,
+        "_resolve_upstream_context",
+        AsyncMock(return_value=raw_ctx),
+    )
+    monkeypatch.setattr(
+        gemini_files_mod,
+        "_enrich_upstream_context_proxy",
+        AsyncMock(return_value=enriched_ctx),
+    )
+
+    async def _fake_execute_stream(self: object, plan: object) -> RustExecutorStreamResult:
+        del self, plan
+        raise rust_client_mod.RustExecutorClientError("executor unavailable")
+
+    monkeypatch.setattr(
+        rust_client_mod.RustExecutorClient,
+        "execute_stream",
+        _fake_execute_stream,
+    )
+    response = await gemini_files_mod._download_file_response(
+        "file-1",
+        SimpleNamespace(
+            headers={},
+            query_params={"alt": "media"},
+        ),
+    )
+
+    body = json.loads(response.body)
+    assert response.status_code == 503
+    assert body["error"]["code"] == 503
+    assert body["error"]["status"] == "UNAVAILABLE"

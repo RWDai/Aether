@@ -252,6 +252,54 @@ def test_clear_oauth_invalid_response_invalidates_caches(
     assert cache_calls == [("key", "key-1"), ("models", None)]
 
 
+def test_clear_oauth_invalid_response_noops_without_invalid_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache_calls: list[tuple[str, str | None]] = []
+
+    async def _fake_invalidate_key_cache(key_id: str) -> None:
+        cache_calls.append(("key", key_id))
+
+    async def _fake_invalidate_models_cache() -> None:
+        cache_calls.append(("models", None))
+
+    fake_provider_cache_module = types.ModuleType("src.services.cache.provider_cache")
+
+    class _FakeProviderCacheService:
+        @staticmethod
+        async def invalidate_provider_api_key_cache(key_id: str) -> None:
+            await _fake_invalidate_key_cache(key_id)
+
+    setattr(fake_provider_cache_module, "ProviderCacheService", _FakeProviderCacheService)
+    monkeypatch.setitem(
+        sys.modules, "src.services.cache.provider_cache", fake_provider_cache_module
+    )
+
+    fake_models_service_module = types.ModuleType("src.services.cache.model_list_cache")
+    setattr(
+        fake_models_service_module, "invalidate_models_list_cache", _fake_invalidate_models_cache
+    )
+    monkeypatch.setitem(
+        sys.modules, "src.services.cache.model_list_cache", fake_models_service_module
+    )
+
+    key = SimpleNamespace(
+        oauth_invalid_at=None,
+        oauth_invalid_reason=None,
+        is_active=False,
+    )
+    db = _FakeClearOAuthDB(key=key)
+
+    result = command_module.clear_oauth_invalid_response(cast(Any, db), key_id="key-1")
+
+    assert result["message"] == "该 Key 当前无失效标记，无需清除"
+    assert key.oauth_invalid_at is None
+    assert key.oauth_invalid_reason is None
+    assert key.is_active is False
+    assert db.commit_count == 0
+    assert cache_calls == []
+
+
 @pytest.mark.asyncio
 async def test_run_delete_key_side_effects_skip_disassociate(
     monkeypatch: pytest.MonkeyPatch,

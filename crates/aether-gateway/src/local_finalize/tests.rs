@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use base64::Engine as _;
 use serde_json::json;
 
 use super::{
@@ -27,6 +28,93 @@ fn test_decision() -> GatewayControlDecision {
         auth_endpoint_signature: Some("openai:compact".to_string()),
         executor_candidate: true,
         auth_context: None,
+        admin_principal: None,
+        local_auth_rejection: None,
+    }
+}
+
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc = 0xffff_ffffu32;
+    for &byte in data {
+        crc ^= byte as u32;
+        for _ in 0..8 {
+            let mask = if crc & 1 == 1 { 0xedb8_8320 } else { 0 };
+            crc = (crc >> 1) ^ mask;
+        }
+    }
+    !crc
+}
+
+fn encode_string_header(name: &str, value: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.push(name.len() as u8);
+    out.extend_from_slice(name.as_bytes());
+    out.push(7);
+    out.extend_from_slice(&(value.len() as u16).to_be_bytes());
+    out.extend_from_slice(value.as_bytes());
+    out
+}
+
+fn encode_frame(headers: Vec<u8>, payload: Vec<u8>) -> Vec<u8> {
+    let total_len = 12 + headers.len() + payload.len() + 4;
+    let header_len = headers.len();
+    let mut out = Vec::with_capacity(total_len);
+    out.extend_from_slice(&(total_len as u32).to_be_bytes());
+    out.extend_from_slice(&(header_len as u32).to_be_bytes());
+    let prelude_crc = crc32(&out[..8]);
+    out.extend_from_slice(&prelude_crc.to_be_bytes());
+    out.extend_from_slice(&headers);
+    out.extend_from_slice(&payload);
+    let message_crc = crc32(&out);
+    out.extend_from_slice(&message_crc.to_be_bytes());
+    out
+}
+
+fn encode_kiro_event_frame(event_type: &str, payload: serde_json::Value) -> Vec<u8> {
+    let mut headers = encode_string_header(":message-type", "event");
+    headers.extend_from_slice(&encode_string_header(":event-type", event_type));
+    let payload = serde_json::to_vec(&payload).expect("payload should encode");
+    encode_frame(headers, payload)
+}
+
+fn encode_kiro_exception_frame(exception_type: &str) -> Vec<u8> {
+    let mut headers = encode_string_header(":message-type", "exception");
+    headers.extend_from_slice(&encode_string_header(":exception-type", exception_type));
+    encode_frame(headers, Vec::new())
+}
+
+fn encode_kiro_error_frame(error_code: &str) -> Vec<u8> {
+    let mut headers = encode_string_header(":message-type", "error");
+    headers.extend_from_slice(&encode_string_header(":error-code", error_code));
+    encode_frame(headers, Vec::new())
+}
+
+fn build_kiro_claude_cli_sync_finalize_payload(body_bytes: Vec<u8>) -> GatewaySyncReportRequest {
+    GatewaySyncReportRequest {
+        trace_id: "trace-kiro-cli-sync-local-finalize-123".to_string(),
+        report_kind: "claude_cli_sync_finalize".to_string(),
+        report_context: Some(json!({
+            "client_api_format": "claude:cli",
+            "provider_api_format": "claude:cli",
+            "model": "claude-sonnet-4",
+            "mapped_model": "claude-sonnet-4-upstream",
+            "needs_conversion": false,
+            "has_envelope": true,
+            "envelope_name": "kiro:generateAssistantResponse",
+            "original_request_body": {
+                "model": "claude-sonnet-4",
+                "messages": []
+            }
+        })),
+        status_code: 200,
+        headers: BTreeMap::from([(
+            "content-type".to_string(),
+            "application/vnd.amazon.eventstream".to_string(),
+        )]),
+        body_json: None,
+        client_body_json: None,
+        body_base64: Some(base64::engine::general_purpose::STANDARD.encode(body_bytes)),
+        telemetry: None,
     }
 }
 
@@ -748,4 +836,277 @@ fn local_finalize_handles_openai_compact_cross_format_function_call_response() {
     let client_body = report.client_body_json.expect("client body should exist");
     assert_eq!(client_body["object"], "response");
     assert_eq!(client_body["output"][1]["type"], "function_call");
+}
+
+#[test]
+fn local_finalize_handles_openai_cli_openai_family_sync_response_even_when_conversion_flagged() {
+    let payload = GatewaySyncReportRequest {
+        trace_id: "trace-openai-cli-family-conversion-123".to_string(),
+        report_kind: "openai_cli_sync_finalize".to_string(),
+        report_context: Some(json!({
+            "client_api_format": "openai:cli",
+            "provider_api_format": "openai:compact",
+            "model": "gpt-5",
+            "needs_conversion": true,
+            "has_envelope": false,
+        })),
+        status_code: 200,
+        headers: BTreeMap::from([("content-type".to_string(), "application/json".to_string())]),
+        body_json: Some(json!({
+            "id": "resp_cli_family_123",
+            "object": "response",
+            "status": "completed",
+            "model": "gpt-5",
+            "output": [{
+                "type": "message",
+                "id": "resp_cli_family_123_msg",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{
+                    "type": "output_text",
+                    "text": "Hello OpenAI family",
+                    "annotations": []
+                }]
+            }],
+            "usage": {
+                "input_tokens": 3,
+                "output_tokens": 5,
+                "total_tokens": 8
+            }
+        })),
+        client_body_json: None,
+        body_base64: None,
+        telemetry: None,
+    };
+
+    let outcome = maybe_build_local_core_sync_finalize_response(
+        "trace-openai-cli-family-conversion-123",
+        &test_decision(),
+        &payload,
+    )
+    .expect("local finalize should succeed")
+    .expect("local finalize should match");
+
+    assert_eq!(outcome.response.status(), 200);
+    let report = outcome
+        .background_report
+        .expect("same-family finalize should downgrade to success report");
+    assert_eq!(report.report_kind, "openai_cli_sync_success");
+    assert_eq!(
+        report.body_json.expect("provider body should exist")["id"],
+        "resp_cli_family_123"
+    );
+}
+
+#[test]
+fn local_finalize_handles_openai_chat_cross_format_sync_response_from_claude() {
+    let payload = GatewaySyncReportRequest {
+        trace_id: "trace-openai-chat-xfmt-claude-sync-123".to_string(),
+        report_kind: "openai_chat_sync_finalize".to_string(),
+        report_context: Some(json!({
+            "client_api_format": "openai:chat",
+            "provider_api_format": "claude:chat",
+            "model": "gpt-5",
+            "mapped_model": "claude-sonnet-4",
+            "needs_conversion": true,
+            "has_envelope": false,
+        })),
+        status_code: 200,
+        headers: BTreeMap::from([("content-type".to_string(), "application/json".to_string())]),
+        body_json: Some(json!({
+            "id": "msg_claude_direct_123",
+            "type": "message",
+            "model": "claude-sonnet-4",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Hello Claude"}],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 2,
+                "output_tokens": 3
+            }
+        })),
+        client_body_json: None,
+        body_base64: None,
+        telemetry: None,
+    };
+
+    let outcome = maybe_build_local_core_sync_finalize_response(
+        "trace-openai-chat-xfmt-claude-sync-123",
+        &test_decision(),
+        &payload,
+    )
+    .expect("local finalize should succeed")
+    .expect("local finalize should match");
+
+    let report = outcome
+        .background_report
+        .expect("cross-format finalize should downgrade to success report");
+    assert_eq!(report.report_kind, "openai_chat_sync_success");
+    assert_eq!(
+        report.body_json.expect("provider body should exist")["id"],
+        "msg_claude_direct_123"
+    );
+    let client_body = report.client_body_json.expect("client body should exist");
+    assert_eq!(client_body["object"], "chat.completion");
+    assert_eq!(
+        client_body["choices"][0]["message"]["content"],
+        "Hello Claude"
+    );
+}
+
+#[test]
+fn local_finalize_handles_openai_chat_cross_format_sync_response_from_gemini() {
+    let payload = GatewaySyncReportRequest {
+        trace_id: "trace-openai-chat-xfmt-gemini-sync-123".to_string(),
+        report_kind: "openai_chat_sync_finalize".to_string(),
+        report_context: Some(json!({
+            "client_api_format": "openai:chat",
+            "provider_api_format": "gemini:chat",
+            "model": "gpt-5",
+            "mapped_model": "gemini-2.5-pro",
+            "needs_conversion": true,
+            "has_envelope": false,
+        })),
+        status_code: 200,
+        headers: BTreeMap::from([("content-type".to_string(), "application/json".to_string())]),
+        body_json: Some(json!({
+            "responseId": "resp_gemini_direct_123",
+            "candidates": [{
+                "content": {
+                    "parts": [{"text": "Hello Gemini"}],
+                    "role": "model"
+                },
+                "finishReason": "STOP",
+                "index": 0
+            }],
+            "modelVersion": "gemini-2.5-pro-upstream",
+            "usageMetadata": {
+                "promptTokenCount": 1,
+                "candidatesTokenCount": 2,
+                "totalTokenCount": 3
+            }
+        })),
+        client_body_json: None,
+        body_base64: None,
+        telemetry: None,
+    };
+
+    let outcome = maybe_build_local_core_sync_finalize_response(
+        "trace-openai-chat-xfmt-gemini-sync-123",
+        &test_decision(),
+        &payload,
+    )
+    .expect("local finalize should succeed")
+    .expect("local finalize should match");
+
+    let report = outcome
+        .background_report
+        .expect("cross-format finalize should downgrade to success report");
+    assert_eq!(report.report_kind, "openai_chat_sync_success");
+    assert_eq!(
+        report.body_json.expect("provider body should exist")["responseId"],
+        "resp_gemini_direct_123"
+    );
+    let client_body = report.client_body_json.expect("client body should exist");
+    assert_eq!(client_body["object"], "chat.completion");
+    assert_eq!(
+        client_body["choices"][0]["message"]["content"],
+        "Hello Gemini"
+    );
+    assert_eq!(client_body["usage"]["completion_tokens"], 2);
+    assert_eq!(client_body["usage"]["total_tokens"], 3);
+}
+
+#[test]
+fn local_finalize_handles_kiro_claude_cli_stream_tool_use_response() {
+    let payload = build_kiro_claude_cli_sync_finalize_payload(
+        [
+            encode_kiro_event_frame("assistantResponseEvent", json!({"content": "Need a tool."})),
+            encode_kiro_event_frame(
+                "toolUseEvent",
+                json!({
+                    "name": "get_weather",
+                    "toolUseId": "tool_123",
+                    "input": {"city": "SF"},
+                    "stop": true
+                }),
+            ),
+        ]
+        .concat(),
+    );
+
+    let outcome = maybe_build_local_core_sync_finalize_response(
+        "trace-kiro-cli-tool-123",
+        &test_decision(),
+        &payload,
+    )
+    .expect("local finalize should succeed")
+    .expect("local finalize should match");
+
+    let report = outcome
+        .background_report
+        .expect("same-format finalize should downgrade to success report");
+    assert_eq!(report.report_kind, "claude_cli_sync_success");
+    let body = report.body_json.expect("provider body should exist");
+    assert_eq!(body["content"][0]["text"], "Need a tool.");
+    assert_eq!(body["content"][1]["type"], "tool_use");
+    assert_eq!(body["content"][1]["id"], "tool_123");
+    assert_eq!(body["content"][1]["name"], "get_weather");
+    assert_eq!(body["content"][1]["input"]["city"], "SF");
+    assert_eq!(body["stop_reason"], "tool_use");
+}
+
+#[test]
+fn local_finalize_handles_kiro_claude_cli_stream_content_length_exceeded_response() {
+    let payload = build_kiro_claude_cli_sync_finalize_payload(
+        [
+            encode_kiro_event_frame(
+                "assistantResponseEvent",
+                json!({"content": "Hello from Kiro"}),
+            ),
+            encode_kiro_exception_frame("ContentLengthExceededException"),
+        ]
+        .concat(),
+    );
+
+    let outcome = maybe_build_local_core_sync_finalize_response(
+        "trace-kiro-cli-max-tokens-123",
+        &test_decision(),
+        &payload,
+    )
+    .expect("local finalize should succeed")
+    .expect("local finalize should match");
+
+    let report = outcome
+        .background_report
+        .expect("same-format finalize should downgrade to success report");
+    let body = report.body_json.expect("provider body should exist");
+    assert_eq!(body["content"][0]["text"], "Hello from Kiro");
+    assert_eq!(body["stop_reason"], "max_tokens");
+}
+
+#[test]
+fn local_finalize_rejects_kiro_claude_cli_stream_upstream_error_frame() {
+    let payload = build_kiro_claude_cli_sync_finalize_payload(
+        [
+            encode_kiro_event_frame(
+                "assistantResponseEvent",
+                json!({"content": "Partial output"}),
+            ),
+            encode_kiro_error_frame("ThrottlingException"),
+        ]
+        .concat(),
+    );
+
+    let outcome = maybe_build_local_core_sync_finalize_response(
+        "trace-kiro-cli-error-123",
+        &test_decision(),
+        &payload,
+    )
+    .expect("local finalize should not error");
+
+    assert!(
+        outcome.is_none(),
+        "embedded stream errors should fall back to Python finalize instead of being reported as success"
+    );
 }

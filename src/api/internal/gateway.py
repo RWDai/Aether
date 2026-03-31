@@ -19,7 +19,7 @@ from src.core.crypto import crypto_service
 from src.core.http_compression import normalize_content_encoding
 from src.core.logger import logger
 from src.database import create_session, get_db
-from src.models.database import ApiKey, RequestCandidate, User
+from src.models.database import ApiKey, RequestCandidate, User, VideoTask
 from src.services.auth.service import AuthService
 from src.utils.async_utils import safe_create_task
 
@@ -155,6 +155,10 @@ from .gateway_reporting import (
     _schedule_gateway_sync_telemetry,
 )
 from .gateway_shared import (
+    LEGACY_CHAT_CLI_INTERNAL_GATEWAY_HEADER,
+    _allows_legacy_chat_cli_internal_route,
+    _allows_legacy_chat_cli_report_route,
+    _build_retired_internal_gateway_response,
     _build_gateway_forward_request,
     _build_gateway_request_context,
     _build_proxy_public_fallback_response,
@@ -169,6 +173,7 @@ from .gateway_shared import (
     _is_gemini_files_route,
     _is_stream_request_payload,
     _is_video_route,
+    _request_allows_legacy_chat_cli_internal_gateway,
     _load_gateway_auth_models,
     _serialize_gateway_sync_proxy,
     _serialize_gateway_sync_timeouts,
@@ -437,6 +442,39 @@ def _coerce_gateway_video_local_timestamp(value: Any) -> datetime | None:
         return None
 
 
+def _resolve_gateway_video_response_time_ms(payload: GatewaySyncReportRequest) -> int:
+    telemetry = payload.telemetry if isinstance(payload.telemetry, dict) else {}
+    raw_elapsed_ms = telemetry.get("elapsed_ms")
+    try:
+        return max(int(raw_elapsed_ms or 0), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _gateway_report_context_uses_rust_video_task_owner(context: dict[str, Any]) -> bool:
+    return bool(context.get("rust_video_task_persisted"))
+
+
+def _find_gateway_existing_video_task(
+    *,
+    db: Session,
+    request_id: str | None = None,
+    local_task_id: str | None = None,
+    local_short_id: str | None = None,
+) -> VideoTask | None:
+    if local_task_id:
+        task = db.query(VideoTask).filter(VideoTask.id == local_task_id).first()
+        if task is not None:
+            return task
+    if local_short_id:
+        task = db.query(VideoTask).filter(VideoTask.short_id == local_short_id).first()
+        if task is not None:
+            return task
+    if request_id:
+        return db.query(VideoTask).filter(VideoTask.request_id == request_id).first()
+    return None
+
+
 async def _finalize_gateway_openai_video_create_sync(
     payload: GatewaySyncReportRequest,
     *,
@@ -469,7 +507,10 @@ async def _finalize_gateway_openai_video_create_sync(
     request_id = str(context.get("request_id") or payload.trace_id or uuid.uuid4().hex[:8]).strip()
     local_task_id = str(context.get("local_task_id") or "").strip()
     local_created_at = _coerce_gateway_video_local_timestamp(context.get("local_created_at"))
-    if not all([user_id, api_key_id, provider_id, endpoint_id, key_id]):
+    rust_owned_task = _gateway_report_context_uses_rust_video_task_owner(context)
+    if not all([user_id, api_key_id]) or (
+        not rust_owned_task and not all([provider_id, endpoint_id, key_id])
+    ):
         raise HTTPException(status_code=400, detail="Missing gateway video finalize context")
 
     external_task_id = str(payload.body_json.get("id") or "").strip()
@@ -478,10 +519,7 @@ async def _finalize_gateway_openai_video_create_sync(
 
     user = db.query(User).filter(User.id == user_id).first()
     api_key = db.query(ApiKey).filter(ApiKey.id == api_key_id).first()
-    provider = db.query(Provider).filter(Provider.id == provider_id).first()
-    endpoint = db.query(ProviderEndpoint).filter(ProviderEndpoint.id == endpoint_id).first()
-    key = db.query(ProviderAPIKey).filter(ProviderAPIKey.id == key_id).first()
-    if not user or not api_key or not provider or not endpoint or not key:
+    if not user or not api_key:
         raise HTTPException(status_code=400, detail="Invalid gateway video finalize context")
 
     handler = OpenAIVideoHandler(
@@ -498,6 +536,68 @@ async def _finalize_gateway_openai_video_create_sync(
 
     original_request_body = dict(context.get("original_request_body") or {})
     original_headers = dict(context.get("original_headers") or {})
+    response_time_ms = _resolve_gateway_video_response_time_ms(payload)
+
+    if rust_owned_task:
+        task = _find_gateway_existing_video_task(
+            db=db,
+            request_id=request_id,
+            local_task_id=local_task_id or None,
+        )
+        if task is not None:
+            logger.info(
+                "gateway reusing rust-owned openai video task: request_id={}, task_id={}",
+                request_id,
+                task.id,
+            )
+            response_body = handler._normalizer.video_task_from_internal(handler._task_to_internal(task))
+            if background_tasks is not None:
+                background_tasks.add_task(
+                    _run_gateway_video_finalize_submitted_background,
+                    db=db,
+                    request_id=request_id,
+                    provider_name=str(context.get("provider_name") or "openai"),
+                    provider_id=provider_id or None,
+                    provider_endpoint_id=endpoint_id or None,
+                    provider_api_key_id=key_id or None,
+                    response_time_ms=response_time_ms,
+                    status_code=payload.status_code,
+                    endpoint_api_format=str(context.get("provider_api_format") or handler.FORMAT_ID)
+                    or None,
+                    provider_request_headers=dict(context.get("provider_request_headers") or {}),
+                    response_headers=dict(payload.headers or {}),
+                    response_body=response_body,
+                )
+            else:
+                await _run_gateway_video_finalize_submitted_background(
+                    db=db,
+                    request_id=request_id,
+                    provider_name=str(context.get("provider_name") or "openai"),
+                    provider_id=provider_id or None,
+                    provider_endpoint_id=endpoint_id or None,
+                    provider_api_key_id=key_id or None,
+                    response_time_ms=response_time_ms,
+                    status_code=payload.status_code,
+                    endpoint_api_format=str(context.get("provider_api_format") or handler.FORMAT_ID)
+                    or None,
+                    provider_request_headers=dict(context.get("provider_request_headers") or {}),
+                    response_headers=dict(payload.headers or {}),
+                    response_body=response_body,
+                )
+            return JSONResponse(response_body)
+
+        logger.warning(
+            "gateway rust-owned openai video task missing, falling back to legacy create: request_id={}, local_task_id={}",
+            request_id,
+            local_task_id,
+        )
+
+    provider = db.query(Provider).filter(Provider.id == provider_id).first()
+    endpoint = db.query(ProviderEndpoint).filter(ProviderEndpoint.id == endpoint_id).first()
+    key = db.query(ProviderAPIKey).filter(ProviderAPIKey.id == key_id).first()
+    if not provider or not endpoint or not key:
+        raise HTTPException(status_code=400, detail="Invalid gateway video finalize context")
+
     internal_request = handler._normalizer.video_request_to_internal(original_request_body)
     candidate = ProviderCandidate(provider=provider, endpoint=endpoint, key=key)
 
@@ -539,15 +639,7 @@ async def _finalize_gateway_openai_video_create_sync(
             request_body=original_request_body,
         )
 
-        response_body = handler._normalizer.video_task_from_internal(
-            handler._task_to_internal(task)
-        )
-        telemetry = payload.telemetry if isinstance(payload.telemetry, dict) else {}
-        raw_elapsed_ms = telemetry.get("elapsed_ms")
-        try:
-            response_time_ms = max(int(raw_elapsed_ms or 0), 0)
-        except (TypeError, ValueError):
-            response_time_ms = 0
+        response_body = handler._normalizer.video_task_from_internal(handler._task_to_internal(task))
 
         db.commit()
     except IntegrityError as exc:
@@ -645,6 +737,27 @@ async def _finalize_gateway_openai_video_remix_sync(
         ),
         start_time=time.time(),
     )
+
+    if _gateway_report_context_uses_rust_video_task_owner(context):
+        task = _find_gateway_existing_video_task(
+            db=db,
+            request_id=request_id,
+            local_task_id=local_task_id or None,
+        )
+        if task is not None:
+            logger.info(
+                "gateway reusing rust-owned openai remix task: request_id={}, task_id={}",
+                request_id,
+                task.id,
+            )
+            response_body = handler._normalizer.video_task_from_internal(handler._task_to_internal(task))
+            return JSONResponse(response_body)
+
+        logger.warning(
+            "gateway rust-owned openai remix task missing, falling back to legacy create: request_id={}, local_task_id={}",
+            request_id,
+            local_task_id,
+        )
 
     original_task = handler._get_task(task_id)
     if original_task.status != VideoStatus.COMPLETED.value:
@@ -755,7 +868,10 @@ async def _finalize_gateway_gemini_video_create_sync(
     model = str(context.get("model") or "").strip()
     local_short_id = str(context.get("local_short_id") or "").strip()
     local_created_at = _coerce_gateway_video_local_timestamp(context.get("local_created_at"))
-    if not all([user_id, api_key_id, provider_id, endpoint_id, key_id, model]):
+    rust_owned_task = _gateway_report_context_uses_rust_video_task_owner(context)
+    if not all([user_id, api_key_id, model]) or (
+        not rust_owned_task and not all([provider_id, endpoint_id, key_id])
+    ):
         raise HTTPException(status_code=400, detail="Missing gateway video finalize context")
 
     operation_name = str(payload.body_json.get("name") or payload.body_json.get("id") or "").strip()
@@ -767,10 +883,7 @@ async def _finalize_gateway_gemini_video_create_sync(
 
     user = db.query(User).filter(User.id == user_id).first()
     api_key = db.query(ApiKey).filter(ApiKey.id == api_key_id).first()
-    provider = db.query(Provider).filter(Provider.id == provider_id).first()
-    endpoint = db.query(ProviderEndpoint).filter(ProviderEndpoint.id == endpoint_id).first()
-    key = db.query(ProviderAPIKey).filter(ProviderAPIKey.id == key_id).first()
-    if not user or not api_key or not provider or not endpoint or not key:
+    if not user or not api_key:
         raise HTTPException(status_code=400, detail="Invalid gateway video finalize context")
 
     handler = GeminiVeoHandler(
@@ -787,6 +900,68 @@ async def _finalize_gateway_gemini_video_create_sync(
 
     original_request_body = dict(context.get("original_request_body") or {})
     original_headers = dict(context.get("original_headers") or {})
+    response_time_ms = _resolve_gateway_video_response_time_ms(payload)
+
+    if rust_owned_task:
+        task = _find_gateway_existing_video_task(
+            db=db,
+            request_id=request_id,
+            local_short_id=local_short_id or None,
+        )
+        if task is not None:
+            logger.info(
+                "gateway reusing rust-owned gemini video task: request_id={}, short_id={}",
+                request_id,
+                task.short_id,
+            )
+            response_body = handler._normalizer.video_task_from_internal(handler._task_to_internal(task))
+            if background_tasks is not None:
+                background_tasks.add_task(
+                    _run_gateway_video_finalize_submitted_background,
+                    db=db,
+                    request_id=request_id,
+                    provider_name=str(context.get("provider_name") or "gemini"),
+                    provider_id=provider_id or None,
+                    provider_endpoint_id=endpoint_id or None,
+                    provider_api_key_id=key_id or None,
+                    response_time_ms=response_time_ms,
+                    status_code=payload.status_code,
+                    endpoint_api_format=str(context.get("provider_api_format") or handler.FORMAT_ID)
+                    or None,
+                    provider_request_headers=dict(context.get("provider_request_headers") or {}),
+                    response_headers=dict(payload.headers or {}),
+                    response_body=response_body,
+                )
+            else:
+                await _run_gateway_video_finalize_submitted_background(
+                    db=db,
+                    request_id=request_id,
+                    provider_name=str(context.get("provider_name") or "gemini"),
+                    provider_id=provider_id or None,
+                    provider_endpoint_id=endpoint_id or None,
+                    provider_api_key_id=key_id or None,
+                    response_time_ms=response_time_ms,
+                    status_code=payload.status_code,
+                    endpoint_api_format=str(context.get("provider_api_format") or handler.FORMAT_ID)
+                    or None,
+                    provider_request_headers=dict(context.get("provider_request_headers") or {}),
+                    response_headers=dict(payload.headers or {}),
+                    response_body=response_body,
+                )
+            return JSONResponse(response_body)
+
+        logger.warning(
+            "gateway rust-owned gemini video task missing, falling back to legacy create: request_id={}, local_short_id={}",
+            request_id,
+            local_short_id,
+        )
+
+    provider = db.query(Provider).filter(Provider.id == provider_id).first()
+    endpoint = db.query(ProviderEndpoint).filter(ProviderEndpoint.id == endpoint_id).first()
+    key = db.query(ProviderAPIKey).filter(ProviderAPIKey.id == key_id).first()
+    if not provider or not endpoint or not key:
+        raise HTTPException(status_code=400, detail="Invalid gateway video finalize context")
+
     request_with_model = {**original_request_body, "model": model}
     try:
         internal_request = handler._normalizer.video_request_to_internal(request_with_model)
@@ -851,13 +1026,6 @@ async def _finalize_gateway_gemini_video_create_sync(
         original_request=internal_request,
     )
     response_body = handler._normalizer.video_task_from_internal(internal_task)
-
-    telemetry = payload.telemetry if isinstance(payload.telemetry, dict) else {}
-    raw_elapsed_ms = telemetry.get("elapsed_ms")
-    try:
-        response_time_ms = max(int(raw_elapsed_ms or 0), 0)
-    except (TypeError, ValueError):
-        response_time_ms = 0
 
     if background_tasks is not None:
         background_tasks.add_task(

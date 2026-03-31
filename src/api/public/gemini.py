@@ -10,11 +10,14 @@ Gemini API 专属端点
 - /v1beta/models (列表) 和 /v1beta/models/{model} (详情) 由 models.py 统一处理
 """
 
+from dataclasses import dataclass
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
+from src.api.base.adapter import ApiAdapter, ApiMode
+from src.api.base.context import ApiRequestContext
 from src.api.base.pipeline import get_pipeline
 from src.database import get_db
 
@@ -56,6 +59,74 @@ def _build_adapter_for_request(request: Request) -> Any:
     return build_gemini_adapter()
 
 
+@dataclass
+class PublicGeminiContentAdapter(ApiAdapter):
+    model: str
+    stream: bool
+
+    name = "public.gemini.content"
+    mode = ApiMode.STANDARD
+
+    def _delegate(self, request: Request) -> Any:
+        return _build_adapter_for_request(request)
+
+    def extract_api_key(self, request: Request) -> str | None:
+        return self._delegate(request).extract_api_key(request)
+
+    def authorize(self, context: ApiRequestContext) -> None:
+        return self._delegate(context.request).authorize(context)
+
+    def detect_capability_requirements(
+        self,
+        headers: dict[str, str],
+        request_body: dict[str, Any] | None = None,
+    ) -> dict[str, bool]:
+        adapter = _build_adapter_for_request(
+            Request(
+                {
+                    "type": "http",
+                    "asgi": {"version": "3.0"},
+                    "http_version": "1.1",
+                    "method": "POST",
+                    "scheme": "http",
+                    "path": "/",
+                    "raw_path": b"/",
+                    "query_string": b"",
+                    "headers": [
+                        (str(key).lower().encode(), str(value).encode()) for key, value in headers.items()
+                    ],
+                    "client": ("127.0.0.1", 0),
+                    "server": ("testserver", 80),
+                }
+            )
+        )
+        return adapter.detect_capability_requirements(headers, request_body)
+
+    def get_audit_metadata(
+        self,
+        context: ApiRequestContext,
+        *,
+        success: bool,
+        status_code: int | None,
+        error: str | None = None,
+    ) -> dict[str, Any]:
+        return self._delegate(context.request).get_audit_metadata(
+            context,
+            success=success,
+            status_code=status_code,
+            error=error,
+        )
+
+    def api_format_hint_for_request(self, request: Request) -> str:
+        return self._delegate(request).allowed_api_formats[0]
+
+    def path_params(self) -> dict[str, Any]:
+        return {"model": self.model, "stream": self.stream}
+
+    async def handle(self, context: ApiRequestContext) -> Any:
+        return await self._delegate(context.request).handle(context)
+
+
 @router.post("/v1beta/models/{model}:generateContent")
 async def generate_content(
     model: str,
@@ -81,17 +152,15 @@ async def generate_content(
     **路径参数**:
     - `model`: 模型名称，如 gemini-2.0-flash
     """
-    # 根据 user-agent 或 x-app header 选择适配器
-    adapter = _build_adapter_for_request(http_request)
+    adapter = PublicGeminiContentAdapter(model=model, stream=False)
 
     return await pipeline.run(
         adapter=adapter,
         http_request=http_request,
         db=db,
         mode=adapter.mode,
-        api_format_hint=adapter.allowed_api_formats[0],
-        # 将 model 注入到请求体中，stream 用于内部判断流式模式
-        path_params={"model": model, "stream": False},
+        api_format_hint=adapter.api_format_hint_for_request(http_request),
+        path_params=adapter.path_params(),
     )
 
 
@@ -115,17 +184,15 @@ async def stream_generate_content(
 
     注意: Gemini API 通过 URL 端点区分流式/非流式，不需要在请求体中添加 stream 字段
     """
-    # 根据 user-agent 或 x-app header 选择适配器
-    adapter = _build_adapter_for_request(http_request)
+    adapter = PublicGeminiContentAdapter(model=model, stream=True)
 
     return await pipeline.run(
         adapter=adapter,
         http_request=http_request,
         db=db,
         mode=adapter.mode,
-        api_format_hint=adapter.allowed_api_formats[0],
-        # model 注入到请求体，stream 用于内部判断流式模式（不发送到 API）
-        path_params={"model": model, "stream": True},
+        api_format_hint=adapter.api_format_hint_for_request(http_request),
+        path_params=adapter.path_params(),
     )
 
 
@@ -141,7 +208,15 @@ async def generate_content_v1(
 
     v1 版本 API 端点，兼容部分使用旧版路径的 SDK。
     """
-    return await generate_content(model, http_request, db)
+    adapter = PublicGeminiContentAdapter(model=model, stream=False)
+    return await pipeline.run(
+        adapter=adapter,
+        http_request=http_request,
+        db=db,
+        mode=adapter.mode,
+        api_format_hint=adapter.api_format_hint_for_request(http_request),
+        path_params=adapter.path_params(),
+    )
 
 
 @router.post("/v1/models/{model}:streamGenerateContent")
@@ -155,4 +230,12 @@ async def stream_generate_content_v1(
 
     v1 版本流式 API 端点，兼容部分使用旧版路径的 SDK。
     """
-    return await stream_generate_content(model, http_request, db)
+    adapter = PublicGeminiContentAdapter(model=model, stream=True)
+    return await pipeline.run(
+        adapter=adapter,
+        http_request=http_request,
+        db=db,
+        mode=adapter.mode,
+        api_format_hint=adapter.api_format_hint_for_request(http_request),
+        path_params=adapter.path_params(),
+    )

@@ -1,6 +1,7 @@
 use super::*;
 
 #[tokio::test]
+#[ignore = "remote decision path removed; local decision coverage lives in sync/cli.rs and sync/gemini/cli.rs"]
 async fn gateway_executes_openai_cli_sync_via_executor_finalize_decision() {
     #[derive(Debug, Clone)]
     struct SeenReportSyncRequest {
@@ -325,6 +326,281 @@ async fn gateway_executes_openai_cli_sync_via_executor_finalize_decision() {
     assert_eq!(seen_executor_request.client_api_format, "openai:cli");
     assert_eq!(seen_executor_request.body, json!({"contents": []}));
 
+    assert_eq!(*report_hits.lock().expect("mutex should lock"), 1);
+    assert_eq!(*execute_hits.lock().expect("mutex should lock"), 0);
+
+    gateway_handle.abort();
+    executor_handle.abort();
+    upstream_handle.abort();
+}
+
+#[tokio::test]
+#[ignore = "remote decision path removed; local decision coverage lives in sync/cli.rs and sync/gemini/cli.rs"]
+async fn gateway_executes_openai_cli_antigravity_sync_via_executor_finalize_decision() {
+    #[derive(Debug, Clone)]
+    struct SeenReportSyncRequest {
+        report_kind: String,
+        status_code: u64,
+        upstream_id: String,
+        client_id: String,
+    }
+
+    let seen_report = Arc::new(Mutex::new(None::<SeenReportSyncRequest>));
+    let seen_report_clone = Arc::clone(&seen_report);
+    let report_hits = Arc::new(Mutex::new(0usize));
+    let report_hits_clone = Arc::clone(&report_hits);
+    let execute_hits = Arc::new(Mutex::new(0usize));
+    let execute_hits_clone = Arc::clone(&execute_hits);
+
+    let upstream = Router::new()
+        .route(
+            "/api/internal/gateway/resolve",
+            any(|_request: Request| async move {
+                Json(json!({
+                    "action": "proxy_public",
+                    "route_class": "ai_public",
+                    "route_family": "openai",
+                    "route_kind": "cli",
+                    "auth_endpoint_signature": "openai:cli",
+                    "executor_candidate": true,
+                    "auth_context": {
+                        "user_id": "user-cli-antigravity-finalize-123",
+                        "api_key_id": "key-cli-antigravity-finalize-123",
+                        "access_allowed": true
+                    },
+                    "public_path": "/v1/responses"
+                }))
+            }),
+        )
+        .route(
+            "/api/internal/gateway/decision-sync",
+            any(|_request: Request| async move {
+                Json(json!({
+                    "action": "executor_sync_decision",
+                    "decision_kind": "openai_cli_sync",
+                    "request_id": "req-openai-cli-antigravity-finalize-123",
+                    "candidate_id": "cand-openai-cli-antigravity-finalize-123",
+                    "provider_name": "antigravity",
+                    "provider_id": "provider-openai-cli-antigravity-finalize-123",
+                    "endpoint_id": "endpoint-openai-cli-antigravity-finalize-123",
+                    "key_id": "key-openai-cli-antigravity-finalize-123",
+                    "upstream_base_url": "https://generativelanguage.googleapis.com",
+                    "upstream_url": "https://generativelanguage.googleapis.com/v1beta/models/claude-sonnet-4-5:generateContent",
+                    "auth_header": "authorization",
+                    "auth_value": "Bearer upstream-key",
+                    "provider_api_format": "gemini:cli",
+                    "client_api_format": "openai:cli",
+                    "model_name": "gpt-5",
+                    "mapped_model": "claude-sonnet-4-5",
+                    "provider_request_headers": {
+                        "authorization": "Bearer upstream-key",
+                        "content-type": "application/json"
+                    },
+                    "provider_request_body": {
+                        "contents": []
+                    },
+                    "content_type": "application/json",
+                    "report_kind": "openai_cli_sync_finalize",
+                    "report_context": {
+                        "user_id": "user-cli-antigravity-finalize-123",
+                        "api_key_id": "key-cli-antigravity-finalize-123",
+                        "provider_id": "provider-openai-cli-antigravity-finalize-123",
+                        "endpoint_id": "endpoint-openai-cli-antigravity-finalize-123",
+                        "key_id": "key-openai-cli-antigravity-finalize-123",
+                        "client_api_format": "openai:cli",
+                        "provider_api_format": "gemini:cli",
+                        "request_id": "req-openai-cli-antigravity-finalize-123",
+                        "model": "gpt-5",
+                        "mapped_model": "claude-sonnet-4-5",
+                        "has_envelope": true,
+                        "envelope_name": "antigravity:v1internal",
+                        "needs_conversion": true
+                    }
+                }))
+            }),
+        )
+        .route(
+            "/api/internal/gateway/finalize-sync",
+            any(|_request: Request| async move {
+                (
+                    StatusCode::IM_A_TEAPOT,
+                    Body::from("finalize-sync-should-not-be-hit"),
+                )
+            }),
+        )
+        .route(
+            "/api/internal/gateway/report-sync",
+            any(move |request: Request| {
+                let seen_report_inner = Arc::clone(&seen_report_clone);
+                let report_hits_inner = Arc::clone(&report_hits_clone);
+                async move {
+                    let (_parts, body) = request.into_parts();
+                    let raw_body = to_bytes(body, usize::MAX).await.expect("body should read");
+                    let payload: serde_json::Value =
+                        serde_json::from_slice(&raw_body).expect("report payload should parse");
+                    *seen_report_inner.lock().expect("mutex should lock") =
+                        Some(SeenReportSyncRequest {
+                            report_kind: payload
+                                .get("report_kind")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or_default()
+                                .to_string(),
+                            status_code: payload
+                                .get("status_code")
+                                .and_then(|value| value.as_u64())
+                                .unwrap_or_default(),
+                            upstream_id: payload
+                                .get("body_json")
+                                .and_then(|value| {
+                                    value
+                                        .get("responseId")
+                                        .or_else(|| value.get("id"))
+                                })
+                                .and_then(|value| value.as_str())
+                                .unwrap_or_default()
+                                .to_string(),
+                            client_id: payload
+                                .get("client_body_json")
+                                .and_then(|value| value.get("id"))
+                                .and_then(|value| value.as_str())
+                                .unwrap_or_default()
+                                .to_string(),
+                        });
+                    *report_hits_inner.lock().expect("mutex should lock") += 1;
+                    Json(json!({"ok": true}))
+                }
+            }),
+        )
+        .route(
+            "/api/internal/gateway/execute-sync",
+            any(move |_request: Request| {
+                let execute_hits_inner = Arc::clone(&execute_hits_clone);
+                async move {
+                    *execute_hits_inner.lock().expect("mutex should lock") += 1;
+                    let mut response = Response::builder()
+                        .status(StatusCode::CREATED)
+                        .body(Body::from("{\"fallback\":true}"))
+                        .expect("response should build");
+                    response.headers_mut().insert(
+                        http::header::CONTENT_TYPE,
+                        HeaderValue::from_static("application/json"),
+                    );
+                    response.headers_mut().insert(
+                        HeaderName::from_static(CONTROL_EXECUTED_HEADER),
+                        HeaderValue::from_static("true"),
+                    );
+                    response
+                }
+            }),
+        );
+
+    let executor = Router::new().route(
+        "/v1/execute/sync",
+        any(|_request: Request| async move {
+            Json(json!({
+                "request_id": "req-openai-cli-antigravity-finalize-123",
+                "status_code": 200,
+                "headers": {
+                    "content-type": "application/json"
+                },
+                "body": {
+                    "json_body": {
+                        "response": {
+                            "candidates": [{
+                                "content": {
+                                    "parts": [{"text": "Hello Antigravity Sync"}],
+                                    "role": "model"
+                                },
+                                "finishReason": "STOP",
+                                "index": 0
+                            }],
+                            "modelVersion": "claude-sonnet-4-5",
+                            "usageMetadata": {
+                                "promptTokenCount": 2,
+                                "candidatesTokenCount": 3,
+                                "totalTokenCount": 5
+                            }
+                        },
+                        "responseId": "resp_antigravity_cli_sync_123"
+                    }
+                },
+                "telemetry": {
+                    "elapsed_ms": 37
+                }
+            }))
+        }),
+    );
+
+    let (upstream_url, upstream_handle) = start_server(upstream).await;
+    let (executor_url, executor_handle) = start_server(executor).await;
+    let gateway = build_router_with_endpoints(
+        upstream_url.clone(),
+        Some(upstream_url.clone()),
+        Some(executor_url.clone()),
+    )
+    .expect("gateway should build");
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+
+    let response = reqwest::Client::new()
+        .post(format!("{gateway_url}/v1/responses"))
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .header(TRACE_ID_HEADER, "trace-openai-cli-antigravity-finalize-123")
+        .body("{\"model\":\"gpt-5\",\"input\":\"hello\"}")
+        .send()
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let response_json: serde_json::Value = response.json().await.expect("body should parse");
+    assert_eq!(
+        response_json,
+        json!({
+            "id": "resp_antigravity_cli_sync_123",
+            "object": "response",
+            "status": "completed",
+            "model": "claude-sonnet-4-5",
+            "output": [{
+                "type": "message",
+                "id": "resp_antigravity_cli_sync_123_msg",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{
+                    "type": "output_text",
+                    "text": "Hello Antigravity Sync",
+                    "annotations": []
+                }]
+            }],
+            "usage": {
+                "input_tokens": 2,
+                "output_tokens": 3,
+                "total_tokens": 5
+            }
+        })
+    );
+
+    wait_until(700, || {
+        seen_report
+            .lock()
+            .expect("mutex should lock")
+            .as_ref()
+            .is_some()
+    })
+    .await;
+    let seen_report_request = seen_report
+        .lock()
+        .expect("mutex should lock")
+        .clone()
+        .expect("report-sync should be captured");
+    assert_eq!(seen_report_request.report_kind, "openai_cli_sync_success");
+    assert_eq!(seen_report_request.status_code, 200);
+    assert_eq!(
+        seen_report_request.upstream_id,
+        "resp_antigravity_cli_sync_123"
+    );
+    assert_eq!(
+        seen_report_request.client_id,
+        "resp_antigravity_cli_sync_123"
+    );
     assert_eq!(*report_hits.lock().expect("mutex should lock"), 1);
     assert_eq!(*execute_hits.lock().expect("mutex should lock"), 0);
 

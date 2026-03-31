@@ -18,7 +18,106 @@ from src.core.http_compression import is_gzip_content_encoding, normalize_conten
 from src.core.logger import logger
 from src.models.database import ApiKey, ManagementToken, User
 from src.utils.perf import PerfRecorder
-from src.utils.request_utils import get_client_ip
+from src.utils.request_utils import (
+    get_request_identity_metadata,
+    update_request_state,
+)
+
+
+def _snapshot_optional_str(value: Any) -> str | None:
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _snapshot_optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        try:
+            return float(raw)
+        except ValueError:
+            return None
+    return None
+
+
+@dataclass(frozen=True)
+class _ContextBuildSnapshot:
+    request_id: str
+    start_time: float
+    request_method: str
+    request_path: str
+    client_ip: str
+    user_agent: str
+    original_headers: dict[str, str]
+    request_content_type: str | None
+    query_params: dict[str, str]
+    path_params: dict[str, Any]
+    prefetched_balance_remaining: float | None
+    gateway_execution_path: str | None
+    rate_limit_scope: str | None
+    tx_committed_by_route: bool
+    client_content_encoding: str | None
+    client_accept_encoding: str | None
+    perf_metrics: dict[str, Any] | None
+
+    @classmethod
+    def from_request(cls, request: Request) -> _ContextBuildSnapshot:
+        request_state = getattr(request, "state", None)
+        original_headers = dict(request.headers)
+        identity = get_request_identity_metadata(request)
+        request_id = identity.request_id or str(uuid.uuid4())[:8]
+        accept_encoding = get_header_value(original_headers, "accept-encoding")
+        if isinstance(accept_encoding, str):
+            accept_encoding = accept_encoding.strip() or None
+        perf_metrics = getattr(request.state, "perf_metrics", None)
+        perf_payload = perf_metrics if isinstance(perf_metrics, dict) and perf_metrics else None
+        return cls(
+            request_id=request_id,
+            start_time=time.time(),
+            request_method=request.method,
+            request_path=request.url.path,
+            client_ip=identity.client_ip,
+            user_agent=identity.user_agent,
+            original_headers=original_headers,
+            request_content_type=get_header_value(original_headers, "content-type"),
+            query_params=dict(request.query_params),
+            path_params=dict(getattr(request, "path_params", {}) or {}),
+            prefetched_balance_remaining=_snapshot_optional_float(
+                getattr(request_state, "prefetched_balance_remaining", None)
+            ),
+            gateway_execution_path=_snapshot_optional_str(
+                getattr(request_state, "gateway_execution_path", None)
+            ),
+            rate_limit_scope=_snapshot_optional_str(
+                getattr(request_state, "rate_limit_scope", None)
+            ),
+            tx_committed_by_route=getattr(request_state, "tx_committed_by_route", False) is True,
+            client_content_encoding=normalize_content_encoding(
+                get_header_value(original_headers, "content-encoding")
+            ),
+            client_accept_encoding=accept_encoding,
+            perf_metrics=perf_payload,
+        )
+
+
+def _apply_context_state_markers(
+    request: Request,
+    *,
+    request_id: str,
+    user: User | None,
+    api_key: ApiKey | None,
+) -> None:
+    update_request_state(request, request_id=request_id)
+    if user:
+        update_request_state(request, user_id=user.id)
+    if api_key:
+        update_request_state(request, api_key_id=api_key.id)
 
 
 @dataclass
@@ -31,13 +130,18 @@ class ApiRequestContext:
     api_key: ApiKey | None
     request_id: str
     start_time: float
+    request_method: str
+    request_path: str
     client_ip: str
     user_agent: str
     original_headers: dict[str, str]
     query_params: dict[str, str]
+    request_content_type: str | None = None
+    perf_metrics: dict[str, Any] | None = None
     raw_body: bytes | None = None
     json_body: dict[str, Any] | None = None
     balance_remaining: float | None = None
+    prefetched_balance_remaining: float | None = None
     mode: str = "standard"  # standard / proxy
     api_format_hint: str | None = None
 
@@ -53,15 +157,42 @@ class ApiRequestContext:
 
     # 高频轮询端点日志抑制标志
     quiet_logging: bool = False
+    gateway_execution_path: str | None = None
+    rate_limit_scope: str | None = None
+    tx_committed_by_route: bool = False
     client_content_encoding: str | None = None
     client_accept_encoding: str | None = None
+
+    def _get_perf_metrics(self) -> dict[str, Any] | None:
+        if isinstance(self.perf_metrics, dict):
+            return self.perf_metrics
+        perf_metrics = getattr(self.request.state, "perf_metrics", None)
+        if isinstance(perf_metrics, dict):
+            self.perf_metrics = perf_metrics
+            return perf_metrics
+        return None
+
+    def sync_runtime_state_from_request(self) -> None:
+        request_state = getattr(self.request, "state", None)
+        self.prefetched_balance_remaining = _snapshot_optional_float(
+            getattr(request_state, "prefetched_balance_remaining", self.prefetched_balance_remaining)
+        )
+        self.gateway_execution_path = _snapshot_optional_str(
+            getattr(request_state, "gateway_execution_path", self.gateway_execution_path)
+        )
+        self.rate_limit_scope = _snapshot_optional_str(
+            getattr(request_state, "rate_limit_scope", self.rate_limit_scope)
+        )
+        self.tx_committed_by_route = (
+            getattr(request_state, "tx_committed_by_route", self.tx_committed_by_route) is True
+        )
 
     async def ensure_raw_body_async(self) -> bytes:
         """按需读取原始请求体，避免所有请求都在 Pipeline 阶段预读。"""
         if self.raw_body is not None:
             return self.raw_body
 
-        perf_metrics = getattr(self.request.state, "perf_metrics", None)
+        perf_metrics = self._get_perf_metrics()
         perf_sampled = isinstance(perf_metrics, dict) and bool(perf_metrics)
         body_start = PerfRecorder.start(force=perf_sampled)
         body_size = 0
@@ -80,8 +211,8 @@ class ApiRequestContext:
         except ClientDisconnect:
             logger.warning(
                 "[Context] 客户端在读取请求体期间断开连接: {} {}",
-                self.request.method,
-                self.request.url.path,
+                self.request_method,
+                self.request_path,
             )
             raise HTTPException(
                 status_code=499,
@@ -114,7 +245,7 @@ class ApiRequestContext:
         if not self.raw_body:
             raise HTTPException(status_code=400, detail="请求体不能为空")
 
-        perf_metrics = getattr(self.request.state, "perf_metrics", None)
+        perf_metrics = self._get_perf_metrics()
         perf_sampled = isinstance(perf_metrics, dict) and bool(perf_metrics)
         parse_start = PerfRecorder.start(force=perf_sampled)
 
@@ -187,47 +318,42 @@ class ApiRequestContext:
         path_params: dict[str, Any] | None = None,
     ) -> ApiRequestContext:
         """创建上下文实例并提前读取必要的元数据。"""
-        request_id = getattr(request.state, "request_id", None) or str(uuid.uuid4())[:8]
-        setattr(request.state, "request_id", request_id)
-
-        start_time = time.time()
-        client_ip = get_client_ip(request)
-        user_agent = request.headers.get("user-agent", "unknown")
-        client_content_encoding = normalize_content_encoding(
-            request.headers.get("content-encoding")
+        snapshot = _ContextBuildSnapshot.from_request(request)
+        _apply_context_state_markers(
+            request,
+            request_id=snapshot.request_id,
+            user=user,
+            api_key=api_key,
         )
-        client_accept_encoding = request.headers.get("accept-encoding")
-        if isinstance(client_accept_encoding, str):
-            client_accept_encoding = client_accept_encoding.strip() or None
 
         context = cls(
             request=request,
             db=db,
             user=user,
             api_key=api_key,
-            request_id=request_id,
-            start_time=start_time,
-            client_ip=client_ip,
-            user_agent=user_agent,
-            original_headers=dict(request.headers),
-            query_params=dict(request.query_params),
+            request_id=snapshot.request_id,
+            start_time=snapshot.start_time,
+            request_method=snapshot.request_method,
+            request_path=snapshot.request_path,
+            client_ip=snapshot.client_ip,
+            user_agent=snapshot.user_agent,
+            original_headers=snapshot.original_headers,
+            request_content_type=snapshot.request_content_type,
+            query_params=snapshot.query_params,
+            perf_metrics=snapshot.perf_metrics,
             raw_body=raw_body,
+            prefetched_balance_remaining=snapshot.prefetched_balance_remaining,
             mode=mode,
             api_format_hint=api_format_hint,
-            path_params=path_params or {},
-            client_content_encoding=client_content_encoding,
-            client_accept_encoding=client_accept_encoding,
+            path_params=dict(path_params or snapshot.path_params),
+            gateway_execution_path=snapshot.gateway_execution_path,
+            rate_limit_scope=snapshot.rate_limit_scope,
+            tx_committed_by_route=snapshot.tx_committed_by_route,
+            client_content_encoding=snapshot.client_content_encoding,
+            client_accept_encoding=snapshot.client_accept_encoding,
         )
 
-        perf_metrics = getattr(request.state, "perf_metrics", None)
-        if isinstance(perf_metrics, dict) and perf_metrics:
-            context.extra["perf"] = perf_metrics
-
-        # 便于插件/日志引用
-        request.state.request_id = request_id
-        if user:
-            request.state.user_id = user.id
-        if api_key:
-            request.state.api_key_id = api_key.id
+        if snapshot.perf_metrics is not None:
+            context.extra["perf"] = snapshot.perf_metrics
 
         return context

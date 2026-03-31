@@ -5,17 +5,21 @@ models.dev 外部模型数据代理
 import json
 from typing import Any
 
-import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
 
+from src.api.base.admin_adapter import AdminApiAdapter
+from src.api.base.context import ApiRequestContext
+from src.api.base.pipeline import get_pipeline
 from src.clients import get_redis_client
 from src.core.logger import logger
+from src.database import get_db
 from src.models.database import User
 from src.utils.auth_utils import require_admin
-from src.utils.ssl_utils import get_ssl_context
 
 router = APIRouter()
+pipeline = get_pipeline()
 
 CACHE_KEY = "aether:external:models_dev"
 CACHE_TTL = 15 * 60  # 15 分钟
@@ -79,8 +83,7 @@ def _mark_official_providers(data: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-@router.get("/external")
-async def get_external_models(_: User = Depends(require_admin)) -> JSONResponse:
+async def _get_external_models_response() -> JSONResponse:
     """
     获取外部模型数据
 
@@ -116,32 +119,10 @@ async def get_external_models(_: User = Depends(require_admin)) -> JSONResponse:
             logger.warning(f"处理 models.dev 缓存数据失败，将直接返回原缓存: {e}")
         return JSONResponse(content=cached)
 
-    # 从 models.dev 获取数据
-    try:
-        async with httpx.AsyncClient(timeout=30.0, verify=get_ssl_context()) as client:
-            response = await client.get("https://models.dev/api.json")
-            response.raise_for_status()
-            data = response.json()
-
-            # 标记官方提供商
-            marked_data = _mark_official_providers(data)
-
-            # 写入缓存
-            await _set_cached_data(marked_data)
-
-            return JSONResponse(content=marked_data)
-    except httpx.TimeoutException:
-        raise HTTPException(status_code=504, detail="请求 models.dev 超时")
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(
-            status_code=502, detail=f"models.dev 返回错误: {e.response.status_code}"
-        )
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"获取外部模型数据失败: {str(e)}")
+    raise HTTPException(status_code=503, detail="External models catalog requires Rust admin backend")
 
 
-@router.delete("/external/cache")
-async def clear_external_models_cache(_: User = Depends(require_admin)) -> dict:
+async def _clear_external_models_cache_response() -> dict[str, Any]:
     """
     清除外部模型数据缓存
 
@@ -160,3 +141,39 @@ async def clear_external_models_cache(_: User = Depends(require_admin)) -> dict:
         return {"cleared": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"清除缓存失败: {str(e)}")
+
+
+class ExternalModelsAdminAdapter(AdminApiAdapter):
+    """models.dev 外部模型管理基类。"""
+
+
+class AdminGetExternalModelsAdapter(ExternalModelsAdminAdapter):
+    async def handle(self, context: ApiRequestContext) -> JSONResponse:  # type: ignore[override]
+        del context
+        return await _get_external_models_response()
+
+
+class AdminClearExternalModelsCacheAdapter(ExternalModelsAdminAdapter):
+    async def handle(self, context: ApiRequestContext) -> dict[str, Any]:  # type: ignore[override]
+        del context
+        return await _clear_external_models_cache_response()
+
+
+@router.get("/external")
+async def get_external_models(
+    request: Request,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> JSONResponse:
+    adapter = AdminGetExternalModelsAdapter()
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+
+
+@router.delete("/external/cache")
+async def clear_external_models_cache(
+    request: Request,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> dict[str, Any]:
+    adapter = AdminClearExternalModelsCacheAdapter()
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)

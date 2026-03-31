@@ -1,8 +1,9 @@
-use super::shared::{
-    augment_sync_report_context, build_openai_chat_url, build_openai_cli_url,
-    build_openai_passthrough_headers,
-};
+use super::shared::augment_sync_report_context;
 use super::*;
+use crate::gateway::provider_transport::{
+    build_openai_chat_url, build_openai_cli_url, build_openai_passthrough_headers,
+    ensure_upstream_auth_header, KIRO_ENVELOPE_NAME,
+};
 
 pub(crate) fn build_openai_chat_stream_plan_from_decision(
     parts: &http::request::Parts,
@@ -135,6 +136,7 @@ pub(crate) fn build_openai_chat_stream_plan_from_decision(
     } else {
         payload.provider_request_headers.clone()
     };
+    ensure_upstream_auth_header(&mut provider_request_headers, &auth_header, &auth_value);
     provider_request_headers.insert("accept".to_string(), "text/event-stream".to_string());
     let plan = ExecutionPlan {
         request_id,
@@ -302,20 +304,17 @@ pub(crate) fn build_openai_cli_stream_plan_from_decision(
     else {
         return Ok(None);
     };
-    let Some(_auth_header) = payload
+    let auth_header = payload
         .auth_header
         .clone()
-        .filter(|value| !value.trim().is_empty())
-    else {
-        return Ok(None);
-    };
-    let Some(_auth_value) = payload
+        .filter(|value| !value.trim().is_empty());
+    let auth_value = payload
         .auth_value
         .clone()
-        .filter(|value| !value.trim().is_empty())
-    else {
+        .filter(|value| !value.trim().is_empty());
+    if auth_header.is_some() != auth_value.is_some() {
         return Ok(None);
-    };
+    }
     let Some(provider_api_format) = payload
         .provider_api_format
         .clone()
@@ -350,8 +349,23 @@ pub(crate) fn build_openai_cli_stream_plan_from_decision(
         return Ok(None);
     };
 
+    let is_kiro_envelope = payload
+        .report_context
+        .as_ref()
+        .and_then(|context| context.get("envelope_name"))
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|value| value.eq_ignore_ascii_case(KIRO_ENVELOPE_NAME));
     let mut provider_request_headers = payload.provider_request_headers.clone();
-    provider_request_headers.insert("accept".to_string(), "text/event-stream".to_string());
+    if let (Some(auth_header), Some(auth_value)) = (auth_header.as_deref(), auth_value.as_deref()) {
+        ensure_upstream_auth_header(&mut provider_request_headers, auth_header, auth_value);
+    }
+    if is_kiro_envelope {
+        provider_request_headers
+            .entry("accept".to_string())
+            .or_insert_with(|| "application/vnd.amazon.eventstream".to_string());
+    } else {
+        provider_request_headers.insert("accept".to_string(), "text/event-stream".to_string());
+    }
     let plan = ExecutionPlan {
         request_id,
         candidate_id: payload.candidate_id.clone(),
@@ -434,20 +448,17 @@ pub(crate) fn build_standard_stream_plan_from_decision(
     else {
         return Ok(None);
     };
-    let Some(_auth_header) = payload
+    let auth_header = payload
         .auth_header
         .clone()
-        .filter(|value| !value.trim().is_empty())
-    else {
-        return Ok(None);
-    };
-    let Some(_auth_value) = payload
+        .filter(|value| !value.trim().is_empty());
+    let auth_value = payload
         .auth_value
         .clone()
-        .filter(|value| !value.trim().is_empty())
-    else {
+        .filter(|value| !value.trim().is_empty());
+    if auth_header.is_some() != auth_value.is_some() {
         return Ok(None);
-    };
+    }
     let Some(provider_api_format) = payload
         .provider_api_format
         .clone()
@@ -466,8 +477,23 @@ pub(crate) fn build_standard_stream_plan_from_decision(
         return Ok(None);
     };
 
+    let is_kiro_envelope = payload
+        .report_context
+        .as_ref()
+        .and_then(|context| context.get("envelope_name"))
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|value| value.eq_ignore_ascii_case(KIRO_ENVELOPE_NAME));
     let mut provider_request_headers = payload.provider_request_headers.clone();
-    provider_request_headers.insert("accept".to_string(), "text/event-stream".to_string());
+    if let (Some(auth_header), Some(auth_value)) = (auth_header.as_deref(), auth_value.as_deref()) {
+        ensure_upstream_auth_header(&mut provider_request_headers, auth_header, auth_value);
+    }
+    if is_kiro_envelope {
+        provider_request_headers
+            .entry("accept".to_string())
+            .or_insert_with(|| "application/vnd.amazon.eventstream".to_string());
+    } else {
+        provider_request_headers.insert("accept".to_string(), "text/event-stream".to_string());
+    }
     let plan = ExecutionPlan {
         request_id,
         candidate_id: payload.candidate_id.clone(),
@@ -549,20 +575,17 @@ pub(crate) fn build_gemini_stream_plan_from_decision(
     else {
         return Ok(None);
     };
-    let Some(_auth_header) = payload
+    let auth_header = payload
         .auth_header
         .clone()
-        .filter(|value| !value.trim().is_empty())
-    else {
-        return Ok(None);
-    };
-    let Some(_auth_value) = payload
+        .filter(|value| !value.trim().is_empty());
+    let auth_value = payload
         .auth_value
         .clone()
-        .filter(|value| !value.trim().is_empty())
-    else {
+        .filter(|value| !value.trim().is_empty());
+    if auth_header.is_some() != auth_value.is_some() {
         return Ok(None);
-    };
+    }
     let Some(provider_api_format) = payload
         .provider_api_format
         .clone()
@@ -582,6 +605,9 @@ pub(crate) fn build_gemini_stream_plan_from_decision(
     };
 
     let mut provider_request_headers = payload.provider_request_headers.clone();
+    if let (Some(auth_header), Some(auth_value)) = (auth_header.as_deref(), auth_value.as_deref()) {
+        ensure_upstream_auth_header(&mut provider_request_headers, auth_header, auth_value);
+    }
     provider_request_headers.insert("accept".to_string(), "text/event-stream".to_string());
     let plan = ExecutionPlan {
         request_id,

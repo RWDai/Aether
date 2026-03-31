@@ -173,6 +173,49 @@ def test_persist_refreshed_token_preserves_true_account_block(
     assert key.oauth_invalid_reason == "[ACCOUNT_BLOCK] Google requires verification"
 
 
+def test_mark_oauth_token_expired_preserves_existing_account_block() -> None:
+    key = SimpleNamespace(
+        id="key-1",
+        oauth_invalid_at="old-invalid-at",
+        oauth_invalid_reason="[ACCOUNT_BLOCK] Google requires verification",
+    )
+
+    module._mark_oauth_token_expired(key, expires_at=1_900_000_000)
+
+    assert key.oauth_invalid_at == "old-invalid-at"
+    assert key.oauth_invalid_reason == "[ACCOUNT_BLOCK] Google requires verification"
+
+
+def test_mark_oauth_token_expired_marks_detached_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    key = SimpleNamespace(id="key-1", oauth_invalid_at=None, oauth_invalid_reason=None)
+    row = SimpleNamespace(id="key-1", oauth_invalid_at=None, oauth_invalid_reason=None)
+    fake_db = _FakeDB(row)
+
+    monkeypatch.setattr(
+        module, "object_session", lambda _key: (_ for _ in ()).throw(RuntimeError())
+    )
+    _install_module(
+        monkeypatch,
+        "src.database",
+        {"create_session": lambda: _FakeSessionCtx(fake_db)},
+    )
+    _install_module(
+        monkeypatch,
+        "src.models.database",
+        {"ProviderAPIKey": type("ProviderAPIKey", (), {"id": "id"})},
+    )
+
+    module._mark_oauth_token_expired(key, expires_at=1_900_000_000)
+
+    assert fake_db.committed is True
+    assert key.oauth_invalid_at is not None
+    assert row.oauth_invalid_at is not None
+    assert str(key.oauth_invalid_reason).startswith("[OAUTH_EXPIRED] Token 已过期且续期失败")
+    assert "expired_at=1900000000" in str(row.oauth_invalid_reason)
+
+
 @pytest.mark.asyncio
 async def test_refresh_generic_oauth_token_persists_enriched_account_name(
     monkeypatch: pytest.MonkeyPatch,

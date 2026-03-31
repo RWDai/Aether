@@ -82,34 +82,6 @@ async def _process_callback(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/callback/alipay")
-async def handle_alipay_callback(
-    request: Request,
-    payload: PaymentCallbackPayload,
-    db: Session = Depends(get_db),
-) -> dict[str, Any]:
-    return await _process_callback(
-        payment_method="alipay",
-        request=request,
-        payload=payload,
-        db=db,
-    )
-
-
-@router.post("/callback/wechat")
-async def handle_wechat_callback(
-    request: Request,
-    payload: PaymentCallbackPayload,
-    db: Session = Depends(get_db),
-) -> dict[str, Any]:
-    return await _process_callback(
-        payment_method="wechat",
-        request=request,
-        payload=payload,
-        db=db,
-    )
-
-
 @router.post("/callback/{payment_method}")
 async def handle_payment_callback(
     payment_method: str,

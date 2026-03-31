@@ -1,12 +1,10 @@
-use std::collections::hash_map::DefaultHasher;
 use std::collections::BTreeMap;
-use std::hash::{Hash, Hasher};
 use std::io::Error as IoError;
 use std::time::Duration;
 
 use aether_contracts::{
-    ExecutionPlan, ExecutionResult, ExecutionTelemetry, ExecutionTimeouts, ProxySnapshot,
-    RequestBody, StreamFrame, StreamFramePayload,
+    ExecutionPlan, ExecutionResult, ExecutionTimeouts, ProxySnapshot, RequestBody, StreamFrame,
+    StreamFramePayload,
 };
 use async_stream::stream;
 use axum::body::{Body, Bytes};
@@ -19,20 +17,17 @@ use tokio_util::io::StreamReader;
 use tracing::warn;
 
 use crate::gateway::constants::*;
-use crate::gateway::headers::{
-    collect_control_headers, header_equals, header_value_str, is_json_request,
-    should_skip_upstream_passthrough_header,
-};
+use crate::gateway::headers::{collect_control_headers, header_value_str, is_json_request};
 use crate::gateway::{
     attach_control_metadata_headers, build_client_response, build_client_response_from_parts,
-    cache_executor_auth_context, local_finalize::maybe_build_local_core_sync_finalize_response,
-    local_stream::maybe_build_local_stream_rewriter, resolve_executor_auth_context, AppState,
-    GatewayControlAuthContext, GatewayControlDecision, GatewayError,
+    local_finalize::maybe_build_local_core_sync_finalize_response,
+    local_stream::maybe_build_local_stream_rewriter, resolve_executor_auth_context, usage,
+    AppState, GatewayControlAuthContext, GatewayControlDecision, GatewayError,
 };
 
 const GEMINI_FILES_GET_PLAN_KIND: &str = "gemini_files_get";
-const GEMINI_FILES_LIST_PLAN_KIND: &str = "gemini_files_list";
 const GEMINI_FILES_UPLOAD_PLAN_KIND: &str = "gemini_files_upload";
+const GEMINI_FILES_LIST_PLAN_KIND: &str = "gemini_files_list";
 const GEMINI_FILES_DELETE_PLAN_KIND: &str = "gemini_files_delete";
 const GEMINI_FILES_DOWNLOAD_PLAN_KIND: &str = "gemini_files_download";
 const OPENAI_VIDEO_CONTENT_PLAN_KIND: &str = "openai_video_content";
@@ -86,22 +81,22 @@ struct GatewayControlPlanRequest {
     auth_context: Option<GatewayControlAuthContext>,
 }
 
-#[derive(Debug, Deserialize)]
-struct GatewayControlPlanResponse {
-    action: String,
+#[derive(Debug, Deserialize, Serialize)]
+pub(crate) struct GatewayControlPlanResponse {
+    pub(crate) action: String,
     #[serde(default)]
-    plan_kind: Option<String>,
+    pub(crate) plan_kind: Option<String>,
     #[serde(default)]
-    plan: Option<ExecutionPlan>,
+    pub(crate) plan: Option<ExecutionPlan>,
     #[serde(default)]
-    report_kind: Option<String>,
+    pub(crate) report_kind: Option<String>,
     #[serde(default)]
-    report_context: Option<serde_json::Value>,
+    pub(crate) report_context: Option<serde_json::Value>,
     #[serde(default)]
-    auth_context: Option<GatewayControlAuthContext>,
+    pub(crate) auth_context: Option<GatewayControlAuthContext>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct GatewayControlSyncDecisionResponse {
     action: String,
     #[serde(default)]
@@ -145,6 +140,8 @@ pub(crate) struct GatewayControlSyncDecisionResponse {
     #[serde(default)]
     provider_request_body: Option<serde_json::Value>,
     #[serde(default)]
+    provider_request_body_base64: Option<String>,
+    #[serde(default)]
     content_type: Option<String>,
     #[serde(default)]
     proxy: Option<ProxySnapshot>,
@@ -159,43 +156,15 @@ pub(crate) struct GatewayControlSyncDecisionResponse {
     #[serde(default)]
     report_context: Option<serde_json::Value>,
     #[serde(default)]
-    auth_context: Option<GatewayControlAuthContext>,
+    pub(crate) auth_context: Option<GatewayControlAuthContext>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub(crate) struct GatewaySyncReportRequest {
-    pub(crate) trace_id: String,
-    pub(crate) report_kind: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) report_context: Option<serde_json::Value>,
-    pub(crate) status_code: u16,
-    pub(crate) headers: BTreeMap<String, String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) body_json: Option<serde_json::Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) client_body_json: Option<serde_json::Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) body_base64: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) telemetry: Option<ExecutionTelemetry>,
-}
-
-#[derive(Debug, Serialize)]
-struct GatewayStreamReportRequest {
-    trace_id: String,
-    report_kind: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    report_context: Option<serde_json::Value>,
-    status_code: u16,
-    headers: BTreeMap<String, String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    body_base64: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    telemetry: Option<ExecutionTelemetry>,
-}
-
+#[path = "executor/decision/mod.rs"]
+mod decision;
 #[path = "executor/plan_builders.rs"]
 mod plan_builders;
+#[path = "executor/request_candidates.rs"]
+pub(crate) mod request_candidates;
 #[path = "executor/stream.rs"]
 mod stream;
 #[path = "executor/submission.rs"]
@@ -203,11 +172,30 @@ mod submission;
 #[path = "executor/sync.rs"]
 mod sync;
 
+pub(crate) use decision::maybe_build_stream_decision_payload_via_local_path;
+pub(crate) use decision::maybe_build_stream_plan_payload_via_local_path;
+pub(crate) use decision::maybe_build_sync_decision_payload_via_local_path;
+pub(crate) use decision::maybe_build_sync_plan_payload_via_local_path;
+pub(crate) use stream::execute_executor_stream;
 pub(crate) use stream::maybe_execute_via_executor_stream;
+pub(crate) use sync::execute_executor_sync;
 pub(crate) use sync::maybe_execute_via_executor_sync;
+#[allow(unused_imports)]
+pub(crate) use sync::{
+    maybe_build_local_sync_finalize_response, maybe_build_local_video_error_response,
+    maybe_build_local_video_success_outcome, resolve_local_sync_error_background_report_kind,
+    resolve_local_sync_success_background_report_kind, LocalVideoSyncSuccessOutcome,
+};
+pub(crate) use usage::{GatewayStreamReportRequest, GatewaySyncReportRequest};
 
 fn decision_has_exact_provider_request(payload: &GatewayControlSyncDecisionResponse) -> bool {
-    !payload.provider_request_headers.is_empty() && payload.provider_request_body.is_some()
+    !payload.provider_request_headers.is_empty()
+        && (payload.provider_request_body.is_some()
+            || payload
+                .provider_request_body_base64
+                .as_ref()
+                .map(|value| !value.trim().is_empty())
+                .unwrap_or(false))
 }
 
 fn generic_decision_missing_exact_provider_request(

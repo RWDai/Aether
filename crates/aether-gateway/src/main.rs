@@ -1,9 +1,11 @@
 use clap::{Args as ClapArgs, Parser, ValueEnum};
-use tracing::info;
+use tracing::{info, warn};
 
 use aether_data::postgres::PostgresPoolConfig;
+use aether_data::redis::RedisClientConfig;
 use aether_gateway::{
-    build_router_with_state, AppState, GatewayDataConfig, VideoTaskTruthSourceMode,
+    build_router_with_state, AppState, FrontdoorCorsConfig, FrontdoorUserRpmConfig,
+    GatewayDataConfig, UsageRuntimeConfig, VideoTaskTruthSourceMode,
 };
 use aether_runtime::{
     init_service_runtime, DistributedConcurrencyGate, RedisDistributedConcurrencyConfig,
@@ -31,6 +33,15 @@ impl From<VideoTaskTruthSourceArg> for VideoTaskTruthSourceMode {
 struct GatewayDataArgs {
     #[arg(long, env = "AETHER_GATEWAY_DATA_POSTGRES_URL")]
     postgres_url: Option<String>,
+
+    #[arg(long, env = "AETHER_GATEWAY_DATA_ENCRYPTION_KEY")]
+    encryption_key: Option<String>,
+
+    #[arg(long, env = "AETHER_GATEWAY_DATA_REDIS_URL")]
+    redis_url: Option<String>,
+
+    #[arg(long, env = "AETHER_GATEWAY_DATA_REDIS_KEY_PREFIX")]
+    redis_key_prefix: Option<String>,
 
     #[arg(
         long,
@@ -83,26 +94,224 @@ struct GatewayDataArgs {
 }
 
 impl GatewayDataArgs {
-    fn to_config(&self) -> GatewayDataConfig {
-        let Some(database_url) = self
-            .postgres_url
+    fn effective_postgres_url(&self) -> Option<String> {
+        self.postgres_url
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
-        else {
-            return GatewayDataConfig::disabled();
+            .map(ToOwned::to_owned)
+            .or_else(|| {
+                std::env::var("DATABASE_URL")
+                    .ok()
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+            })
+    }
+
+    fn effective_redis_url(&self) -> Option<String> {
+        self.redis_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .or_else(|| {
+                std::env::var("REDIS_URL")
+                    .ok()
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+            })
+    }
+
+    fn effective_encryption_key(&self) -> Option<String> {
+        self.encryption_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .or_else(|| {
+                std::env::var("ENCRYPTION_KEY")
+                    .ok()
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+            })
+    }
+
+    fn configured_encryption_key_mismatch(&self) -> bool {
+        let gateway_value = std::env::var("AETHER_GATEWAY_DATA_ENCRYPTION_KEY")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        let default_value = std::env::var("ENCRYPTION_KEY")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+
+        matches!(
+            (gateway_value, default_value),
+            (Some(gateway_value), Some(default_value)) if gateway_value != default_value
+        )
+    }
+
+    fn to_config(&self) -> GatewayDataConfig {
+        let database_url = self.effective_postgres_url();
+        let redis_url = self.effective_redis_url();
+
+        let mut config = match database_url.as_deref() {
+            Some(database_url) => GatewayDataConfig::from_postgres_config(PostgresPoolConfig {
+                database_url: database_url.to_string(),
+                min_connections: self.postgres_min_connections,
+                max_connections: self.postgres_max_connections,
+                acquire_timeout_ms: self.postgres_acquire_timeout_ms,
+                idle_timeout_ms: self.postgres_idle_timeout_ms,
+                max_lifetime_ms: self.postgres_max_lifetime_ms,
+                statement_cache_capacity: self.postgres_statement_cache_capacity,
+                require_ssl: self.postgres_require_ssl,
+            }),
+            None => GatewayDataConfig::disabled(),
         };
 
-        GatewayDataConfig::from_postgres_config(PostgresPoolConfig {
-            database_url: database_url.to_string(),
-            min_connections: self.postgres_min_connections,
-            max_connections: self.postgres_max_connections,
-            acquire_timeout_ms: self.postgres_acquire_timeout_ms,
-            idle_timeout_ms: self.postgres_idle_timeout_ms,
-            max_lifetime_ms: self.postgres_max_lifetime_ms,
-            statement_cache_capacity: self.postgres_statement_cache_capacity,
-            require_ssl: self.postgres_require_ssl,
-        })
+        if let Some(redis_url) = redis_url.as_deref() {
+            config = config.with_redis_config(RedisClientConfig {
+                url: redis_url.to_string(),
+                key_prefix: self
+                    .redis_key_prefix
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned),
+            });
+        }
+
+        match self.effective_encryption_key() {
+            Some(value) => config.with_encryption_key(value),
+            None => config,
+        }
+    }
+}
+
+#[derive(ClapArgs, Debug, Clone)]
+struct GatewayUsageArgs {
+    #[arg(long, env = "AETHER_GATEWAY_USAGE_ENABLED", default_value_t = false)]
+    enabled: bool,
+
+    #[arg(
+        long,
+        env = "AETHER_GATEWAY_USAGE_QUEUE_STREAM_KEY",
+        default_value = "usage:events"
+    )]
+    queue_stream_key: String,
+
+    #[arg(
+        long,
+        env = "AETHER_GATEWAY_USAGE_QUEUE_GROUP",
+        default_value = "usage_consumers"
+    )]
+    queue_group: String,
+
+    #[arg(
+        long,
+        env = "AETHER_GATEWAY_USAGE_QUEUE_DLQ_STREAM_KEY",
+        default_value = "usage:events:dlq"
+    )]
+    queue_dlq_stream_key: String,
+
+    #[arg(
+        long,
+        env = "AETHER_GATEWAY_USAGE_QUEUE_STREAM_MAXLEN",
+        default_value_t = 2_000
+    )]
+    queue_stream_maxlen: usize,
+
+    #[arg(
+        long,
+        env = "AETHER_GATEWAY_USAGE_QUEUE_BATCH_SIZE",
+        default_value_t = 200
+    )]
+    queue_batch_size: usize,
+
+    #[arg(
+        long,
+        env = "AETHER_GATEWAY_USAGE_QUEUE_BLOCK_MS",
+        default_value_t = 500
+    )]
+    queue_block_ms: u64,
+
+    #[arg(
+        long,
+        env = "AETHER_GATEWAY_USAGE_QUEUE_RECLAIM_IDLE_MS",
+        default_value_t = 30_000
+    )]
+    queue_reclaim_idle_ms: u64,
+
+    #[arg(
+        long,
+        env = "AETHER_GATEWAY_USAGE_QUEUE_RECLAIM_COUNT",
+        default_value_t = 200
+    )]
+    queue_reclaim_count: usize,
+
+    #[arg(
+        long,
+        env = "AETHER_GATEWAY_USAGE_QUEUE_RECLAIM_INTERVAL_MS",
+        default_value_t = 5_000
+    )]
+    queue_reclaim_interval_ms: u64,
+}
+
+impl GatewayUsageArgs {
+    fn to_config(&self) -> UsageRuntimeConfig {
+        UsageRuntimeConfig {
+            enabled: self.enabled,
+            stream_key: self.queue_stream_key.trim().to_string(),
+            consumer_group: self.queue_group.trim().to_string(),
+            dlq_stream_key: self.queue_dlq_stream_key.trim().to_string(),
+            stream_maxlen: self.queue_stream_maxlen.max(1),
+            consumer_batch_size: self.queue_batch_size.max(1),
+            consumer_block_ms: self.queue_block_ms.max(1),
+            reclaim_idle_ms: self.queue_reclaim_idle_ms.max(1),
+            reclaim_count: self.queue_reclaim_count.max(1),
+            reclaim_interval_ms: self.queue_reclaim_interval_ms.max(1),
+        }
+    }
+}
+
+#[derive(ClapArgs, Debug, Clone)]
+struct GatewayFrontdoorArgs {
+    #[arg(long, env = "ENVIRONMENT", default_value = "development")]
+    environment: String,
+
+    #[arg(long, env = "CORS_ORIGINS")]
+    cors_origins: Option<String>,
+
+    #[arg(long, env = "CORS_ALLOW_CREDENTIALS", default_value_t = true)]
+    cors_allow_credentials: bool,
+}
+
+impl GatewayFrontdoorArgs {
+    fn cors_config(&self) -> Option<FrontdoorCorsConfig> {
+        FrontdoorCorsConfig::from_environment(
+            self.environment.trim(),
+            self.cors_origins.as_deref(),
+            self.cors_allow_credentials,
+        )
+    }
+}
+
+#[derive(ClapArgs, Debug, Clone)]
+struct GatewayRateLimitArgs {
+    #[arg(long, env = "RPM_BUCKET_SECONDS", default_value_t = 60)]
+    bucket_seconds: u64,
+
+    #[arg(long, env = "RPM_KEY_TTL_SECONDS", default_value_t = 120)]
+    key_ttl_seconds: u64,
+
+    #[arg(long, env = "RATE_LIMIT_FAIL_OPEN", default_value_t = true)]
+    fail_open: bool,
+}
+
+impl GatewayRateLimitArgs {
+    fn config(&self) -> FrontdoorUserRpmConfig {
+        FrontdoorUserRpmConfig::new(self.bucket_seconds, self.key_ttl_seconds, self.fail_open)
     }
 }
 
@@ -188,6 +397,15 @@ struct Args {
 
     #[command(flatten)]
     data: GatewayDataArgs,
+
+    #[command(flatten)]
+    usage: GatewayUsageArgs,
+
+    #[command(flatten)]
+    frontdoor: GatewayFrontdoorArgs,
+
+    #[command(flatten)]
+    rate_limit: GatewayRateLimitArgs,
 }
 
 #[tokio::main]
@@ -208,11 +426,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
+    let data_postgres_url = args.data.effective_postgres_url();
+    let data_redis_url = args.data.effective_redis_url();
+    let data_config = args.data.to_config();
+    if args.data.configured_encryption_key_mismatch() {
+        warn!(
+            "AETHER_GATEWAY_DATA_ENCRYPTION_KEY differs from ENCRYPTION_KEY; aether-gateway will prefer the gateway-specific value"
+        );
+    }
     info!(
         bind = %args.bind,
         upstream = %args.upstream,
+        environment = %args.frontdoor.environment,
         control_url = control_url.unwrap_or("-"),
         executor_url = executor_url.unwrap_or("-"),
+        frontdoor_mode = "compatibility_frontdoor",
+        cors_origins = args.frontdoor.cors_origins.as_deref().unwrap_or("-"),
+        cors_allow_credentials = args.frontdoor.cors_allow_credentials,
+        frontdoor_rpm_bucket_seconds = args.rate_limit.bucket_seconds,
+        frontdoor_rpm_key_ttl_seconds = args.rate_limit.key_ttl_seconds,
+        frontdoor_rpm_fail_open = args.rate_limit.fail_open,
         video_task_truth_source_mode = ?args.video_task_truth_source_mode,
         video_task_poller_interval_ms = args.video_task_poller_interval_ms,
         video_task_poller_batch_size = args.video_task_poller_batch_size,
@@ -223,19 +456,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .distributed_request_redis_url
             .as_deref()
             .unwrap_or("-"),
-        data_postgres_url = args.data.postgres_url.as_deref().unwrap_or("-"),
+        data_postgres_url = data_postgres_url.as_deref().unwrap_or("-"),
+        data_redis_url = data_redis_url.as_deref().unwrap_or("-"),
+        data_has_encryption_key = data_config.encryption_key().is_some(),
         data_postgres_require_ssl = args.data.postgres_require_ssl,
+        usage_enabled = args.usage.enabled,
         "aether-gateway started"
     );
 
-    let data_config = args.data.to_config();
     let mut state = AppState::new_with_executor(
         args.upstream,
         control_url.map(ToOwned::to_owned),
         executor_url.map(ToOwned::to_owned),
     )?
     .with_data_config(data_config)?
+    .with_usage_runtime_config(args.usage.to_config())?
     .with_video_task_truth_source_mode(args.video_task_truth_source_mode.into());
+    if let Some(cors_config) = args.frontdoor.cors_config() {
+        state = state.with_frontdoor_cors_config(cors_config);
+    }
+    state = state.with_frontdoor_user_rpm_config(args.rate_limit.config());
     if matches!(
         args.video_task_truth_source_mode,
         VideoTaskTruthSourceArg::RustAuthoritative
@@ -289,6 +529,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!(
         has_data_backends = state.has_data_backends(),
         has_video_task_data_reader = state.has_video_task_data_reader(),
+        has_usage_data_writer = state.has_usage_data_writer(),
+        has_usage_worker_backend = state.has_usage_worker_backend(),
+        control_api_configured = control_url.is_some(),
+        executor_api_configured = executor_url.is_some(),
         "aether-gateway data layer configured"
     );
     let background_tasks = state.spawn_background_tasks();

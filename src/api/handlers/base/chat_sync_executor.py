@@ -670,39 +670,43 @@ class ChatSyncExecutor:
         model: str,
     ) -> dict[str, Any]:
         handler = self._handler
-        ctx = self._ctx
 
-        if config.executor_backend == "rust" and prepared_plan.remote_eligible:
-            try:
-                rust_result = await RustExecutorClient().execute_sync_json(prepared_plan.contract)
-            except (RustExecutorClientError, httpx.HTTPError, json.JSONDecodeError) as exc:
-                logger.warning(
-                    "[{}] Rust executor 不可用，回退 Python 执行: {}",
-                    handler.request_id,
-                    exc,
-                )
-            else:
-                result = await self._finalize_rust_sync_result(
-                    prepared_plan=prepared_plan,
-                    provider=provider,
-                    model=model,
-                    status_code=rust_result.status_code,
-                    response_headers=rust_result.headers,
-                    response_json=rust_result.response_json,
-                    provider_response_json=rust_result.provider_response_json,
-                    response_body_bytes=rust_result.response_body_bytes,
-                )
-                logger.debug(
-                    "[{}] sync chat 请求由 Rust executor 执行完成",
-                    handler.request_id,
-                )
-                return result
+        if not prepared_plan.remote_eligible:
+            raise ProviderNotAvailableException(
+                "执行器暂时不可用，请稍后重试",
+                provider_name=str(provider.name),
+                upstream_response="execution contract is not eligible for rust executor",
+            )
 
-        return await self._execute_sync_plan_locally(
-            prepared_plan=prepared_plan,
-            provider=provider,
-            model=model,
-        )
+        try:
+            rust_result = await RustExecutorClient().execute_sync_json(prepared_plan.contract)
+        except (RustExecutorClientError, httpx.HTTPError, json.JSONDecodeError) as exc:
+            logger.warning(
+                "[{}] Rust executor unavailable: {}",
+                handler.request_id,
+                exc,
+            )
+            raise ProviderNotAvailableException(
+                "执行器暂时不可用，请稍后重试",
+                provider_name=str(provider.name),
+                upstream_response=str(exc),
+            ) from exc
+        else:
+            result = await self._finalize_rust_sync_result(
+                prepared_plan=prepared_plan,
+                provider=provider,
+                model=model,
+                status_code=rust_result.status_code,
+                response_headers=rust_result.headers,
+                response_json=rust_result.response_json,
+                provider_response_json=rust_result.provider_response_json,
+                response_body_bytes=rust_result.response_body_bytes,
+            )
+            logger.debug(
+                "[{}] sync chat 请求由 Rust executor 执行完成",
+                handler.request_id,
+            )
+            return result
 
     async def _finalize_rust_sync_result(
         self,
@@ -885,186 +889,6 @@ class ChatSyncExecutor:
         )
         ctx.response_json = ctx.response_json if isinstance(ctx.response_json, dict) else {}
         return ctx.response_json
-
-    async def _execute_sync_plan_locally(
-        self,
-        *,
-        prepared_plan: PreparedExecutionPlan,
-        provider: Provider,
-        model: str,
-    ) -> dict[str, Any]:
-        handler = self._handler
-        ctx = self._ctx
-
-        from src.clients.http_client import HTTPClientPool
-        from src.services.proxy_node.resolver import (
-            build_post_kwargs_async,
-            build_stream_kwargs_async,
-        )
-
-        http_client = await HTTPClientPool.get_upstream_client(
-            prepared_plan.delegate_config,
-            proxy_config=prepared_plan.proxy_config,
-            tls_profile=prepared_plan.contract.tls_profile,
-        )
-
-        resp: httpx.Response | None = None
-        if not prepared_plan.upstream_is_stream:
-            try:
-                _pkw = await build_post_kwargs_async(
-                    prepared_plan.delegate_config,
-                    url=prepared_plan.contract.url,
-                    headers=prepared_plan.headers,
-                    payload=prepared_plan.payload,
-                    timeout=prepared_plan.request_timeout,
-                    client_content_encoding=prepared_plan.client_content_encoding,
-                )
-                resp = await http_client.post(**_pkw)
-            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as e:
-                if prepared_plan.envelope:
-                    prepared_plan.envelope.on_connection_error(
-                        base_url=prepared_plan.selected_base_url,
-                        exc=e,
-                    )
-                    if prepared_plan.selected_base_url:
-                        logger.warning(
-                            f"[{prepared_plan.envelope.name}] Connection error: "
-                            f"{prepared_plan.selected_base_url} ({e})"
-                        )
-                raise
-        else:
-            try:
-                _stream_args = await build_stream_kwargs_async(
-                    prepared_plan.delegate_config,
-                    url=prepared_plan.contract.url,
-                    headers=prepared_plan.headers,
-                    payload=prepared_plan.payload,
-                    timeout=prepared_plan.request_timeout,
-                    client_content_encoding=prepared_plan.client_content_encoding,
-                )
-                async with http_client.stream(**_stream_args) as stream_resp:
-                    resp = stream_resp
-
-                    ctx.status_code = stream_resp.status_code
-                    ctx.response_headers = dict(stream_resp.headers)
-                    extract_proxy_timing(ctx.sync_proxy_info, ctx.response_headers)
-
-                    if prepared_plan.envelope:
-                        prepared_plan.envelope.on_http_status(
-                            base_url=prepared_plan.selected_base_url,
-                            status_code=ctx.status_code,
-                        )
-
-                    stream_resp.raise_for_status()
-
-                    ctx.response_json = await self._aggregate_upstream_stream_response(
-                        byte_iter=stream_resp.aiter_bytes(),
-                        prepared_plan=prepared_plan,
-                        provider=provider,
-                        model=model,
-                    )
-
-            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as e:
-                if prepared_plan.envelope:
-                    prepared_plan.envelope.on_connection_error(
-                        base_url=prepared_plan.selected_base_url,
-                        exc=e,
-                    )
-                    if prepared_plan.selected_base_url:
-                        logger.warning(
-                            f"[{prepared_plan.envelope.name}] Connection error: "
-                            f"{prepared_plan.selected_base_url} ({e})"
-                        )
-                raise
-
-        ctx.status_code = resp.status_code
-        ctx.response_headers = dict(resp.headers)
-        extract_proxy_timing(ctx.sync_proxy_info, ctx.response_headers)
-
-        if prepared_plan.envelope:
-            prepared_plan.envelope.on_http_status(
-                base_url=prepared_plan.selected_base_url,
-                status_code=ctx.status_code,
-            )
-
-        if prepared_plan.upstream_is_stream:
-            return ctx.response_json if isinstance(ctx.response_json, dict) else {}
-
-        try:
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            error_body = ""
-            try:
-                if prepared_plan.envelope and hasattr(prepared_plan.envelope, "extract_error_text"):
-                    error_body = await prepared_plan.envelope.extract_error_text(resp)
-                else:
-                    error_body = resp.text[:4000] if resp.text else ""
-            except Exception:
-                error_body = ""
-            e.upstream_response = error_body  # type: ignore[attr-defined]
-            raise
-
-        try:
-            ctx.response_json = resp.json()
-        except (UnicodeDecodeError, json.JSONDecodeError) as e:
-            raw_content = ""
-            try:
-                raw_content = resp.text[:500] if resp.text else "(empty)"
-            except Exception:
-                try:
-                    raw_content = repr(resp.content[:500]) if resp.content else "(empty)"
-                except Exception:
-                    raw_content = "(unable to read)"
-            logger.error(f"[{handler.request_id}] 无法解析响应 JSON: {e}, 原始内容: {raw_content}")
-            if raw_content == "(empty)" or not raw_content.strip():
-                client_message = "上游服务返回了空响应"
-            elif raw_content.strip().startswith(("<", "<!doctype", "<!DOCTYPE")):
-                client_message = "上游服务返回了非预期的响应格式"
-            else:
-                client_message = "上游服务返回了无效的响应"
-            raise ProviderNotAvailableException(
-                client_message,
-                provider_name=str(provider.name),
-                upstream_status=resp.status_code,
-                upstream_response=raw_content,
-            )
-
-        if prepared_plan.envelope:
-            ctx.response_json = prepared_plan.envelope.unwrap_response(ctx.response_json)
-            prepared_plan.envelope.postprocess_unwrapped_response(
-                model=model,
-                data=ctx.response_json,
-            )
-
-        if isinstance(ctx.response_json, dict):
-            parser = get_parser_for_format(ctx.provider_api_format_for_error or "")
-            if parser.is_error_response(ctx.response_json):
-                parsed = parser.parse_response(ctx.response_json, 200)
-                logger.warning(
-                    f"  [{handler.request_id}] 非流式检测到嵌套错误: "
-                    f"Provider={provider.name}, "
-                    f"error_type={parsed.error_type}, "
-                    f"embedded_status={parsed.embedded_status_code}, "
-                    f"message={parsed.error_message}"
-                )
-                raise EmbeddedErrorException(
-                    provider_name=str(provider.name),
-                    error_code=parsed.embedded_status_code,
-                    error_message=parsed.error_message,
-                    error_status=parsed.error_type,
-                )
-
-        if ctx.needs_conversion_for_error and isinstance(ctx.response_json, dict):
-            ctx.provider_response_json = ctx.response_json.copy()
-            registry = get_format_converter_registry()
-            ctx.response_json = registry.convert_response(
-                ctx.response_json,
-                ctx.provider_api_format_for_error or "",
-                ctx.client_api_format_for_error or "",
-                requested_model=model,
-            )
-
-        return ctx.response_json if isinstance(ctx.response_json, dict) else {}
 
     async def _record_stream_failure(
         self,

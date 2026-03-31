@@ -8,6 +8,7 @@ use serde_json::json;
 
 use crate::gateway::constants::*;
 use crate::gateway::headers::should_skip_response_header;
+use crate::gateway::rate_limit::FrontdoorUserRpmRejection;
 use crate::gateway::{
     insert_header_if_missing, GatewayControlDecision, GatewayError, GatewayLocalAuthRejection,
 };
@@ -159,6 +160,35 @@ pub(crate) fn build_local_balance_denied_response(
     )
 }
 
+pub(crate) fn build_local_user_rpm_limited_response(
+    trace_id: &str,
+    control_decision: Option<&GatewayControlDecision>,
+    rejection: &FrontdoorUserRpmRejection,
+) -> Result<Response<Body>, GatewayError> {
+    let payload = json!({
+        "error": {
+            "type": "rate_limit_exceeded",
+            "message": "请求过于频繁，请稍后重试",
+        }
+    });
+    let body =
+        serde_json::to_vec(&payload).map_err(|err| GatewayError::Internal(err.to_string()))?;
+    let headers = BTreeMap::from([
+        ("content-type".to_string(), "application/json".to_string()),
+        ("Retry-After".to_string(), rejection.retry_after.to_string()),
+        ("X-RateLimit-Limit".to_string(), rejection.limit.to_string()),
+        ("X-RateLimit-Remaining".to_string(), "0".to_string()),
+        ("X-RateLimit-Scope".to_string(), rejection.scope.to_string()),
+    ]);
+    build_client_response_from_parts(
+        StatusCode::TOO_MANY_REQUESTS.as_u16(),
+        &headers,
+        Body::from(body),
+        trace_id,
+        control_decision,
+    )
+}
+
 pub(crate) fn build_local_http_error_response(
     trace_id: &str,
     control_decision: Option<&GatewayControlDecision>,
@@ -201,9 +231,37 @@ pub(crate) fn build_local_auth_rejection_response(
             StatusCode::FORBIDDEN,
             "该密钥已被管理员锁定，请联系管理员",
         ),
+        GatewayLocalAuthRejection::WalletUnavailable => build_local_http_error_response(
+            trace_id,
+            control_decision,
+            StatusCode::FORBIDDEN,
+            "钱包不可用",
+        ),
         GatewayLocalAuthRejection::BalanceDenied { remaining } => {
             build_local_balance_denied_response(trace_id, control_decision, *remaining)
         }
+        GatewayLocalAuthRejection::ProviderNotAllowed { provider } => {
+            build_local_http_error_response(
+                trace_id,
+                control_decision,
+                StatusCode::FORBIDDEN,
+                &format!("当前密钥不允许访问 {provider} 提供商"),
+            )
+        }
+        GatewayLocalAuthRejection::ApiFormatNotAllowed { api_format } => {
+            build_local_http_error_response(
+                trace_id,
+                control_decision,
+                StatusCode::FORBIDDEN,
+                &format!("当前密钥不允许访问 {api_format} 格式"),
+            )
+        }
+        GatewayLocalAuthRejection::ModelNotAllowed { model } => build_local_http_error_response(
+            trace_id,
+            control_decision,
+            StatusCode::FORBIDDEN,
+            &format!("当前密钥不允许访问模型 {model}"),
+        ),
     }
 }
 

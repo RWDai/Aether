@@ -23,7 +23,7 @@ class _TimeoutAsyncClient:
 
 
 @pytest.mark.asyncio
-async def test_vertex_auth_timeout_error_includes_readable_message(
+async def test_vertex_auth_is_rust_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = VertexAuthService(
@@ -39,5 +39,5 @@ async def test_vertex_auth_timeout_error_includes_readable_message(
     monkeypatch.setattr(service, "_create_jwt", lambda: "signed-jwt")
     monkeypatch.setattr("src.core.vertex_auth.httpx.AsyncClient", _TimeoutAsyncClient)
 
-    with pytest.raises(VertexAuthError, match=r"request timed out after 30s"):
+    with pytest.raises(VertexAuthError, match=r"仅支持 Rust executor"):
         await service.get_access_token(httpx_client_kwargs={"timeout": 30})

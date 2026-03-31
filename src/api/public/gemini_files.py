@@ -28,15 +28,17 @@ from typing import Any
 from urllib.parse import urlencode
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
-from src.clients.http_client import HTTPClientPool
+from src.api.base.adapter import ApiAdapter, ApiMode
+from src.api.base.context import ApiRequestContext
+from src.api.base.pipeline import get_pipeline
 from src.core.api_format import get_auth_handler, get_default_auth_method_for_endpoint
 from src.core.crypto import crypto_service
 from src.core.logger import logger
-from src.database import create_session
+from src.database import create_session, get_db
 from src.models.database import ApiKey, GlobalModel, Model, Provider, ProviderEndpoint, User
 from src.services.auth.service import AuthService
 from src.services.gemini_files_mapping import delete_file_key_mapping, store_file_key_mapping
@@ -64,6 +66,14 @@ class UpstreamContext:
 
 
 router = APIRouter(tags=["Gemini Files API"])
+pipeline = get_pipeline()
+
+
+class PublicGeminiFilesApiAdapter(ApiAdapter):
+    mode = ApiMode.PUBLIC
+
+    def authorize(self, context: ApiRequestContext) -> None:  # type: ignore[override]
+        return None
 
 # Gemini Files API 基础 URL
 GEMINI_FILES_BASE_URL = "https://generativelanguage.googleapis.com"
@@ -427,6 +437,19 @@ def _build_response_headers(headers: dict[str, str]) -> dict[str, str]:
     return response_headers
 
 
+def _build_rust_unavailable_response() -> JSONResponse:
+    return JSONResponse(
+        status_code=503,
+        content={
+            "error": {
+                "code": 503,
+                "message": "Gemini Files requires Rust executor and is currently unavailable",
+                "status": "UNAVAILABLE",
+            }
+        },
+    )
+
+
 async def _maybe_store_file_mapping_from_payload(
     *,
     status_code: int,
@@ -504,7 +527,7 @@ async def _try_rust_sync_proxy_request(
     provider_id: str = "",
     endpoint_id: str = "",
     proxy: Any = None,
-) -> Response | None:
+) -> Response:
     from src.config.settings import config
     from src.services.request.executor_plan import (
         ExecutionPlan,
@@ -517,7 +540,12 @@ async def _try_rust_sync_proxy_request(
     )
 
     if config.executor_backend != "rust":
-        return None
+        logger.error(
+            "Gemini Files Rust sync proxy unavailable, rejecting request: {} {}",
+            method.upper(),
+            redact_url_for_log(upstream_url),
+        )
+        return _build_rust_unavailable_response()
 
     request_headers = dict(headers)
     content_type = str(request_headers.get("content-type") or "").strip() or None
@@ -553,7 +581,7 @@ async def _try_rust_sync_proxy_request(
         )
     except (RustExecutorClientError, HTTPException, json.JSONDecodeError, ValueError) as exc:
         logger.warning("Gemini Files Rust proxy unavailable: {}", redact_url_for_log(str(exc)))
-        return None
+        return _build_rust_unavailable_response()
 
     response_headers = _build_response_headers(dict(result.headers))
     if result.response_json is not None:
@@ -609,7 +637,7 @@ async def _proxy_request(
     Returns:
         FastAPI Response 对象
     """
-    rust_response = await _try_rust_sync_proxy_request(
+    response = await _try_rust_sync_proxy_request(
         method,
         upstream_url,
         headers,
@@ -621,59 +649,9 @@ async def _proxy_request(
         endpoint_id=endpoint_id,
         proxy=proxy,
     )
-    if rust_response is not None:
-        return rust_response
-
-    client = await HTTPClientPool.get_upstream_client(
-        delegate_config,
-        proxy_config=proxy_config,
-    )
-
-    try:
-        if method.upper() == "GET":
-            response = await client.get(upstream_url, headers=headers)
-        elif method.upper() == "DELETE":
-            response = await client.delete(upstream_url, headers=headers)
-        elif method.upper() == "POST":
-            if content is not None:
-                response = await client.post(upstream_url, headers=headers, content=content)
-            elif json_body is not None:
-                response = await client.post(upstream_url, headers=headers, json=json_body)
-            else:
-                response = await client.post(upstream_url, headers=headers)
-        else:
-            raise HTTPException(status_code=405, detail="Method not allowed")
-
-        # 构建响应头（排除 hop-by-hop 头部）
-        response_headers = _build_response_headers(dict(response.headers))
-        await _maybe_store_file_mapping_from_payload(
-            status_code=response.status_code,
-            headers=response_headers,
-            content_bytes=response.content,
-            file_key_id=file_key_id,
-            user_id=user_id,
-        )
-
-        return Response(
-            content=response.content,
-            status_code=response.status_code,
-            headers=response_headers,
-            media_type=response.headers.get("content-type", "application/json"),
-        )
-
-    except Exception as e:
-        sanitized_error = redact_url_for_log(str(e))
-        logger.error("Gemini Files API proxy error: {}", sanitized_error)
-        return JSONResponse(
-            status_code=502,
-            content={
-                "error": {
-                    "code": 502,
-                    "message": "Upstream request failed",
-                    "status": "BAD_GATEWAY",
-                }
-            },
-        )
+    if response is None:
+        return _build_rust_unavailable_response()
+    return response
 
 
 # ==============================================================================
@@ -681,10 +659,7 @@ async def _proxy_request(
 # ==============================================================================
 
 
-@router.post("/upload/v1beta/files")
-async def upload_file(
-    request: Request,
-) -> Any:
+async def _upload_file_response(request: Request) -> Any:
     """
     上传文件到 Gemini Files API
 
@@ -751,11 +726,11 @@ async def upload_file(
 # ==============================================================================
 
 
-@router.get("/v1beta/files")
-async def list_files(
+async def _list_files_response(
     request: Request,
-    pageSize: int | None = None,
-    pageToken: str | None = None,
+    *,
+    page_size: int | None,
+    page_token: str | None,
 ) -> Any:
     """
     列出已上传的文件
@@ -796,10 +771,10 @@ async def list_files(
 
     # 阶段 2：代理请求（不持有数据库连接）
     query_params = dict(request.query_params)
-    if pageSize is not None:
-        query_params["pageSize"] = pageSize
-    if pageToken is not None:
-        query_params["pageToken"] = pageToken
+    if page_size is not None:
+        query_params["pageSize"] = page_size
+    if page_token is not None:
+        query_params["pageToken"] = page_token
 
     upstream_url = _build_upstream_url(ctx.base_url, "/v1beta/files", query_params)
     headers = _build_upstream_headers(dict(request.headers), ctx.upstream_key)
@@ -818,6 +793,44 @@ async def list_files(
         proxy_config=ctx.proxy_config,
         delegate_config=ctx.delegate_config,
     )
+
+
+class PublicGeminiFilesUploadAdapter(PublicGeminiFilesApiAdapter):
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        return await _upload_file_response(context.request)
+
+
+@dataclass
+class PublicGeminiFilesListAdapter(PublicGeminiFilesApiAdapter):
+    page_size: int | None
+    page_token: str | None
+
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        return await _list_files_response(
+            context.request,
+            page_size=self.page_size,
+            page_token=self.page_token,
+        )
+
+
+@router.post("/upload/v1beta/files")
+async def upload_file(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Any:
+    adapter = PublicGeminiFilesUploadAdapter()
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=ApiMode.PUBLIC)
+
+
+@router.get("/v1beta/files")
+async def list_files(
+    request: Request,
+    pageSize: int | None = None,
+    pageToken: str | None = None,
+    db: Session = Depends(get_db),
+) -> Any:
+    adapter = PublicGeminiFilesListAdapter(page_size=pageSize, page_token=pageToken)
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=ApiMode.PUBLIC)
 
 
 # ==============================================================================
@@ -880,11 +893,7 @@ async def _find_video_task_by_id(
         return None, task.video_url
 
 
-@router.get("/v1beta/files/{file_id}:download")
-async def download_file(
-    file_id: str,
-    request: Request,
-) -> Any:
+async def _download_file_response(file_id: str, request: Request) -> Any:
     """
     下载文件（官方 Gemini API 格式）
 
@@ -908,8 +917,6 @@ async def download_file(
 
     优化：HTTP 下载期间不持有数据库连接
     """
-    from fastapi import HTTPException
-
     from src.config.settings import config
     from src.services.request.executor_plan import (
         ExecutionPlan,
@@ -1008,146 +1015,132 @@ async def download_file(
     logger.debug("Gemini Files download proxy: GET {}", redact_url_for_log(upstream_url))
 
     proxy_snapshot = None
-    proxy_config = None
-    delegate_config = None
     if regular_file_ctx is not None:
         proxy_snapshot = ctx.proxy_snapshot
-        proxy_config = ctx.proxy_config
-        delegate_config = ctx.delegate_config
 
-    if config.executor_backend == "rust":
-        try:
-            if proxy_snapshot is None and file_id.startswith("aev_"):
-                from src.services.proxy_node.resolver import (
-                    build_proxy_url_async,
-                    get_system_proxy_config_async,
-                    resolve_delegate_config_async,
-                    resolve_proxy_info_async,
-                )
+    if config.executor_backend != "rust":
+        logger.error(
+            "Gemini Files download rejected because Rust backend is disabled: {}",
+            redact_url_for_log(upstream_url),
+        )
+        return _build_rust_unavailable_response()
 
-                system_proxy = await get_system_proxy_config_async()
-                delegate_cfg = await resolve_delegate_config_async(system_proxy)
-                proxy_config = system_proxy
-                delegate_config = delegate_cfg
-                proxy_url: str | None = None
-                if system_proxy and not (delegate_cfg and delegate_cfg.get("tunnel")):
-                    proxy_url = await build_proxy_url_async(system_proxy)
-                proxy_info = await resolve_proxy_info_async(system_proxy)
-                proxy_snapshot = ExecutionProxySnapshot.from_proxy_info(
-                    proxy_info,
-                    proxy_url=proxy_url,
-                    mode_override="tunnel" if delegate_cfg and delegate_cfg.get("tunnel") else None,
-                    node_id_override=(
-                        str(delegate_cfg.get("node_id") or "").strip() or None
-                        if delegate_cfg and delegate_cfg.get("tunnel")
-                        else None
-                    ),
-                )
-        except Exception as exc:
-            logger.warning("Gemini Files download proxy snapshot build failed: {}", exc)
-
-        try:
-            rust_stream = await RustExecutorClient().execute_stream(
-                ExecutionPlan(
-                    request_id=f"gemini-files-download-{uuid4().hex}",
-                    candidate_id=None,
-                    provider_name="gemini",
-                    provider_id=provider_id,
-                    endpoint_id=endpoint_id,
-                    key_id=str(file_key_id or ""),
-                    method="GET",
-                    url=upstream_url,
-                    headers=headers,
-                    body=ExecutionPlanBody(),
-                    stream=True,
-                    provider_api_format="gemini:files",
-                    client_api_format="gemini:files",
-                    model_name="gemini-files",
-                    proxy=proxy_snapshot,
-                    timeouts=ExecutionPlanTimeouts(
-                        connect_ms=30_000,
-                        read_ms=300_000,
-                        write_ms=300_000,
-                        pool_ms=30_000,
-                        total_ms=None,
-                    ),
-                )
+    try:
+        if proxy_snapshot is None and file_id.startswith("aev_"):
+            from src.services.proxy_node.resolver import (
+                build_proxy_url_async,
+                get_system_proxy_config_async,
+                resolve_delegate_config_async,
+                resolve_proxy_info_async,
             )
-        except (RustExecutorClientError, ValueError) as exc:
-            logger.warning("Gemini Files Rust download unavailable: {}", exc)
-        else:
-            safe_headers = _build_response_headers(dict(rust_stream.headers))
-            if rust_stream.status_code >= 400:
-                error_chunks: list[bytes] = []
-                try:
-                    async for chunk in rust_stream.byte_iterator:
-                        if chunk:
-                            error_chunks.append(chunk)
-                        if sum(len(item) for item in error_chunks) >= 16_384:
-                            break
-                finally:
-                    await rust_stream.response_ctx.__aexit__(None, None, None)
 
-                raw_error = b"".join(error_chunks)
-                if safe_headers.get("content-type", "").startswith("application/json"):
-                    try:
-                        return JSONResponse(
-                            content=json.loads(raw_error.decode("utf-8")),
-                            status_code=rust_stream.status_code,
-                        )
-                    except Exception:
-                        pass
+            system_proxy = await get_system_proxy_config_async()
+            delegate_cfg = await resolve_delegate_config_async(system_proxy)
+            proxy_url: str | None = None
+            if system_proxy and not (delegate_cfg and delegate_cfg.get("tunnel")):
+                proxy_url = await build_proxy_url_async(system_proxy)
+            proxy_info = await resolve_proxy_info_async(system_proxy)
+            proxy_snapshot = ExecutionProxySnapshot.from_proxy_info(
+                proxy_info,
+                proxy_url=proxy_url,
+                mode_override="tunnel" if delegate_cfg and delegate_cfg.get("tunnel") else None,
+                node_id_override=(
+                    str(delegate_cfg.get("node_id") or "").strip() or None
+                    if delegate_cfg and delegate_cfg.get("tunnel")
+                    else None
+                ),
+            )
+    except Exception as exc:
+        logger.warning("Gemini Files download proxy snapshot build failed: {}", exc)
+
+    try:
+        rust_stream = await RustExecutorClient().execute_stream(
+            ExecutionPlan(
+                request_id=f"gemini-files-download-{uuid4().hex}",
+                candidate_id=None,
+                provider_name="gemini",
+                provider_id=provider_id,
+                endpoint_id=endpoint_id,
+                key_id=str(file_key_id or ""),
+                method="GET",
+                url=upstream_url,
+                headers=headers,
+                body=ExecutionPlanBody(),
+                stream=True,
+                provider_api_format="gemini:files",
+                client_api_format="gemini:files",
+                model_name="gemini-files",
+                proxy=proxy_snapshot,
+                timeouts=ExecutionPlanTimeouts(
+                    connect_ms=30_000,
+                    read_ms=300_000,
+                    write_ms=300_000,
+                    pool_ms=30_000,
+                    total_ms=None,
+                ),
+            )
+        )
+    except (RustExecutorClientError, ValueError) as exc:
+        logger.warning("Gemini Files Rust download unavailable: {}", exc)
+        return _build_rust_unavailable_response()
+
+    safe_headers = _build_response_headers(dict(rust_stream.headers))
+    if rust_stream.status_code >= 400:
+        error_chunks: list[bytes] = []
+        try:
+            async for chunk in rust_stream.byte_iterator:
+                if chunk:
+                    error_chunks.append(chunk)
+                if sum(len(item) for item in error_chunks) >= 16_384:
+                    break
+        finally:
+            await rust_stream.response_ctx.__aexit__(None, None, None)
+
+        raw_error = b"".join(error_chunks)
+        if safe_headers.get("content-type", "").startswith("application/json"):
+            try:
                 return JSONResponse(
-                    content={"error": raw_error.decode("utf-8", errors="replace")},
+                    content=json.loads(raw_error.decode("utf-8")),
                     status_code=rust_stream.status_code,
                 )
-
-            async def _iter_bytes() -> AsyncIterator[bytes]:
-                try:
-                    async for chunk in rust_stream.byte_iterator:
-                        yield chunk
-                finally:
-                    await rust_stream.response_ctx.__aexit__(None, None, None)
-
-            return StreamingResponse(
-                _iter_bytes(),
-                status_code=rust_stream.status_code,
-                headers=safe_headers,
-                media_type=safe_headers.get("content-type", "application/octet-stream"),
-            )
-
-    # 使用 follow_redirects=True 跟随重定向（Gemini 文件下载会重定向）
-    try:
-        client = await HTTPClientPool.get_upstream_client(
-            delegate_config,
-            proxy_config=proxy_config,
-        )
-        response = await client.get(
-            upstream_url,
-            headers=headers,
-            timeout=300.0,
-        )
-    except Exception as exc:
-        logger.error("Gemini Files download failed: {}", exc)
-        raise HTTPException(status_code=502, detail="Failed to download file")
-
-    if response.status_code >= 400:
-        content: dict[str, Any]
-        if response.headers.get("content-type", "").startswith("application/json"):
-            try:
-                content = response.json()
             except Exception:
-                content = {"error": response.text}
-        else:
-            content = {"error": response.text}
-        return JSONResponse(content=content, status_code=response.status_code)
+                pass
+        return JSONResponse(
+            content={"error": raw_error.decode("utf-8", errors="replace")},
+            status_code=rust_stream.status_code,
+        )
 
-    return Response(
-        content=response.content,
-        status_code=response.status_code,
-        headers=_build_response_headers(dict(response.headers)),
-        media_type=response.headers.get("content-type", "application/octet-stream"),
+    async def _iter_bytes() -> AsyncIterator[bytes]:
+        try:
+            async for chunk in rust_stream.byte_iterator:
+                yield chunk
+        finally:
+            await rust_stream.response_ctx.__aexit__(None, None, None)
+
+    return StreamingResponse(
+        _iter_bytes(),
+        status_code=rust_stream.status_code,
+        headers=safe_headers,
+        media_type=safe_headers.get("content-type", "application/octet-stream"),
     )
+
+
+@dataclass
+class PublicGeminiFilesDownloadAdapter(PublicGeminiFilesApiAdapter):
+    file_id: str
+
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        return await _download_file_response(self.file_id, context.request)
+
+
+@router.get("/v1beta/files/{file_id}:download")
+async def download_file(
+    file_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Any:
+    adapter = PublicGeminiFilesDownloadAdapter(file_id=file_id)
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=ApiMode.PUBLIC)
 
 
 # ==============================================================================
@@ -1155,11 +1148,7 @@ async def download_file(
 # ==============================================================================
 
 
-@router.get("/v1beta/files/{file_name:path}")
-async def get_file(
-    file_name: str,
-    request: Request,
-) -> Any:
+async def _get_file_response(file_name: str, request: Request) -> Any:
     """
     获取指定文件的元数据
 
@@ -1219,16 +1208,30 @@ async def get_file(
     )
 
 
+@dataclass
+class PublicGeminiFilesGetAdapter(PublicGeminiFilesApiAdapter):
+    file_name: str
+
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        return await _get_file_response(self.file_name, context.request)
+
+
+@router.get("/v1beta/files/{file_name:path}")
+async def get_file(
+    file_name: str,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Any:
+    adapter = PublicGeminiFilesGetAdapter(file_name=file_name)
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=ApiMode.PUBLIC)
+
+
 # ==============================================================================
 # 删除文件端点
 # ==============================================================================
 
 
-@router.delete("/v1beta/files/{file_name:path}")
-async def delete_file(
-    file_name: str,
-    request: Request,
-) -> Any:
+async def _delete_file_response(file_name: str, request: Request) -> Any:
     """
     删除指定文件
 
@@ -1278,3 +1281,21 @@ async def delete_file(
             "Gemini Files delete failed, skip mapping cleanup: status={}", response.status_code
         )
     return response
+
+
+@dataclass
+class PublicGeminiFilesDeleteAdapter(PublicGeminiFilesApiAdapter):
+    file_name: str
+
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        return await _delete_file_response(self.file_name, context.request)
+
+
+@router.delete("/v1beta/files/{file_name:path}")
+async def delete_file(
+    file_name: str,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Any:
+    adapter = PublicGeminiFilesDeleteAdapter(file_name=file_name)
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=ApiMode.PUBLIC)

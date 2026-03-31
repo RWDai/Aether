@@ -17,7 +17,6 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from src.clients.http_client import HTTPClientPool
 from src.config.settings import config
 from src.core.api_format import (
     build_upstream_headers_for_endpoint,
@@ -364,15 +363,7 @@ class VideoTaskPollerAdapter:
 
         payload = await self._try_rust_poll_payload(ctx=ctx, url=url)
         if payload is None:
-            client = await HTTPClientPool.get_upstream_client(
-                ctx.delegate_config,
-                proxy_config=ctx.proxy_config,
-            )
-            response = await client.get(url, headers=ctx.headers)
-            if response.status_code >= 400:
-                error_message = self._extract_error_message(response.text, response.status_code)
-                raise PollHTTPError(response.status_code, error_message)
-            payload = response.json()
+            raise PollHTTPError(503, "Video 轮询仅支持 Rust executor")
 
         return self._openai_normalizer.video_poll_to_internal(payload)
 
@@ -390,21 +381,7 @@ class VideoTaskPollerAdapter:
 
         payload = await self._try_rust_poll_payload(ctx=ctx, url=url)
         if payload is None:
-            client = await HTTPClientPool.get_upstream_client(
-                ctx.delegate_config,
-                proxy_config=ctx.proxy_config,
-            )
-            response = await client.get(url, headers=ctx.headers)
-            if response.status_code >= 400:
-                logger.warning(
-                    "[VideoPoller] Gemini poll failed: task={} status={} response={}",
-                    ctx.task_id,
-                    response.status_code,
-                    response.text[:500] if response.text else "(empty)",
-                )
-                error_message = self._extract_error_message(response.text, response.status_code)
-                raise PollHTTPError(response.status_code, error_message)
-            payload = response.json()
+            raise PollHTTPError(503, "Video 轮询仅支持 Rust executor")
 
         return self._gemini_normalizer.video_poll_to_internal(payload)
 
@@ -558,112 +535,10 @@ class VideoTaskPollerAdapter:
         return any(indicator in error_msg for indicator in _PERMANENT_ERROR_INDICATORS)
 
     async def _poll_task_status(self, db: Session, task: VideoTask) -> InternalVideoPollResult:
-        if not task.endpoint_id or not task.key_id:
-            return InternalVideoPollResult(
-                status=VideoStatus.FAILED,
-                error_code="missing_provider_info",
-                error_message="Task missing endpoint_id or key_id",
-            )
-        endpoint = self._get_endpoint(db, task.endpoint_id)
-        key = self._get_key(db, task.key_id)
-        if not key.api_key:
-            return InternalVideoPollResult(
-                status=VideoStatus.FAILED,
-                error_code="provider_config_error",
-                error_message="Provider key not properly configured",
-            )
-        try:
-            upstream_key = crypto_service.decrypt(key.api_key)
-        except Exception:
-            logger.warning("Failed to decrypt provider key for task {}", task.id)
-            return InternalVideoPollResult(
-                status=VideoStatus.FAILED,
-                error_code="decryption_error",
-                error_message="Failed to decrypt provider key",
-            )
-
-        provider_format = (task.provider_api_format or "").strip().lower()
-        if not provider_format:
-            provider_format = make_signature_key(
-                str(getattr(endpoint, "api_family", "")).strip().lower(),
-                str(getattr(endpoint, "endpoint_kind", "")).strip().lower(),
-            )
-
-        if provider_format.startswith("gemini:"):
-            auth_info = await get_provider_auth(endpoint, key)
-            return await self._poll_gemini(task, endpoint, upstream_key, auth_info)
-        return await self._poll_openai(task, endpoint, upstream_key)
-
-    async def _poll_openai(
-        self,
-        task: VideoTask,
-        endpoint: ProviderEndpoint,
-        upstream_key: str,
-    ) -> InternalVideoPollResult:
-        if not task.external_task_id:
-            return InternalVideoPollResult(
-                status=VideoStatus.FAILED,
-                error_code="missing_external_task_id",
-                error_message="Task missing external_task_id",
-            )
-        url = self._build_openai_url(endpoint.base_url, task.external_task_id)
-        endpoint_sig = (task.provider_api_format or "").strip().lower() or make_signature_key(
-            str(getattr(endpoint, "api_family", "")).strip().lower(),
-            str(getattr(endpoint, "endpoint_kind", "")).strip().lower(),
-        )
-        headers = self._build_headers(endpoint_sig, upstream_key, endpoint)
-
-        client = await HTTPClientPool.get_default_client_async()
-        response = await client.get(url, headers=headers)
-        if response.status_code >= 400:
-            error_message = self._extract_error_message(response.text, response.status_code)
-            raise PollHTTPError(response.status_code, error_message)
-
-        payload = response.json()
-        return self._openai_normalizer.video_poll_to_internal(payload)
-
-    async def _poll_gemini(
-        self,
-        task: VideoTask,
-        endpoint: ProviderEndpoint,
-        upstream_key: str,
-        auth_info: ProviderAuthInfo | None,
-    ) -> InternalVideoPollResult:
-        if not task.external_task_id:
-            return InternalVideoPollResult(
-                status=VideoStatus.FAILED,
-                error_code="missing_external_task_id",
-                error_message="Task missing external_task_id",
-            )
-        operation_name = normalize_gemini_operation_id(task.external_task_id)
-        url = self._build_gemini_url(endpoint.base_url, operation_name)
-        endpoint_sig = (task.provider_api_format or "").strip().lower() or make_signature_key(
-            str(getattr(endpoint, "api_family", "")).strip().lower(),
-            str(getattr(endpoint, "endpoint_kind", "")).strip().lower(),
-        )
-        headers = self._build_headers(endpoint_sig, upstream_key, endpoint, auth_info)
-
-        logger.debug(
-            "[VideoPoller] Gemini poll: task={} external_id={} url={}",
-            task.id,
-            task.external_task_id,
-            url,
-        )
-
-        client = await HTTPClientPool.get_default_client_async()
-        response = await client.get(url, headers=headers)
-        if response.status_code >= 400:
-            logger.warning(
-                "[VideoPoller] Gemini poll failed: task={} status={} response={}",
-                task.id,
-                response.status_code,
-                response.text[:500] if response.text else "(empty)",
-            )
-            error_message = self._extract_error_message(response.text, response.status_code)
-            raise PollHTTPError(response.status_code, error_message)
-
-        payload = response.json()
-        return self._gemini_normalizer.video_poll_to_internal(payload)
+        ctx_or_result = await self.prepare_poll_context(db, task)
+        if isinstance(ctx_or_result, InternalVideoPollResult):
+            return ctx_or_result
+        return await self.poll_task_http(ctx_or_result)
 
     def _build_openai_url(self, base_url: str | None, task_id: str) -> str:
         base = (base_url or "https://api.openai.com").rstrip("/")

@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
 
+from src.config import config as runtime_config
 from src.services.provider_ops.service import ProviderOpsService
-from src.services.provider_ops.types import ConnectorAuthType, ProviderActionType
+from src.services.provider_ops.types import (
+    ActionStatus,
+    ConnectorAuthType,
+    ProviderActionType,
+    ProviderOpsConfig,
+)
 from src.services.request.rust_executor_client import RustExecutorSyncResult
 
 
@@ -51,6 +58,14 @@ class _FakeRegistry:
 
     def get_or_default(self, _architecture_id: str) -> Any:
         return self._architecture
+
+
+class _ExplodingConnector:
+    async def is_authenticated(self) -> bool:
+        raise AssertionError("Python connector auth check should not run")
+
+    def get_client(self) -> Any:
+        raise AssertionError("Python connector client should not be created")
 
 
 class _SuccessResult:
@@ -165,3 +180,106 @@ async def test_verify_auth_prefers_rust_executor(
     assert captured["plan"].proxy.mode == "tunnel"
     assert captured["plan"].proxy.node_id == "node-1"
     cache_balance.assert_awaited_once_with("provider-1", 2.0, {"window": "day"})
+
+
+@pytest.mark.asyncio
+async def test_verify_auth_returns_explicit_failure_when_rust_verifier_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = ProviderOpsService(_FakeDB())
+    architecture = _SuccessArchitecture()
+
+    monkeypatch.setattr(
+        "src.services.provider_ops.service.get_registry",
+        lambda: _FakeRegistry(architecture),
+    )
+    monkeypatch.setattr(
+        service,
+        "_try_rust_verify_response",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "src.services.proxy_node.resolver.resolve_ops_proxy_config_async",
+        AsyncMock(return_value=(None, None)),
+    )
+
+    result = await service.verify_auth(
+        base_url="https://example.com",
+        architecture_id="sub2api",
+        auth_type=ConnectorAuthType.SESSION_LOGIN,
+        config={},
+        credentials={"access_token": "token"},
+    )
+
+    assert result == {"success": False, "message": "认证验证仅支持 Rust executor"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend", ["python", "rust"])
+async def test_connect_returns_explicit_failure_without_python_connector(
+    monkeypatch: pytest.MonkeyPatch,
+    backend: str,
+) -> None:
+    service = ProviderOpsService(_FakeDB())
+    service._connectors["provider-1"] = object()  # type: ignore[assignment]
+    monkeypatch.setattr(runtime_config, "executor_backend", backend)
+
+    monkeypatch.setattr(
+        service,
+        "_get_provider",
+        lambda _provider_id: SimpleNamespace(base_url="https://example.com"),
+    )
+    monkeypatch.setattr(
+        service,
+        "get_config",
+        lambda _provider_id: ProviderOpsConfig(
+            architecture_id="sub2api",
+            base_url="https://example.com",
+            connector_auth_type=ConnectorAuthType.API_KEY,
+        ),
+    )
+    monkeypatch.setattr(
+        "src.services.provider_ops.service.get_registry",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("Python provider connector registry should not be used")
+        ),
+    )
+
+    success, message = await service.connect("provider-1", {"api_key": "token"})
+
+    assert success is False
+    assert message == "Provider 连接仅支持 Rust executor"
+    assert "provider-1" not in service._connectors
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend", ["python", "rust"])
+async def test_execute_action_returns_not_supported_without_python_connector(
+    monkeypatch: pytest.MonkeyPatch,
+    backend: str,
+) -> None:
+    service = ProviderOpsService(_FakeDB())
+    service._connectors["provider-1"] = _ExplodingConnector()  # type: ignore[assignment]
+    monkeypatch.setattr(runtime_config, "executor_backend", backend)
+
+    monkeypatch.setattr(
+        service,
+        "get_config",
+        lambda _provider_id: ProviderOpsConfig(
+            architecture_id="sub2api",
+            base_url="https://example.com",
+            connector_auth_type=ConnectorAuthType.API_KEY,
+        ),
+    )
+    monkeypatch.setattr(
+        "src.services.provider_ops.service.get_registry",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("Python provider action architecture should not be used")
+        ),
+    )
+
+    result = await service.execute_action("provider-1", ProviderActionType.QUERY_BALANCE)
+
+    assert result.status == ActionStatus.NOT_SUPPORTED
+    assert result.action_type == ProviderActionType.QUERY_BALANCE
+    assert result.message == "Provider 操作仅支持 Rust executor"

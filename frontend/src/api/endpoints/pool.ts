@@ -207,9 +207,6 @@ export interface PoolBatchAction {
     | 'enable'
     | 'disable'
     | 'delete'
-    | 'clear_cooldown'
-    | 'reset_cost'
-    | 'regenerate_fingerprint'
     | 'clear_proxy'
     | 'set_proxy'
   payload?: Record<string, unknown> | null

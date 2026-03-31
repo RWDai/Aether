@@ -17,6 +17,7 @@ from src.core.provider_types import ProviderType
 _ANTHROPIC_TOKEN_URL = "https://console.anthropic.com/v1/oauth/token"
 _GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v1/userinfo?alt=json"
 _OPENAI_ACCOUNTS_CHECK_URL = "https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27"
+_RUST_ONLY_DETAILS = "OAuth provider 外呼仅支持 Rust executor"
 
 
 def _coerce_proxy_url(proxy_config: dict[str, Any] | None) -> str | None:
@@ -245,37 +246,15 @@ async def post_oauth_token(
     IMPORTANT: Never log secrets (tokens, secrets). This function only logs generic errors.
     """
 
-    if provider_type == ProviderType.CLAUDE_CODE and token_url == _ANTHROPIC_TOKEN_URL:
-        proxy_url = _coerce_proxy_url(proxy_config)
-        try:
-            status_code, resp_headers, text = await asyncio.to_thread(
-                _tls_client_post_sync,
-                token_url,
-                headers=headers,
-                data=data,
-                json_body=json_body,
-                proxy_url=proxy_url,
-                timeout_seconds=timeout_seconds,
-            )
-            return httpx.Response(
-                status_code=status_code,
-                headers=resp_headers,
-                content=text.encode("utf-8", errors="replace"),
-                request=httpx.Request("POST", token_url),
-            )
-        except Exception as e:
-            logger.warning(
-                "Claude OAuth token request via tls-client failed; fallback to httpx. err={!r}",
-                e,
-            )
-
-    return await _httpx_post(
-        token_url,
-        headers=headers,
-        data=data,
-        json_body=json_body,
-        proxy_config=proxy_config,
-        timeout_seconds=timeout_seconds,
+    logger.warning(
+        "Skip Python oauth token request; Rust-only path required. provider_type={} token_url={}",
+        provider_type,
+        _redact_url(token_url),
+    )
+    return httpx.Response(
+        status_code=503,
+        json={"error": {"message": _RUST_ONLY_DETAILS, "type": "provider_unavailable"}},
+        request=httpx.Request("POST", token_url),
     )
 
 
@@ -430,28 +409,12 @@ async def fetch_google_email(
     proxy_config: dict[str, Any] | None = None,
     timeout_seconds: float = 10.0,
 ) -> str | None:
-    if not access_token:
-        return None
-
-    client = await HTTPClientPool.get_proxy_client(proxy_config)
-    try:
-        resp = await client.get(
-            _GOOGLE_USERINFO_URL,
-            headers={
-                "Authorization": f"Bearer {access_token}",
-                "Accept": "application/json",
-            },
-            timeout=timeout_seconds,
-        )
-        if resp.status_code < 200 or resp.status_code >= 300:
-            return None
-        data = resp.json()
-        email = data.get("email")
-        if isinstance(email, str) and email:
-            return email
-        return None
-    except Exception:
-        return None
+    logger.warning(
+        "Skip Python google userinfo request; Rust-only path required. has_token={} proxy={}",
+        bool(access_token),
+        _proxy_display(proxy_config),
+    )
+    return None
 
 
 def _extract_openai_account_name(payload: Any, account_id: str) -> str | None:
@@ -499,65 +462,13 @@ async def fetch_openai_account_name(
     proxy_config: dict[str, Any] | None = None,
     timeout_seconds: float = 10.0,
 ) -> str | None:
-    if not access_token or not account_id:
-        return None
-
-    proxy_url = _coerce_proxy_url(proxy_config)
-    if not proxy_url and proxy_config:
-        try:
-            build_proxy_url_async = _load_optional_attr(
-                "src.services.proxy_node.resolver",
-                "build_proxy_url_async",
-            )
-            if callable(build_proxy_url_async):
-                proxy_url = await build_proxy_url_async(proxy_config)
-        except Exception:
-            proxy_url = None
-
-    try:
-        from curl_cffi.requests import AsyncSession  # pyright: ignore[reportMissingImports]
-
-        session = AsyncSession(
-            impersonate="chrome110",
-            proxies={"http": proxy_url, "https": proxy_url} if proxy_url else None,
-            timeout=timeout_seconds,
-            verify=False if proxy_url else True,
-        )
-        try:
-            headers = {
-                "Authorization": f"Bearer {access_token}",
-                "Accept": "*/*",
-                "Accept-Language": "en-US,en;q=0.9",
-                "Referer": "https://chatgpt.com/",
-                "Origin": "https://chatgpt.com",
-                "Connection": "keep-alive",
-            }
-            for attempt in range(3):
-                if attempt:
-                    await asyncio.sleep([1.0, 2.0][attempt - 1] + random.uniform(0.5, 1.5))
-                resp = await session.get(_OPENAI_ACCOUNTS_CHECK_URL, headers=headers)
-                if 200 <= resp.status_code < 300:
-                    return _extract_openai_account_name(resp.json(), account_id)
-        finally:
-            await session.close()
-    except Exception:
-        pass
-
-    client = await HTTPClientPool.get_proxy_client(proxy_config)
-    try:
-        resp = await client.get(
-            _OPENAI_ACCOUNTS_CHECK_URL,
-            headers={
-                "Authorization": f"Bearer {access_token}",
-                "Accept": "application/json",
-            },
-            timeout=timeout_seconds,
-        )
-        if resp.status_code < 200 or resp.status_code >= 300:
-            return None
-        return _extract_openai_account_name(resp.json(), account_id)
-    except Exception:
-        return None
+    logger.warning(
+        "Skip Python openai account lookup; Rust-only path required. has_token={} account_id={} proxy={}",
+        bool(access_token),
+        bool(account_id),
+        _proxy_display(proxy_config),
+    )
+    return None
 
 
 def extract_claude_email_from_token_response(token: dict[str, Any]) -> str | None:

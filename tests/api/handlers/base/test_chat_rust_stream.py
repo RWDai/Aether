@@ -11,6 +11,7 @@ import src.api.handlers.base.chat_handler_base as chatmod
 import src.services.proxy_node.resolver as proxymod
 from src.api.handlers.base.chat_handler_base import ChatHandlerBase
 from src.api.handlers.base.stream_context import StreamContext
+from src.core.exceptions import ProviderNotAvailableException
 from src.services.request.rust_executor_client import (
     RustExecutorClientError,
     RustExecutorStreamResult,
@@ -76,6 +77,52 @@ class _FakeStreamProcessor:
                 yield chunk
         finally:
             await response_ctx.__aexit__(None, None, None)
+
+
+class _FakeParser:
+    def is_error_response(self, response_json: dict[str, Any]) -> bool:
+        del response_json
+        return False
+
+
+class _FakeInternalUsage:
+    input_tokens = 3
+    output_tokens = 5
+    cache_read_tokens = 1
+    cache_write_tokens = 0
+
+
+class _FakeInternalResponse:
+    def __init__(self) -> None:
+        self.id = "resp-sync"
+        self.model = ""
+        self.usage = _FakeInternalUsage()
+
+
+class _FakeSourceNormalizer:
+    def response_to_internal(self, response_json: dict[str, Any]) -> _FakeInternalResponse:
+        assert response_json == {"id": "sync-1", "message": "hello"}
+        return _FakeInternalResponse()
+
+
+class _FakeTargetNormalizer:
+    def stream_event_from_internal(
+        self,
+        event: dict[str, Any],
+        state: Any,
+    ) -> list[dict[str, Any]]:
+        assert event == {"kind": "chunk"}
+        assert getattr(state, "message_id", "") == "resp-sync"
+        return [{"delta": "hello"}]
+
+
+class _FakeRegistry:
+    def get_normalizer(self, format_id: str) -> Any:
+        if format_id == "provider:test":
+            return _FakeSourceNormalizer()
+        if format_id == "openai:chat":
+            return _FakeTargetNormalizer()
+        raise AssertionError(f"unexpected format: {format_id}")
 
 
 class _DummyChatHandler(ChatHandlerBase):
@@ -200,7 +247,13 @@ async def test_execute_stream_request_uses_rust_executor_when_available(
     ctx = StreamContext(model="gpt-test", api_format="openai:chat")
     ctx.client_api_format = "openai:chat"
 
-    provider = SimpleNamespace(name="provider", id="provider-1", provider_type="", proxy=None)
+    provider = SimpleNamespace(
+        name="provider",
+        id="provider-1",
+        provider_type="",
+        proxy=None,
+        request_timeout=None,
+    )
     endpoint = SimpleNamespace(id="endpoint-1", api_format="openai:chat", base_url="https://x")
     key = SimpleNamespace(id="key-1", proxy=None)
     candidate = SimpleNamespace(
@@ -249,6 +302,110 @@ async def test_execute_stream_request_uses_rust_executor_when_available(
     assert ctx.response_headers["x-upstream-test"] == "true"
     assert stream_processor.prefetched_chunks == [b"data: {\"id\":\"chunk-1\"}\n\n"]
     assert dummy_ctx.closed is True
+
+
+@pytest.mark.asyncio
+async def test_execute_stream_request_uses_rust_sync_executor_for_non_stream_upstream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_stream_setup(monkeypatch)
+    monkeypatch.setattr(chatmod.config, "executor_backend", "rust")
+
+    handler = _DummyChatHandler()
+    stream_processor = _FakeStreamProcessor()
+    stream_processor.on_streaming_start = None
+    ctx = StreamContext(model="gpt-test", api_format="openai:chat")
+    ctx.client_api_format = "openai:chat"
+
+    provider = SimpleNamespace(
+        name="provider",
+        id="provider-1",
+        provider_type="",
+        proxy=None,
+        request_timeout=None,
+    )
+    endpoint = SimpleNamespace(id="endpoint-1", api_format="openai:chat", base_url="https://x")
+    key = SimpleNamespace(id="key-1", proxy=None)
+    candidate = SimpleNamespace(
+        request_candidate_id="cand-1",
+        mapping_matched_model=None,
+        needs_conversion=False,
+        output_limit=None,
+    )
+
+    async def _fake_prepare_provider_request(self: object, **kwargs: Any) -> object:
+        del self, kwargs
+        return chatmod.ProviderRequestResult(
+            request_body={"model": "gpt-test", "messages": [{"role": "user", "content": "hello"}]},
+            url_model="gpt-test",
+            mapped_model=None,
+            envelope=None,
+            extra_headers={},
+            upstream_is_stream=False,
+            needs_conversion=False,
+            provider_api_format="provider:test",
+            client_api_format="openai:chat",
+            auth_info=_DummyAuthInfo(),
+            tls_profile=None,
+        )
+
+    async def _fake_execute_sync_json(self: object, plan: object) -> object:
+        del self
+        assert getattr(plan, "stream") is False
+        return SimpleNamespace(
+            status_code=200,
+            response_json={"id": "sync-1", "message": "hello"},
+            response_body_bytes=None,
+            headers={"content-type": "application/json"},
+        )
+
+    async def _should_not_call_stream(self: object, plan: object) -> RustExecutorStreamResult:
+        del self, plan
+        raise AssertionError("stream executor should not be used")
+
+    async def _should_not_get_http_client(*args: Any, **kwargs: Any) -> object:
+        raise AssertionError("python upstream client should not be used")
+
+    monkeypatch.setattr(
+        _DummyChatHandler,
+        "_prepare_provider_request",
+        _fake_prepare_provider_request,
+    )
+    monkeypatch.setattr(chatmod, "get_format_converter_registry", lambda: _FakeRegistry())
+    monkeypatch.setattr(
+        chatmod,
+        "iter_internal_response_as_stream_events",
+        lambda internal_resp: [{"kind": "chunk"}],
+    )
+    monkeypatch.setattr(chatmod, "get_parser_for_format", lambda _format: _FakeParser())
+    monkeypatch.setattr(chatmod.RustExecutorClient, "execute_sync_json", _fake_execute_sync_json)
+    monkeypatch.setattr(chatmod.RustExecutorClient, "execute_stream", _should_not_call_stream)
+    monkeypatch.setattr(
+        "src.clients.http_client.HTTPClientPool.get_upstream_client",
+        _should_not_get_http_client,
+    )
+
+    stream = await handler._execute_stream_request(
+        ctx,
+        stream_processor,
+        provider,
+        endpoint,
+        key,
+        {"model": "gpt-test", "messages": [{"role": "user", "content": "hello"}]},
+        {},
+        candidate=candidate,
+    )
+
+    received = [chunk async for chunk in stream]
+
+    assert received == [
+        b'data: {"delta": "hello"}\n\n',
+        b"data: [DONE]\n\n",
+    ]
+    assert ctx.status_code == 200
+    assert ctx.input_tokens == 3
+    assert ctx.output_tokens == 5
+    assert ctx.cached_tokens == 1
 
 
 @pytest.mark.asyncio
@@ -501,7 +658,7 @@ async def test_execute_stream_request_turns_rust_upstream_error_into_http_status
 
 
 @pytest.mark.asyncio
-async def test_execute_stream_request_falls_back_to_python_when_rust_unavailable(
+async def test_execute_stream_request_raises_when_rust_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_stream_setup(monkeypatch)
@@ -525,12 +682,8 @@ async def test_execute_stream_request_falls_back_to_python_when_rust_unavailable
         del plan
         raise RustExecutorClientError("executor down")
 
-    class _FakeHTTPClient:
-        def stream(self, **kwargs: Any) -> Any:
-            raise RuntimeError("local-http-client-used")
-
-    async def _fake_get_upstream_client(*args: Any, **kwargs: Any) -> _FakeHTTPClient:
-        return _FakeHTTPClient()
+    async def _fake_get_upstream_client(*args: Any, **kwargs: Any) -> object:
+        raise AssertionError("python fallback should not be used")
 
     monkeypatch.setattr(chatmod.RustExecutorClient, "execute_stream", _fake_execute_stream)
     monkeypatch.setattr(
@@ -538,7 +691,7 @@ async def test_execute_stream_request_falls_back_to_python_when_rust_unavailable
         _fake_get_upstream_client,
     )
 
-    with pytest.raises(RuntimeError) as exc_info:
+    with pytest.raises(ProviderNotAvailableException) as exc_info:
         await handler._execute_stream_request(
             ctx,
             object(),
@@ -550,4 +703,58 @@ async def test_execute_stream_request_falls_back_to_python_when_rust_unavailable
             candidate=candidate,
         )
 
-    assert "local-http-client-used" in str(exc_info.value)
+    assert exc_info.value.message == "执行器暂时不可用，请稍后重试"
+    assert exc_info.value.upstream_response == "executor down"
+
+
+@pytest.mark.asyncio
+async def test_execute_stream_request_raises_when_remote_contract_is_ineligible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_stream_setup(monkeypatch)
+    monkeypatch.setattr(chatmod.config, "executor_backend", "rust")
+
+    handler = _DummyChatHandler()
+    ctx = StreamContext(model="gpt-test", api_format="openai:chat")
+    ctx.client_api_format = "openai:chat"
+
+    provider = SimpleNamespace(name="provider", id="provider-1", provider_type="", proxy=None)
+    endpoint = SimpleNamespace(id="endpoint-1", api_format="openai:chat", base_url="https://x")
+    key = SimpleNamespace(id="key-1", proxy=None)
+    candidate = SimpleNamespace(
+        request_candidate_id="cand-1",
+        mapping_matched_model=None,
+        needs_conversion=False,
+        output_limit=None,
+    )
+
+    async def _should_not_call_rust(self: object, plan: object) -> RustExecutorStreamResult:
+        del self, plan
+        raise AssertionError("rust executor should not be called")
+
+    async def _fake_get_upstream_client(*args: Any, **kwargs: Any) -> object:
+        raise AssertionError("python fallback should not be used")
+
+    monkeypatch.setattr(chatmod, "is_remote_contract_eligible", lambda plan: False)
+    monkeypatch.setattr(chatmod.RustExecutorClient, "execute_stream", _should_not_call_rust)
+    monkeypatch.setattr(
+        "src.clients.http_client.HTTPClientPool.get_upstream_client",
+        _fake_get_upstream_client,
+    )
+
+    with pytest.raises(ProviderNotAvailableException) as exc_info:
+        await handler._execute_stream_request(
+            ctx,
+            object(),
+            provider,
+            endpoint,
+            key,
+            {"model": "gpt-test", "messages": [{"role": "user", "content": "hello"}]},
+            {},
+            candidate=candidate,
+        )
+
+    assert exc_info.value.message == "执行器暂时不可用，请稍后重试"
+    assert exc_info.value.upstream_response == (
+        "execution contract is not eligible for rust executor"
+    )

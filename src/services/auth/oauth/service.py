@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-import httpx
 from fastapi import HTTPException, status
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import func
@@ -29,15 +28,7 @@ from src.services.cache.user_cache import UserCacheService
 from src.services.system.config import SystemConfigService
 
 
-def _build_oauth_client_kwargs(
-    timeout_seconds: float = 5.0, follow_redirects: bool = False
-) -> dict[str, Any]:
-    """构建 OAuth HTTP 客户端参数（含系统默认代理）"""
-    from src.services.proxy_node.resolver import build_proxy_client_kwargs
-
-    return build_proxy_client_kwargs(
-        timeout=httpx.Timeout(timeout_seconds), follow_redirects=follow_redirects
-    )
+OAUTH_CONFIG_TEST_RUST_ONLY_DETAILS = "OAuth 配置测试仅支持 Rust executor"
 
 
 @dataclass(frozen=True)
@@ -1038,89 +1029,11 @@ class OAuthService:
                 "secret_status": "unknown",
                 "details": "provider 未安装/不可用",
             }
-
-        cfg = OAuthService._get_provider_config(db, provider_type)
-
-        # Read all required fields first, then release DB connection before any awaits.
-        # This prevents holding a pooled connection while doing network I/O.
-        auth_url = provider.get_effective_authorization_url(cfg)
-        token_url = provider.get_effective_token_url(cfg)
-        redirect_uri = cfg.redirect_uri
-        client_id = cfg.client_id
-        has_secret = bool(cfg.client_secret_encrypted)
-        client_secret = cfg.get_client_secret() if has_secret else None
-
-        # Release DB connection (safe only when session has no pending changes).
-        try:
-            has_pending_changes = bool(db.new) or bool(db.dirty) or bool(db.deleted)
-        except Exception:
-            has_pending_changes = False
-        if not has_pending_changes:
-            original_expire_on_commit = getattr(db, "expire_on_commit", True)
-            db.expire_on_commit = False
-            try:
-                if db.in_transaction():
-                    db.commit()
-            except Exception:
-                try:
-                    db.rollback()
-                except Exception:
-                    pass
-            finally:
-                db.expire_on_commit = original_expire_on_commit
-
-        async def _reachable(url: str) -> bool:
-            try:
-                async with httpx.AsyncClient(
-                    **_build_oauth_client_kwargs(5.0, follow_redirects=False)
-                ) as client:
-                    await client.get(url)
-                return True
-            except Exception:
-                return False
-
-        authorization_url_reachable = await _reachable(auth_url)
-        token_url_reachable = await _reachable(token_url)
-
-        secret_status = "unknown"
-        details = ""
-
-        if has_secret and client_secret:
-            # 使用无效 code 做一次 token 请求（仅做粗略判定）
-            try:
-                async with httpx.AsyncClient(**_build_oauth_client_kwargs(5.0)) as client:
-                    resp = await client.post(
-                        token_url,
-                        data={
-                            "grant_type": "authorization_code",
-                            "code": "invalid",
-                            "redirect_uri": redirect_uri,
-                            "client_id": client_id,
-                            "client_secret": client_secret,
-                        },
-                    )
-                try:
-                    body = resp.json()
-                except Exception:
-                    body = {}
-
-                err = str(body.get("error") or "").lower()
-                if err in {"invalid_client", "unauthorized_client"}:
-                    secret_status = "invalid"
-                elif err in {"invalid_grant", "invalid_code"}:
-                    secret_status = "likely_valid"
-                else:
-                    secret_status = "unknown"
-                details = f"status={resp.status_code}"
-            except Exception as exc:
-                secret_status = "unknown"
-                details = str(exc)
-
         return {
-            "authorization_url_reachable": bool(authorization_url_reachable),
-            "token_url_reachable": bool(token_url_reachable),
-            "secret_status": secret_status,
-            "details": details,
+            "authorization_url_reachable": False,
+            "token_url_reachable": False,
+            "secret_status": "unsupported",
+            "details": OAUTH_CONFIG_TEST_RUST_ONLY_DETAILS,
         }
 
     @staticmethod
@@ -1142,64 +1055,11 @@ class OAuthService:
                 "details": "provider 未安装/不可用",
             }
 
-        # 使用传入的 override URL 或 provider 默认值
-        auth_url = authorization_url_override or provider.authorization_url
-        token_url = token_url_override or provider.token_url
-
-        async def _reachable(url: str) -> bool:
-            try:
-                async with httpx.AsyncClient(
-                    **_build_oauth_client_kwargs(5.0, follow_redirects=False)
-                ) as client:
-                    await client.get(url)
-                return True
-            except Exception:
-                return False
-
-        authorization_url_reachable = await _reachable(auth_url)
-        token_url_reachable = await _reachable(token_url)
-
-        secret_status = "unknown"
-        details = ""
-
-        if client_secret:
-            # 使用无效 code 做一次 token 请求（仅做粗略判定）
-            try:
-                async with httpx.AsyncClient(**_build_oauth_client_kwargs(5.0)) as client:
-                    resp = await client.post(
-                        token_url,
-                        data={
-                            "grant_type": "authorization_code",
-                            "code": "invalid",
-                            "redirect_uri": redirect_uri,
-                            "client_id": client_id,
-                            "client_secret": client_secret,
-                        },
-                    )
-                try:
-                    body = resp.json()
-                except Exception:
-                    body = {}
-
-                err = str(body.get("error") or "").lower()
-                if err in {"invalid_client", "unauthorized_client"}:
-                    secret_status = "invalid"
-                elif err in {"invalid_grant", "invalid_code"}:
-                    secret_status = "likely_valid"
-                else:
-                    secret_status = "unknown"
-                details = f"status={resp.status_code}"
-            except Exception as exc:
-                secret_status = "unknown"
-                details = str(exc)
-        else:
-            secret_status = "not_provided"
-
         return {
-            "authorization_url_reachable": bool(authorization_url_reachable),
-            "token_url_reachable": bool(token_url_reachable),
-            "secret_status": secret_status,
-            "details": details,
+            "authorization_url_reachable": False,
+            "token_url_reachable": False,
+            "secret_status": "unsupported" if client_secret else "not_provided",
+            "details": OAUTH_CONFIG_TEST_RUST_ONLY_DETAILS,
         }
 
     @staticmethod

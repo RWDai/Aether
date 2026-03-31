@@ -13,12 +13,7 @@ import httpx
 from fastapi import BackgroundTasks, Request
 from fastapi.responses import StreamingResponse
 
-from src.api.handlers.base.base_handler import (
-    ClientDisconnectedException,
-    wait_for_with_disconnect_detection,
-)
 from src.api.handlers.base.parsers import get_parser_for_format
-from src.api.handlers.base.request_builder import get_provider_auth
 from src.api.handlers.base.stream_context import StreamContext
 from src.api.handlers.base.utils import (
     build_sse_headers,
@@ -34,7 +29,6 @@ from src.core.api_format.conversion.stream_bridge import (
 from src.core.exceptions import (
     EmbeddedErrorException,
     ProviderNotAvailableException,
-    ProviderTimeoutException,
 )
 from src.core.logger import logger
 from src.services.provider.behavior import get_provider_behavior
@@ -440,9 +434,6 @@ class CliStreamMixin:
         # If upstream is forced to non-stream mode, we execute a sync request and then
         # simulate streaming to the client (sync -> stream bridge).
         if not upstream_is_stream:
-            from src.clients.http_client import HTTPClientPool
-            from src.services.proxy_node.resolver import build_post_kwargs_async
-
             request_timeout_sync = provider.request_timeout or config.http_request_timeout
 
             rust_plan = ExecutionPlan(
@@ -481,202 +472,72 @@ class CliStreamMixin:
                 ),
             )
 
-            if config.executor_backend == "rust" and is_remote_contract_eligible(rust_plan):
-                try:
-                    rust_result = await RustExecutorClient().execute_sync_json(rust_plan)
-                except (RustExecutorClientError, httpx.HTTPError, json.JSONDecodeError) as exc:
-                    logger.warning(
-                        "[{}] CLI Rust executor(sync->stream) 不可用，回退 Python 执行: {}",
-                        self.request_id,
-                        exc,
-                    )
-                else:
-                    ctx.status_code = rust_result.status_code
-                    ctx.response_headers = dict(rust_result.headers)
-                    ctx.set_proxy_timing(ctx.response_headers)
-                    if envelope:
-                        envelope.on_http_status(
-                            base_url=ctx.selected_base_url,
-                            status_code=ctx.status_code,
-                        )
-
-                    request = httpx.Request("POST", url, headers=provider_headers)
-                    synthetic_content = rust_result.response_body_bytes
-                    if synthetic_content is None:
-                        synthetic_content = json.dumps(
-                            rust_result.response_json or {},
-                            ensure_ascii=False,
-                        ).encode("utf-8")
-                    synthetic_response = httpx.Response(
-                        ctx.status_code,
-                        request=request,
-                        headers=ctx.response_headers,
-                        content=synthetic_content,
-                    )
-
-                    if ctx.status_code >= 400:
-                        error = httpx.HTTPStatusError(
-                            f"Upstream status error: {ctx.status_code}",
-                            request=request,
-                            response=synthetic_response,
-                        )
-                        error_body = ""
-                        try:
-                            if envelope and hasattr(envelope, "extract_error_text"):
-                                error_body = await envelope.extract_error_text(synthetic_response)
-                            else:
-                                error_body = (
-                                    synthetic_response.text[:4000]
-                                    if synthetic_response.text
-                                    else ""
-                                )
-                        except Exception:
-                            error_body = (
-                                synthetic_response.text[:4000] if synthetic_response.text else ""
-                            )
-                        error.upstream_response = error_body  # type: ignore[attr-defined]
-                        raise error
-
-                    response_json = rust_result.response_json or {}
-                    if envelope:
-                        response_json = envelope.unwrap_response(response_json)
-                        envelope.postprocess_unwrapped_response(model=ctx.model, data=response_json)
-
-                    if isinstance(response_json, dict) and provider_api_format:
-                        parser = get_parser_for_format(provider_api_format)
-                        if parser.is_error_response(response_json):
-                            parsed = parser.parse_response(response_json, 200)
-                            raise EmbeddedErrorException(
-                                provider_name=str(provider.name),
-                                error_code=parsed.embedded_status_code,
-                                error_message=parsed.error_message,
-                                error_status=parsed.error_type,
-                            )
-
-                    if isinstance(response_json, dict):
-                        ctx.response_metadata = self._extract_response_metadata(response_json)
-
-                    return self._streamify_sync_response(
-                        ctx=ctx,
-                        response_json=response_json if isinstance(response_json, dict) else {},
-                        client_api_format=client_api_format,
-                        provider_api_format=provider_api_format,
-                    )
-
-            http_client = await HTTPClientPool.get_upstream_client(
-                delegate_cfg,
-                proxy_config=effective_proxy,
-                tls_profile=envelope_tls_profile,
-            )
+            if not is_remote_contract_eligible(rust_plan):
+                raise ProviderNotAvailableException(
+                    "CLI 请求暂不支持当前 Rust executor 契约",
+                    provider_name=str(provider.name),
+                    upstream_response="remote_contract_ineligible",
+                )
 
             try:
-                _pkw = await build_post_kwargs_async(
-                    delegate_cfg,
-                    url=url,
-                    headers=provider_headers,
-                    payload=provider_payload,
-                    timeout=request_timeout_sync,
-                    client_content_encoding=client_content_encoding,
+                rust_result = await RustExecutorClient().execute_sync_json(rust_plan)
+            except (RustExecutorClientError, httpx.HTTPError, json.JSONDecodeError) as exc:
+                logger.warning(
+                    "[{}] CLI Rust executor(sync->stream) unavailable: {}",
+                    self.request_id,
+                    exc,
                 )
-                _connect_start = time.monotonic()
-                resp = await http_client.post(**_pkw)
-                ctx.set_ttfb_ms(int((time.monotonic() - _connect_start) * 1000))
-            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as e:
-                if envelope:
-                    envelope.on_connection_error(base_url=ctx.selected_base_url, exc=e)
-                    if ctx.selected_base_url:
-                        logger.warning(
-                            f"[{envelope.name}] Connection error: {ctx.selected_base_url} ({e})"
-                        )
-                raise
+                raise ProviderNotAvailableException(
+                    "执行器暂时不可用，请稍后重试",
+                    provider_name=str(provider.name),
+                    upstream_response=str(exc),
+                ) from exc
 
-            ctx.status_code = resp.status_code
-            ctx.response_headers = dict(resp.headers)
+            ctx.status_code = rust_result.status_code
+            ctx.response_headers = dict(rust_result.headers)
             ctx.set_proxy_timing(ctx.response_headers)
             if envelope:
-                envelope.on_http_status(base_url=ctx.selected_base_url, status_code=ctx.status_code)
-
-            # Reuse HTTPStatusError classification path (handled by TaskService/error_classifier).
-            try:
-                resp.raise_for_status()
-            except httpx.HTTPStatusError as e:
-                # OAuth token may be revoked/expired earlier than expires_at indicates.
-                # Best-effort: force refresh once on 401 and retry a single time.
-                if (
-                    resp.status_code == 401
-                    and str(getattr(key, "auth_type", "") or "").lower() == "oauth"
-                ):
-                    refreshed_auth = await get_provider_auth(endpoint, key, force_refresh=True)
-                    if refreshed_auth:
-                        provider_headers[refreshed_auth.auth_header] = refreshed_auth.auth_value
-                        ctx.provider_request_headers = provider_headers
-
-                    # retry once
-                    _pkw = await build_post_kwargs_async(
-                        delegate_cfg,
-                        url=url,
-                        headers=provider_headers,
-                        payload=provider_payload,
-                        timeout=request_timeout_sync,
-                        client_content_encoding=client_content_encoding,
-                        refresh_auth=True,
-                    )
-                    _connect_start = time.monotonic()
-                    resp = await http_client.post(**_pkw)
-                    ctx.set_ttfb_ms(int((time.monotonic() - _connect_start) * 1000))
-                    ctx.status_code = resp.status_code
-                    ctx.response_headers = dict(resp.headers)
-                    ctx.set_proxy_timing(ctx.response_headers)
-                    if envelope:
-                        envelope.on_http_status(
-                            base_url=ctx.selected_base_url, status_code=ctx.status_code
-                        )
-                    try:
-                        resp.raise_for_status()
-                    except httpx.HTTPStatusError as e2:
-                        error_body = ""
-                        try:
-                            if envelope and hasattr(envelope, "extract_error_text"):
-                                error_body = await envelope.extract_error_text(resp)
-                            else:
-                                error_body = resp.text[:4000] if resp.text else ""
-                        except Exception:
-                            error_body = ""
-                        e2.upstream_response = error_body  # type: ignore[attr-defined]
-                        raise
-                else:
-                    error_body = ""
-                    try:
-                        if envelope and hasattr(envelope, "extract_error_text"):
-                            error_body = await envelope.extract_error_text(resp)
-                        else:
-                            error_body = resp.text[:4000] if resp.text else ""
-                    except Exception:
-                        error_body = ""
-                    e.upstream_response = error_body  # type: ignore[attr-defined]
-                    raise
-
-            # Safe JSON parsing.
-            try:
-                response_json = resp.json()
-            except (UnicodeDecodeError, json.JSONDecodeError) as e:
-                raw_content = ""
-                try:
-                    raw_content = resp.text[:500] if resp.text else "(empty)"
-                except Exception:
-                    raw_content = "(unable to read)"
-                raise ProviderNotAvailableException(
-                    "上游服务返回了无效的响应",
-                    provider_name=str(provider.name),
-                    upstream_status=resp.status_code,
-                    upstream_response=f"json_decode_error={type(e).__name__}: {raw_content}",
+                envelope.on_http_status(
+                    base_url=ctx.selected_base_url,
+                    status_code=ctx.status_code,
                 )
 
+            request = httpx.Request("POST", url, headers=provider_headers)
+            synthetic_content = rust_result.response_body_bytes
+            if synthetic_content is None:
+                synthetic_content = json.dumps(
+                    rust_result.response_json or {},
+                    ensure_ascii=False,
+                ).encode("utf-8")
+            synthetic_response = httpx.Response(
+                ctx.status_code,
+                request=request,
+                headers=ctx.response_headers,
+                content=synthetic_content,
+            )
+
+            if ctx.status_code >= 400:
+                error = httpx.HTTPStatusError(
+                    f"Upstream status error: {ctx.status_code}",
+                    request=request,
+                    response=synthetic_response,
+                )
+                error_body = ""
+                try:
+                    if envelope and hasattr(envelope, "extract_error_text"):
+                        error_body = await envelope.extract_error_text(synthetic_response)
+                    else:
+                        error_body = synthetic_response.text[:4000] if synthetic_response.text else ""
+                except Exception:
+                    error_body = synthetic_response.text[:4000] if synthetic_response.text else ""
+                error.upstream_response = error_body  # type: ignore[attr-defined]
+                raise error
+
+            response_json = rust_result.response_json or {}
             if envelope:
                 response_json = envelope.unwrap_response(response_json)
                 envelope.postprocess_unwrapped_response(model=ctx.model, data=response_json)
 
-            # Embedded error detection (HTTP 200 but error body).
             if isinstance(response_json, dict) and provider_api_format:
                 parser = get_parser_for_format(provider_api_format)
                 if parser.is_error_response(response_json):
@@ -688,7 +549,6 @@ class CliStreamMixin:
                         error_status=parsed.error_type,
                     )
 
-            # Extract Provider response metadata (best-effort).
             if isinstance(response_json, dict):
                 ctx.response_metadata = self._extract_response_metadata(response_json)
 
@@ -712,11 +572,6 @@ class CliStreamMixin:
             f"原始模型={ctx.model}, 映射后={mapped_model or '无映射'}, URL模型={upstream_request.url_model}, "
             f"timeout={request_timeout}s, 代理={_proxy_label}"
         )
-
-        # 获取 HTTP 客户端（支持代理配置，Key 级别优先于 Provider 级别）
-        # 使用连接池复用客户端，避免每次流式请求都新建 TCP/TLS 连接
-        from src.clients.http_client import HTTPClientPool
-        from src.services.proxy_node.resolver import build_stream_kwargs_async
 
         rust_plan = ExecutionPlan(
             request_id=str(self.request_id or ""),
@@ -752,252 +607,78 @@ class CliStreamMixin:
             ),
         )
 
-        if config.executor_backend == "rust" and is_remote_contract_eligible(rust_plan):
-            try:
-                rust_stream = await RustExecutorClient().execute_stream(rust_plan)
-            except (RustExecutorClientError, httpx.HTTPError, json.JSONDecodeError) as exc:
-                logger.warning(
-                    "[{}] CLI Rust executor stream 不可用，回退 Python 执行: {}",
-                    self.request_id,
-                    exc,
-                )
-            else:
-                ctx.status_code = rust_stream.status_code
-                ctx.response_headers = dict(rust_stream.headers)
-                ctx.set_proxy_timing(ctx.response_headers)
-
-                if envelope:
-                    envelope.on_http_status(
-                        base_url=ctx.selected_base_url,
-                        status_code=ctx.status_code,
-                    )
-
-                try:
-                    if ctx.status_code >= 400:
-                        error_chunks: list[bytes] = []
-                        async for chunk in rust_stream.byte_iterator:
-                            if chunk:
-                                error_chunks.append(chunk)
-                            if sum(len(item) for item in error_chunks) >= 4000:
-                                break
-                        error_body = b"".join(error_chunks)[:4000].decode(
-                            "utf-8",
-                            errors="replace",
-                        )
-                        request = httpx.Request("POST", url, headers=provider_headers)
-                        response = httpx.Response(
-                            ctx.status_code,
-                            request=request,
-                            headers=rust_stream.headers,
-                            content=b"".join(error_chunks),
-                        )
-                        error = httpx.HTTPStatusError(
-                            f"Upstream status error: {ctx.status_code}",
-                            request=request,
-                            response=response,
-                        )
-                        error.upstream_response = error_body  # type: ignore[attr-defined]
-                        raise error
-
-                    prefetched_chunks = await self._prefetch_and_check_embedded_error(
-                        rust_stream.byte_iterator,
-                        provider,
-                        endpoint,
-                        ctx,
-                    )
-                except Exception:
-                    await rust_stream.response_ctx.__aexit__(None, None, None)
-                    raise
-
-                return self._create_response_stream_with_prefetch(
-                    ctx,
-                    rust_stream.byte_iterator,
-                    rust_stream.response_ctx,
-                    prefetched_chunks,
-                )
-
-        http_client = await HTTPClientPool.get_upstream_client(
-            delegate_cfg,
-            proxy_config=effective_proxy,
-            tls_profile=envelope_tls_profile,
-        )
-
-        # 用于存储内部函数的结果（必须在函数定义前声明，供 nonlocal 使用）
-        byte_iterator: Any = None
-        prefetched_chunks: Any = None
-        response_ctx: Any = None
-
-        async def _connect_and_prefetch() -> None:
-            """建立连接并预读首字节（受整体超时控制）"""
-            nonlocal byte_iterator, prefetched_chunks, response_ctx
-            _skw = await build_stream_kwargs_async(
-                delegate_cfg,
-                url=url,
-                headers=provider_headers,
-                payload=provider_payload,
-                client_content_encoding=client_content_encoding,
-                # 流式请求不应使用 provider.request_timeout 作为“整条流总时长”超时，
-                # 否则会在长响应中途被硬切断（常见于 request_timeout=15s 的配置）。
-                # 首字节超时由外层 wait_for(stream_first_byte_timeout) 控制；
-                # 后续分块读取由 http client 默认 read timeout（长超时）控制。
-                timeout=None,
+        if not is_remote_contract_eligible(rust_plan):
+            raise ProviderNotAvailableException(
+                "CLI 请求暂不支持当前 Rust executor 契约",
+                provider_name=str(provider.name),
+                upstream_response="remote_contract_ineligible",
             )
-            _connect_start = time.monotonic()
-            response_ctx = http_client.stream(**_skw)
-            stream_response = await response_ctx.__aenter__()
-            ctx.set_ttfb_ms(int((time.monotonic() - _connect_start) * 1000))
 
-            ctx.status_code = stream_response.status_code
-            ctx.response_headers = dict(stream_response.headers)
-            ctx.set_proxy_timing(ctx.response_headers)
+        try:
+            rust_stream = await RustExecutorClient().execute_stream(rust_plan)
+        except (RustExecutorClientError, httpx.HTTPError, json.JSONDecodeError) as exc:
+            logger.warning(
+                "[{}] CLI Rust executor stream unavailable: {}",
+                self.request_id,
+                exc,
+            )
+            raise ProviderNotAvailableException(
+                "执行器暂时不可用，请稍后重试",
+                provider_name=str(provider.name),
+                upstream_response=str(exc),
+            ) from exc
 
-            logger.debug("  └─ 收到响应: status={}", stream_response.status_code)
+        ctx.status_code = rust_stream.status_code
+        ctx.response_headers = dict(rust_stream.headers)
+        ctx.set_proxy_timing(ctx.response_headers)
 
-            if envelope:
-                envelope.on_http_status(
-                    base_url=ctx.selected_base_url,
-                    status_code=ctx.status_code,
+        if envelope:
+            envelope.on_http_status(
+                base_url=ctx.selected_base_url,
+                status_code=ctx.status_code,
+            )
+
+        try:
+            if ctx.status_code >= 400:
+                error_chunks: list[bytes] = []
+                async for chunk in rust_stream.byte_iterator:
+                    if chunk:
+                        error_chunks.append(chunk)
+                    if sum(len(item) for item in error_chunks) >= 4000:
+                        break
+                error_body = b"".join(error_chunks)[:4000].decode(
+                    "utf-8",
+                    errors="replace",
                 )
+                request = httpx.Request("POST", url, headers=provider_headers)
+                response = httpx.Response(
+                    ctx.status_code,
+                    request=request,
+                    headers=rust_stream.headers,
+                    content=b"".join(error_chunks),
+                )
+                error = httpx.HTTPStatusError(
+                    f"Upstream status error: {ctx.status_code}",
+                    request=request,
+                    response=response,
+                )
+                error.upstream_response = error_body  # type: ignore[attr-defined]
+                raise error
 
-            stream_response.raise_for_status()
-
-            # 使用字节流迭代器（避免 aiter_lines 的性能问题, aiter_bytes 会自动解压 gzip/deflate）
-            byte_iterator = stream_response.aiter_bytes()
-
-            # 预读第一个数据块，检测嵌套错误（HTTP 200 但响应体包含错误）
             prefetched_chunks = await self._prefetch_and_check_embedded_error(
-                byte_iterator, provider, endpoint, ctx
+                rust_stream.byte_iterator,
+                provider,
+                endpoint,
+                ctx,
             )
+        except Exception:
+            await rust_stream.response_ctx.__aexit__(None, None, None)
+            raise
 
-        for attempt in range(2):
-            try:
-                # 使用 asyncio.wait_for 包裹整个"建立连接 + 获取首字节"阶段
-                # stream_first_byte_timeout 控制首字节超时，避免上游长时间无响应
-                # 同时检测客户端断连，避免客户端已断开但服务端仍在等待上游响应
-                if http_request is not None:
-                    await wait_for_with_disconnect_detection(
-                        _connect_and_prefetch(),
-                        timeout=request_timeout,
-                        is_disconnected=http_request.is_disconnected,
-                        request_id=self.request_id,
-                    )
-                else:
-                    await asyncio.wait_for(_connect_and_prefetch(), timeout=request_timeout)
-                break
-
-            except TimeoutError as e:
-                # 整体请求超时（建立连接 + 获取首字节）
-                # 清理可能已建立的连接上下文（不关闭池中复用的客户端）
-                if response_ctx is not None:
-                    try:
-                        await response_ctx.__aexit__(None, None, None)
-                    except Exception:
-                        pass
-                if envelope:
-                    envelope.on_connection_error(base_url=ctx.selected_base_url, exc=e)
-                logger.warning(
-                    f"  [{self.request_id}] 请求超时: Provider={provider.name}, timeout={request_timeout}s"
-                )
-                raise ProviderTimeoutException(
-                    provider_name=str(provider.name),
-                    timeout=int(request_timeout),
-                )
-
-            except ClientDisconnectedException:
-                # 客户端断开连接，清理响应上下文（不关闭池中复用的客户端）
-                if response_ctx is not None:
-                    try:
-                        await response_ctx.__aexit__(None, None, None)
-                    except Exception:
-                        pass
-                logger.warning("  [{}] 客户端在等待首字节时断开连接", self.request_id)
-                ctx.status_code = 499
-                ctx.error_message = "client_disconnected_during_prefetch"
-                raise
-
-            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.TimeoutException) as e:
-                if envelope:
-                    envelope.on_connection_error(base_url=ctx.selected_base_url, exc=e)
-                    if ctx.selected_base_url:
-                        logger.warning(
-                            f"[{envelope.name}] Connection error: {ctx.selected_base_url} ({e})"
-                        )
-                raise
-
-            except httpx.HTTPStatusError as e:
-                status = int(getattr(e.response, "status_code", 0) or 0)
-                if (
-                    attempt == 0
-                    and status == 401
-                    and str(getattr(key, "auth_type", "") or "").lower() == "oauth"
-                ):
-                    # OAuth token may be revoked/expired earlier than expires_at indicates.
-                    # Best-effort: force refresh once on 401 and retry a single time.
-                    try:
-                        if response_ctx is not None:
-                            await response_ctx.__aexit__(None, None, None)
-                    except Exception:
-                        pass
-
-                    refreshed_auth = await get_provider_auth(endpoint, key, force_refresh=True)
-                    if refreshed_auth:
-                        provider_headers[refreshed_auth.auth_header] = refreshed_auth.auth_value
-                        ctx.provider_request_headers = provider_headers
-
-                    # Reset state for the next attempt.
-                    byte_iterator = None
-                    prefetched_chunks = None
-                    response_ctx = None
-                    continue
-
-                error_text = await self._extract_error_text(
-                    e,
-                    envelope=envelope,
-                )
-
-                try:
-                    if response_ctx is not None:
-                        await response_ctx.__aexit__(None, None, None)
-                except Exception:
-                    pass
-                finally:
-                    response_ctx = None
-                logger.error(
-                    f"Provider 返回错误状态: {e.response.status_code}\n  Response: {error_text}"
-                )
-                # 将上游错误信息附加到异常，以便故障转移时能够返回给客户端
-                e.upstream_response = error_text  # type: ignore[attr-defined]
-                raise
-
-            except EmbeddedErrorException:
-                # 嵌套错误需要触发重试，关闭连接上下文后重新抛出
-                try:
-                    if response_ctx is not None:
-                        await response_ctx.__aexit__(None, None, None)
-                except Exception:
-                    pass
-                raise
-
-            except Exception:
-                try:
-                    if response_ctx is not None:
-                        await response_ctx.__aexit__(None, None, None)
-                except Exception:
-                    pass
-                finally:
-                    response_ctx = None
-                raise
-
-        # 类型断言：成功执行后这些变量不会为 None
-        assert byte_iterator is not None
-        assert prefetched_chunks is not None
-        assert response_ctx is not None
-
-        # 创建流生成器（带预读数据，使用同一个迭代器）
         return self._create_response_stream_with_prefetch(
             ctx,
-            byte_iterator,
-            response_ctx,
+            rust_stream.byte_iterator,
+            rust_stream.response_ctx,
             prefetched_chunks,
         )
 

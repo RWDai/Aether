@@ -273,3 +273,81 @@ def test_record_gateway_direct_candidate_graph_uses_selected_pool_key_index() ->
         assert rows[0].status == "unused"
         assert rows[1].status == "pending"
         assert getattr(candidate, "request_candidate_id") == rows[1].id
+
+
+def test_record_gateway_direct_candidate_graph_is_idempotent_for_same_request_id() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine, tables=[RequestCandidate.__table__])
+    SessionLocal = sessionmaker(bind=engine)
+
+    with SessionLocal() as db:
+        resolver = CandidateResolver(db=db, cache_scheduler=SimpleNamespace())
+        user_api_key = SimpleNamespace(
+            id="api-key-direct-idempotent-123",
+            name="client-key",
+            user_id="user-direct-idempotent-123",
+            user=SimpleNamespace(id="user-direct-idempotent-123", username="direct-user"),
+        )
+        request_id = "req-direct-candidate-idempotent-123"
+        first_candidates = [
+            ProviderCandidate(
+                provider=SimpleNamespace(id="provider-selected-123", name="openai", max_retries=1),
+                endpoint=SimpleNamespace(id="endpoint-selected-123"),
+                key=SimpleNamespace(id="key-selected-123"),
+                provider_api_format="openai:cli",
+            ),
+            ProviderCandidate(
+                provider=SimpleNamespace(id="provider-unused-123", name="openai", max_retries=1),
+                endpoint=SimpleNamespace(id="endpoint-unused-123"),
+                key=SimpleNamespace(id="key-unused-123"),
+                provider_api_format="openai:cli",
+            ),
+        ]
+
+        _record_gateway_direct_candidate_graph(
+            db=db,
+            candidate_resolver=resolver,
+            candidates=first_candidates,
+            request_id=request_id,
+            user_api_key=user_api_key,
+            required_capabilities=None,
+            selected_candidate_index=0,
+        )
+        first_selected_record_id = getattr(first_candidates[0], "request_candidate_id")
+
+        second_candidates = [
+            ProviderCandidate(
+                provider=SimpleNamespace(id="provider-selected-123", name="openai", max_retries=1),
+                endpoint=SimpleNamespace(id="endpoint-selected-123"),
+                key=SimpleNamespace(id="key-selected-123"),
+                provider_api_format="openai:cli",
+            ),
+            ProviderCandidate(
+                provider=SimpleNamespace(id="provider-unused-123", name="openai", max_retries=1),
+                endpoint=SimpleNamespace(id="endpoint-unused-123"),
+                key=SimpleNamespace(id="key-unused-123"),
+                provider_api_format="openai:cli",
+            ),
+        ]
+
+        _record_gateway_direct_candidate_graph(
+            db=db,
+            candidate_resolver=resolver,
+            candidates=second_candidates,
+            request_id=request_id,
+            user_api_key=user_api_key,
+            required_capabilities=None,
+            selected_candidate_index=0,
+        )
+
+        rows = (
+            db.query(RequestCandidate)
+            .filter(RequestCandidate.request_id == request_id)
+            .order_by(RequestCandidate.candidate_index, RequestCandidate.retry_index)
+            .all()
+        )
+
+        assert len(rows) == 2
+        assert rows[0].status == "pending"
+        assert rows[1].status == "unused"
+        assert getattr(second_candidates[0], "request_candidate_id") == first_selected_record_id

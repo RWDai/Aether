@@ -8,6 +8,7 @@ import pytest
 import src.api.handlers.base.chat_sync_executor as chat_sync_mod
 from src.api.handlers.base.chat_sync_executor import ChatSyncExecutor
 from src.core.exceptions import EmbeddedErrorException
+from src.core.exceptions import ProviderNotAvailableException
 from src.services.request.executor_plan import (
     ExecutionPlan,
     ExecutionPlanBody,
@@ -145,15 +146,11 @@ async def test_execute_sync_plan_uses_rust_executor_when_available(
             headers={"content-type": "application/json"},
         )
 
-    async def _should_not_fallback(**kwargs: object) -> dict[str, object]:
-        raise AssertionError("local execution should not be used")
-
     monkeypatch.setattr(
         chat_sync_mod.RustExecutorClient,
         "execute_sync_json",
         _fake_execute_sync_json,
     )
-    monkeypatch.setattr(executor, "_execute_sync_plan_locally", _should_not_fallback)
 
     response = await executor._execute_sync_plan(
         prepared_plan=prepared_plan,
@@ -184,15 +181,11 @@ async def test_execute_sync_plan_allows_supported_proxy_urls_for_rust(
             headers={"content-type": "application/json"},
         )
 
-    async def _should_not_fallback(**kwargs: object) -> dict[str, object]:
-        raise AssertionError("local execution should not be used")
-
     monkeypatch.setattr(
         chat_sync_mod.RustExecutorClient,
         "execute_sync_json",
         _fake_execute_sync_json,
     )
-    monkeypatch.setattr(executor, "_execute_sync_plan_locally", _should_not_fallback)
 
     response = await executor._execute_sync_plan(
         prepared_plan=prepared_plan,
@@ -222,15 +215,11 @@ async def test_execute_sync_plan_allows_tunnel_delegate_for_rust(
             headers={"content-type": "application/json"},
         )
 
-    async def _should_not_fallback(**kwargs: object) -> dict[str, object]:
-        raise AssertionError("local execution should not be used")
-
     monkeypatch.setattr(
         chat_sync_mod.RustExecutorClient,
         "execute_sync_json",
         _fake_execute_sync_json,
     )
-    monkeypatch.setattr(executor, "_execute_sync_plan_locally", _should_not_fallback)
 
     response = await executor._execute_sync_plan(
         prepared_plan=prepared_plan,
@@ -258,15 +247,11 @@ async def test_execute_sync_plan_allows_tls_profile_for_rust(
             headers={"content-type": "application/json"},
         )
 
-    async def _should_not_fallback(**kwargs: object) -> dict[str, object]:
-        raise AssertionError("local execution should not be used")
-
     monkeypatch.setattr(
         chat_sync_mod.RustExecutorClient,
         "execute_sync_json",
         _fake_execute_sync_json,
     )
-    monkeypatch.setattr(executor, "_execute_sync_plan_locally", _should_not_fallback)
 
     response = await executor._execute_sync_plan(
         prepared_plan=prepared_plan,
@@ -294,15 +279,11 @@ async def test_execute_sync_plan_applies_envelope_postprocessing_after_rust(
             headers={"content-type": "application/json"},
         )
 
-    async def _should_not_fallback(**kwargs: object) -> dict[str, object]:
-        raise AssertionError("local execution should not be used")
-
     monkeypatch.setattr(
         chat_sync_mod.RustExecutorClient,
         "execute_sync_json",
         _fake_execute_sync_json,
     )
-    monkeypatch.setattr(executor, "_execute_sync_plan_locally", _should_not_fallback)
 
     response = await executor._execute_sync_plan(
         prepared_plan=prepared_plan,
@@ -357,16 +338,12 @@ async def test_execute_sync_plan_applies_format_conversion_after_rust(
             headers={"content-type": "application/json"},
         )
 
-    async def _should_not_fallback(**kwargs: object) -> dict[str, object]:
-        raise AssertionError("local execution should not be used")
-
     monkeypatch.setattr(
         chat_sync_mod.RustExecutorClient,
         "execute_sync_json",
         _fake_execute_sync_json,
     )
     monkeypatch.setattr(chat_sync_mod, "get_format_converter_registry", lambda: _FakeRegistry())
-    monkeypatch.setattr(executor, "_execute_sync_plan_locally", _should_not_fallback)
 
     response = await executor._execute_sync_plan(
         prepared_plan=prepared_plan,
@@ -420,9 +397,6 @@ async def test_execute_sync_plan_aggregates_upstream_stream_after_rust(
             headers={"content-type": "text/event-stream"},
         )
 
-    async def _should_not_fallback(**kwargs: object) -> dict[str, object]:
-        raise AssertionError("local execution should not be used")
-
     monkeypatch.setattr(
         chat_sync_mod.RustExecutorClient,
         "execute_sync_json",
@@ -433,7 +407,6 @@ async def test_execute_sync_plan_aggregates_upstream_stream_after_rust(
         "src.api.handlers.base.upstream_stream_bridge.aggregate_upstream_stream_to_internal_response",
         _fake_aggregate,
     )
-    monkeypatch.setattr(executor, "_execute_sync_plan_locally", _should_not_fallback)
 
     response = await executor._execute_sync_plan(
         prepared_plan=prepared_plan,
@@ -467,15 +440,11 @@ async def test_execute_sync_plan_turns_rust_http_error_into_httpx_status_error(
             headers={"content-type": "application/json"},
         )
 
-    async def _should_not_fallback(**kwargs: object) -> dict[str, object]:
-        raise AssertionError("local execution should not be used")
-
     monkeypatch.setattr(
         chat_sync_mod.RustExecutorClient,
         "execute_sync_json",
         _fake_execute_sync_json,
     )
-    monkeypatch.setattr(executor, "_execute_sync_plan_locally", _should_not_fallback)
 
     with pytest.raises(httpx.HTTPStatusError) as exc_info:
         await executor._execute_sync_plan(
@@ -529,7 +498,7 @@ async def test_execute_sync_plan_preserves_embedded_error_semantics_from_rust(
 
 
 @pytest.mark.asyncio
-async def test_execute_sync_plan_falls_back_to_local_when_rust_unavailable(
+async def test_execute_sync_plan_raises_when_rust_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     executor = _make_executor()
@@ -541,25 +510,57 @@ async def test_execute_sync_plan_falls_back_to_local_when_rust_unavailable(
         assert plan.request_id == "req-test"
         raise RustExecutorClientError("executor down")
 
-    fallback_called = False
-
-    async def _fake_local_execute(**kwargs: object) -> dict[str, object]:
-        nonlocal fallback_called
-        fallback_called = True
-        return {"id": "local-fallback"}
-
     monkeypatch.setattr(
         chat_sync_mod.RustExecutorClient,
         "execute_sync_json",
         _fake_execute_sync_json,
     )
-    monkeypatch.setattr(executor, "_execute_sync_plan_locally", _fake_local_execute)
 
-    response = await executor._execute_sync_plan(
-        prepared_plan=prepared_plan,
-        provider=SimpleNamespace(name="provider"),
-        model="gpt-4.1",
+    with pytest.raises(ProviderNotAvailableException) as exc_info:
+        await executor._execute_sync_plan(
+            prepared_plan=prepared_plan,
+            provider=SimpleNamespace(name="provider"),
+            model="gpt-4.1",
+        )
+
+    assert exc_info.value.message == "执行器暂时不可用，请稍后重试"
+    assert exc_info.value.upstream_response == "executor down"
+
+
+@pytest.mark.asyncio
+async def test_execute_sync_plan_raises_when_remote_contract_is_ineligible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executor = _make_executor()
+    prepared_plan = _make_prepared_plan()
+    prepared_plan.contract.proxy = chat_sync_mod.ExecutionProxySnapshot(
+        enabled=True,
+        mode="tunnel",
+        label="relay-node",
     )
 
-    assert fallback_called is True
-    assert response == {"id": "local-fallback"}
+    monkeypatch.setattr(chat_sync_mod.config, "executor_backend", "rust")
+
+    async def _should_not_call_rust(self: object, plan: ExecutionPlan) -> RustExecutorSyncResult:
+        del self, plan
+        raise AssertionError("rust executor should not be called")
+
+    monkeypatch.setattr(
+        chat_sync_mod.RustExecutorClient,
+        "execute_sync_json",
+        _should_not_call_rust,
+    )
+
+    assert prepared_plan.remote_eligible is False
+
+    with pytest.raises(ProviderNotAvailableException) as exc_info:
+        await executor._execute_sync_plan(
+            prepared_plan=prepared_plan,
+            provider=SimpleNamespace(name="provider"),
+            model="gpt-4.1",
+        )
+
+    assert exc_info.value.message == "执行器暂时不可用，请稍后重试"
+    assert exc_info.value.upstream_response == (
+        "execution contract is not eligible for rust executor"
+    )

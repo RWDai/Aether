@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.orm import Session
 
@@ -19,6 +19,11 @@ from src.services.auth.oauth.service import OAuthService
 
 router = APIRouter(prefix="/api/admin/oauth", tags=["Admin - OAuth"])
 pipeline = get_pipeline()
+_OAUTH_ADMIN_LEGACY_DETAIL = "OAuth admin routes are retired; use Rust maintenance backend"
+
+
+def _raise_oauth_admin_legacy_unavailable() -> None:
+    raise HTTPException(status_code=503, detail=_OAUTH_ADMIN_LEGACY_DETAIL)
 
 
 class SupportedOAuthType(BaseModel):
@@ -85,12 +90,16 @@ class OAuthProviderTestRequest(BaseModel):
 
 @router.get("/supported-types", response_model=list[SupportedOAuthType])
 async def get_supported_types(request: Request, db: Session = Depends(get_db)) -> Any:
+    _ = request, db
+    _raise_oauth_admin_legacy_unavailable()
     adapter = GetSupportedTypesAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.get("/providers", response_model=list[OAuthProviderAdminResponse])
 async def list_provider_configs(request: Request, db: Session = Depends(get_db)) -> Any:
+    _ = request, db
+    _raise_oauth_admin_legacy_unavailable()
     adapter = ListOAuthProviderConfigsAdapter()
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -99,6 +108,8 @@ async def list_provider_configs(request: Request, db: Session = Depends(get_db))
 async def get_provider_config(
     provider_type: str, request: Request, db: Session = Depends(get_db)
 ) -> Any:
+    _ = provider_type, request, db
+    _raise_oauth_admin_legacy_unavailable()
     adapter = GetOAuthProviderConfigAdapter(provider_type=provider_type)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -107,6 +118,8 @@ async def get_provider_config(
 async def upsert_provider_config(
     provider_type: str, request: Request, db: Session = Depends(get_db)
 ) -> Any:
+    _ = provider_type, request, db
+    _raise_oauth_admin_legacy_unavailable()
     adapter = UpsertOAuthProviderConfigAdapter(provider_type=provider_type)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -115,6 +128,8 @@ async def upsert_provider_config(
 async def delete_provider_config(
     provider_type: str, request: Request, db: Session = Depends(get_db)
 ) -> Any:
+    _ = provider_type, request, db
+    _raise_oauth_admin_legacy_unavailable()
     adapter = DeleteOAuthProviderConfigAdapter(provider_type=provider_type)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
@@ -123,6 +138,8 @@ async def delete_provider_config(
 async def test_provider_config(
     provider_type: str, request: Request, db: Session = Depends(get_db)
 ) -> Any:
+    _ = provider_type, request, db
+    _raise_oauth_admin_legacy_unavailable()
     adapter = TestOAuthProviderConfigAdapter(provider_type=provider_type)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 

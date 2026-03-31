@@ -185,6 +185,24 @@ impl StoredRequestCandidate {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PublicHealthStatusCount {
+    pub endpoint_id: String,
+    pub status: RequestCandidateStatus,
+    pub count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PublicHealthTimelineBucket {
+    pub endpoint_id: String,
+    pub segment_idx: u32,
+    pub total_count: u64,
+    pub success_count: u64,
+    pub failed_count: u64,
+    pub min_created_at_unix_secs: Option<u64>,
+    pub max_created_at_unix_secs: Option<u64>,
+}
+
 #[async_trait]
 pub trait RequestCandidateReadRepository: Send + Sync {
     async fn list_by_request_id(
@@ -196,15 +214,106 @@ pub trait RequestCandidateReadRepository: Send + Sync {
         &self,
         limit: usize,
     ) -> Result<Vec<StoredRequestCandidate>, crate::DataLayerError>;
+
+    async fn list_by_provider_id(
+        &self,
+        provider_id: &str,
+        limit: usize,
+    ) -> Result<Vec<StoredRequestCandidate>, crate::DataLayerError>;
+
+    async fn list_finalized_by_endpoint_ids_since(
+        &self,
+        endpoint_ids: &[String],
+        since_unix_secs: u64,
+        limit: usize,
+    ) -> Result<Vec<StoredRequestCandidate>, crate::DataLayerError>;
+
+    async fn count_finalized_statuses_by_endpoint_ids_since(
+        &self,
+        endpoint_ids: &[String],
+        since_unix_secs: u64,
+    ) -> Result<Vec<PublicHealthStatusCount>, crate::DataLayerError>;
+
+    async fn aggregate_finalized_timeline_by_endpoint_ids_since(
+        &self,
+        endpoint_ids: &[String],
+        since_unix_secs: u64,
+        until_unix_secs: u64,
+        segments: u32,
+    ) -> Result<Vec<PublicHealthTimelineBucket>, crate::DataLayerError>;
 }
 
-pub trait RequestCandidateRepository: RequestCandidateReadRepository + Send + Sync {}
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct UpsertRequestCandidateRecord {
+    pub id: String,
+    pub request_id: String,
+    pub user_id: Option<String>,
+    pub api_key_id: Option<String>,
+    pub username: Option<String>,
+    pub api_key_name: Option<String>,
+    pub candidate_index: u32,
+    pub retry_index: u32,
+    pub provider_id: Option<String>,
+    pub endpoint_id: Option<String>,
+    pub key_id: Option<String>,
+    pub status: RequestCandidateStatus,
+    pub skip_reason: Option<String>,
+    pub is_cached: Option<bool>,
+    pub status_code: Option<u16>,
+    pub error_type: Option<String>,
+    pub error_message: Option<String>,
+    pub latency_ms: Option<u64>,
+    pub concurrent_requests: Option<u32>,
+    pub extra_data: Option<serde_json::Value>,
+    pub required_capabilities: Option<serde_json::Value>,
+    pub created_at_unix_secs: Option<u64>,
+    pub started_at_unix_secs: Option<u64>,
+    pub finished_at_unix_secs: Option<u64>,
+}
 
-impl<T> RequestCandidateRepository for T where T: RequestCandidateReadRepository + Send + Sync {}
+impl UpsertRequestCandidateRecord {
+    pub fn validate(&self) -> Result<(), crate::DataLayerError> {
+        if self.id.trim().is_empty() {
+            return Err(crate::DataLayerError::InvalidInput(
+                "request candidate upsert id cannot be empty".to_string(),
+            ));
+        }
+        if self.request_id.trim().is_empty() {
+            return Err(crate::DataLayerError::InvalidInput(
+                "request candidate upsert request_id cannot be empty".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+pub trait RequestCandidateWriteRepository: Send + Sync {
+    async fn upsert(
+        &self,
+        candidate: UpsertRequestCandidateRecord,
+    ) -> Result<StoredRequestCandidate, crate::DataLayerError>;
+
+    async fn delete_created_before(
+        &self,
+        created_before_unix_secs: u64,
+        limit: usize,
+    ) -> Result<usize, crate::DataLayerError>;
+}
+
+pub trait RequestCandidateRepository:
+    RequestCandidateReadRepository + RequestCandidateWriteRepository + Send + Sync
+{
+}
+
+impl<T> RequestCandidateRepository for T where
+    T: RequestCandidateReadRepository + RequestCandidateWriteRepository + Send + Sync
+{
+}
 
 #[cfg(test)]
 mod tests {
-    use super::{RequestCandidateStatus, StoredRequestCandidate};
+    use super::{RequestCandidateStatus, StoredRequestCandidate, UpsertRequestCandidateRecord};
 
     #[test]
     fn parses_status_from_database_text() {
@@ -285,5 +394,37 @@ mod tests {
     fn pending_without_started_at_is_not_attempted() {
         assert!(!RequestCandidateStatus::Pending.is_attempted(None));
         assert!(RequestCandidateStatus::Pending.is_attempted(Some(1)));
+    }
+
+    #[test]
+    fn rejects_invalid_upsert_payload() {
+        assert!(UpsertRequestCandidateRecord {
+            id: "".to_string(),
+            request_id: "".to_string(),
+            user_id: None,
+            api_key_id: None,
+            username: None,
+            api_key_name: None,
+            candidate_index: 0,
+            retry_index: 0,
+            provider_id: None,
+            endpoint_id: None,
+            key_id: None,
+            status: RequestCandidateStatus::Available,
+            skip_reason: None,
+            is_cached: None,
+            status_code: None,
+            error_type: None,
+            error_message: None,
+            latency_ms: None,
+            concurrent_requests: None,
+            extra_data: None,
+            required_capabilities: None,
+            created_at_unix_secs: None,
+            started_at_unix_secs: None,
+            finished_at_unix_secs: None,
+        }
+        .validate()
+        .is_err());
     }
 }

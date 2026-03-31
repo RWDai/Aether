@@ -20,7 +20,7 @@
 
     <!-- 加载状态 -->
     <div
-      v-if="loading"
+      v-if="isLoading"
       class="flex items-center justify-center py-12"
     >
       <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
@@ -396,6 +396,7 @@ const props = defineProps<{
   providerKeys?: EndpointAPIKey[]
   models?: Model[]
   mappingPreview?: ProviderMappingPreviewResponse | null
+  loading?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -428,6 +429,7 @@ const parsedTestRequestHeaders = computed(() => parseModelTestRequestHeadersDraf
 const testRequestHeadersError = computed(() => parsedTestRequestHeaders.value.error)
 const parsedTestRequestBody = computed(() => parseModelTestRequestBodyDraft(testRequestBodyDraft.value))
 const testRequestBodyError = computed(() => parsedTestRequestBody.value.error)
+const isLoading = computed(() => Boolean(props.loading) || loading.value)
 
 // 使用 props 传入的数据
 const models = computed(() => props.models ?? [])

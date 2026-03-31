@@ -6,6 +6,7 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 import pytest
 
+from src.services.auth.oauth.models import OAuthFlowError
 from src.services.auth.oauth.providers.linuxdo import LinuxDoOAuthProvider
 
 
@@ -31,6 +32,28 @@ def test_linuxdo_authorization_url_omits_empty_scope() -> None:
     assert parsed.netloc == "connect.linux.do"
     assert "scope" not in params
     assert params["state"] == ["state-1"]
+
+
+@pytest.mark.asyncio
+async def test_linuxdo_exchange_code_requires_rust_executor() -> None:
+    provider = LinuxDoOAuthProvider()
+
+    with pytest.raises(OAuthFlowError) as exc_info:
+        await provider.exchange_code(_make_config(), "code-0")
+
+    assert exc_info.value.error_code == "provider_unavailable"
+    assert exc_info.value.detail == "OAuth 仅支持 Rust executor"
+
+
+@pytest.mark.asyncio
+async def test_linuxdo_get_user_info_requires_rust_executor() -> None:
+    provider = LinuxDoOAuthProvider()
+
+    with pytest.raises(OAuthFlowError) as exc_info:
+        await provider.get_user_info(_make_config(), "access-token")
+
+    assert exc_info.value.error_code == "provider_unavailable"
+    assert exc_info.value.detail == "OAuth 仅支持 Rust executor"
 
 
 @pytest.mark.asyncio

@@ -84,6 +84,57 @@ pub(crate) fn maybe_build_local_openai_chat_stream_sync_response(
     )?))
 }
 
+pub(crate) fn maybe_build_local_openai_chat_sync_response(
+    trace_id: &str,
+    decision: &GatewayControlDecision,
+    payload: &GatewaySyncReportRequest,
+) -> Result<Option<LocalCoreSyncFinalizeOutcome>, GatewayError> {
+    if payload.report_kind != "openai_chat_sync_finalize" || payload.status_code >= 400 {
+        return Ok(None);
+    }
+
+    let Some(report_context) = payload.report_context.as_ref() else {
+        return Ok(None);
+    };
+    let provider_api_format = report_context
+        .get("provider_api_format")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    let client_api_format = report_context
+        .get("client_api_format")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    let needs_conversion = report_context
+        .get("needs_conversion")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if !local_finalize_allows_envelope(report_context) {
+        return Ok(None);
+    }
+    if provider_api_format != "openai:chat"
+        || client_api_format != "openai:chat"
+        || needs_conversion
+    {
+        return Ok(None);
+    }
+
+    let Some(body_json) = payload.body_json.as_ref() else {
+        return Ok(None);
+    };
+    let Some(body_json) = unwrap_local_finalize_response_value(body_json.clone(), report_context)?
+    else {
+        return Ok(None);
+    };
+
+    Ok(Some(build_local_success_outcome(
+        trace_id, decision, payload, body_json,
+    )?))
+}
+
 pub(crate) fn maybe_build_local_openai_chat_cross_format_stream_sync_response(
     trace_id: &str,
     decision: &GatewayControlDecision,

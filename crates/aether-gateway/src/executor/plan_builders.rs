@@ -19,11 +19,6 @@ mod stream;
 #[path = "plan_builders/sync.rs"]
 mod sync;
 
-pub(super) use shared::{
-    build_direct_plan_bypass_cache_key, is_matching_stream_request, mark_direct_plan_bypass,
-    resolve_direct_executor_stream_plan_kind, resolve_direct_executor_sync_plan_kind,
-    should_skip_direct_plan,
-};
 pub(crate) use stream::{
     build_gemini_stream_plan_from_decision, build_openai_cli_stream_plan_from_decision,
     build_standard_stream_plan_from_decision,

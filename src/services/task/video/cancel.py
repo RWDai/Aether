@@ -36,7 +36,6 @@ class VideoTaskCancelService:
         import httpx
         from fastapi import HTTPException
 
-        from src.clients.http_client import HTTPClientPool
         from src.core.api_format import (
             build_upstream_headers_for_endpoint,
             get_extra_headers_from_endpoint,
@@ -104,7 +103,7 @@ class VideoTaskCancelService:
             request_headers: dict[str, str],
             body: Any,
             content_type: str | None = None,
-        ) -> httpx.Response | None:
+        ) -> httpx.Response:
             from src.services.request.executor_plan import (
                 ExecutionPlan,
                 ExecutionPlanTimeouts,
@@ -116,7 +115,11 @@ class VideoTaskCancelService:
             )
 
             if config.executor_backend != "rust":
-                return None
+                return httpx.Response(
+                    status_code=503,
+                    request=httpx.Request(method, url, headers=request_headers),
+                    json={"error": {"message": "Video 取消仅支持 Rust executor"}},
+                )
 
             final_headers = dict(request_headers)
             if (
@@ -161,7 +164,11 @@ class VideoTaskCancelService:
                     url,
                     str(exc),
                 )
-                return None
+                return httpx.Response(
+                    status_code=503,
+                    request=httpx.Request(method, url, headers=final_headers),
+                    json={"error": {"message": "执行器暂时不可用，请稍后重试"}},
+                )
 
             response_headers = dict(result.headers)
             if result.response_json is not None:
@@ -188,9 +195,6 @@ class VideoTaskCancelService:
                 request_headers=headers,
                 body=None,
             )
-            if response is None:
-                client = await HTTPClientPool.get_default_client_async()
-                response = await client.delete(upstream_url, headers=headers)
             if response.status_code >= 400:
                 return response
 
@@ -223,9 +227,6 @@ class VideoTaskCancelService:
                 body={},
                 content_type="application/json",
             )
-            if response is None:
-                client = await HTTPClientPool.get_default_client_async()
-                response = await client.post(upstream_url, headers=headers, json={})
             if response.status_code >= 400:
                 return response
 

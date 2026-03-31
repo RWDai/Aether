@@ -7,24 +7,40 @@ repository.workspace = true
 description = "Rust ingress gateway for Aether phase 3a transparent proxy"
 
 [dependencies]
+aether-billing.workspace = true
 aether-cache.workspace = true
 aether-contracts.workspace = true
+aether-crypto.workspace = true
 aether-data.workspace = true
 aether-http.workspace = true
 aether-runtime.workspace = true
+aether-wallet.workspace = true
 async-stream.workspace = true
+async-trait.workspace = true
 axum = { version = "0.8" }
 base64.workspace = true
+bcrypt.workspace = true
 bytes.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
 clap = { version = "4", features = ["derive", "env"] }
+flate2.workspace = true
 futures-util.workspace = true
+hmac.workspace = true
 http.workspace = true
+ldap3 = "0.11"
+regex.workspace = true
+redis.workspace = true
 reqwest.workspace = true
+rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
 url.workspace = true
 uuid.workspace = true
+webpki-roots.workspace = true

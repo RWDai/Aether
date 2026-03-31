@@ -3,13 +3,20 @@ use std::sync::RwLock;
 
 use async_trait::async_trait;
 
-use super::types::{AuthApiKeyLookupKey, AuthApiKeyReadRepository, StoredAuthApiKeySnapshot};
+use super::types::{
+    AuthApiKeyExportSummary, AuthApiKeyLookupKey, AuthApiKeyReadRepository,
+    AuthApiKeyWriteRepository, CreateStandaloneApiKeyRecord, CreateUserApiKeyRecord,
+    StandaloneApiKeyExportListQuery, StoredAuthApiKeyExportRecord, StoredAuthApiKeySnapshot,
+    UpdateStandaloneApiKeyBasicRecord, UpdateUserApiKeyBasicRecord,
+};
 use crate::DataLayerError;
 
 #[derive(Debug, Default)]
 struct MemoryAuthApiKeyIndex {
     by_api_key_id: BTreeMap<String, StoredAuthApiKeySnapshot>,
+    export_by_api_key_id: BTreeMap<String, StoredAuthApiKeyExportRecord>,
     by_key_hash: BTreeMap<String, String>,
+    touch_counts: BTreeMap<String, usize>,
 }
 
 #[derive(Debug, Default)]
@@ -23,8 +30,46 @@ impl InMemoryAuthApiKeySnapshotRepository {
         I: IntoIterator<Item = (Option<String>, StoredAuthApiKeySnapshot)>,
     {
         let mut by_api_key_id = BTreeMap::new();
+        let mut export_by_api_key_id = BTreeMap::new();
         let mut by_key_hash = BTreeMap::new();
         for (key_hash, snapshot) in items {
+            let derived_key_hash = key_hash
+                .clone()
+                .unwrap_or_else(|| format!("memory-{}", snapshot.api_key_id));
+            export_by_api_key_id.insert(
+                snapshot.api_key_id.clone(),
+                StoredAuthApiKeyExportRecord::new(
+                    snapshot.user_id.clone(),
+                    snapshot.api_key_id.clone(),
+                    derived_key_hash.clone(),
+                    None,
+                    snapshot.api_key_name.clone(),
+                    snapshot
+                        .api_key_allowed_providers
+                        .as_ref()
+                        .map(|value| serde_json::json!(value)),
+                    snapshot
+                        .api_key_allowed_api_formats
+                        .as_ref()
+                        .map(|value| serde_json::json!(value)),
+                    snapshot
+                        .api_key_allowed_models
+                        .as_ref()
+                        .map(|value| serde_json::json!(value)),
+                    snapshot.api_key_rate_limit,
+                    snapshot.api_key_concurrent_limit,
+                    None,
+                    snapshot.api_key_is_active,
+                    snapshot
+                        .api_key_expires_at_unix_secs
+                        .map(|value| value as i64),
+                    false,
+                    0,
+                    0.0,
+                    snapshot.api_key_is_standalone,
+                )
+                .expect("derived auth api key export record should build"),
+            );
             if let Some(key_hash) = key_hash {
                 by_key_hash.insert(key_hash, snapshot.api_key_id.clone());
             }
@@ -33,9 +78,37 @@ impl InMemoryAuthApiKeySnapshotRepository {
         Self {
             index: RwLock::new(MemoryAuthApiKeyIndex {
                 by_api_key_id,
+                export_by_api_key_id,
                 by_key_hash,
+                touch_counts: BTreeMap::new(),
             }),
         }
+    }
+
+    pub fn with_export_records<I>(mut self, items: I) -> Self
+    where
+        I: IntoIterator<Item = StoredAuthApiKeyExportRecord>,
+    {
+        let index = self
+            .index
+            .get_mut()
+            .expect("auth api key snapshot repository lock");
+        for item in items {
+            index
+                .export_by_api_key_id
+                .insert(item.api_key_id.clone(), item);
+        }
+        self
+    }
+
+    pub fn touch_count(&self, api_key_id: &str) -> usize {
+        self.index
+            .read()
+            .expect("auth api key snapshot repository lock")
+            .touch_counts
+            .get(api_key_id)
+            .copied()
+            .unwrap_or(0)
     }
 }
 
@@ -68,13 +141,698 @@ impl AuthApiKeyReadRepository for InMemoryAuthApiKeySnapshotRepository {
                 .cloned(),
         })
     }
+
+    async fn list_api_key_snapshots_by_ids(
+        &self,
+        api_key_ids: &[String],
+    ) -> Result<Vec<StoredAuthApiKeySnapshot>, DataLayerError> {
+        let index = self
+            .index
+            .read()
+            .expect("auth api key snapshot repository lock");
+        Ok(api_key_ids
+            .iter()
+            .filter_map(|api_key_id| index.by_api_key_id.get(api_key_id).cloned())
+            .collect())
+    }
+
+    async fn list_export_api_keys_by_user_ids(
+        &self,
+        user_ids: &[String],
+    ) -> Result<Vec<StoredAuthApiKeyExportRecord>, DataLayerError> {
+        let index = self
+            .index
+            .read()
+            .expect("auth api key snapshot repository lock");
+        Ok(index
+            .export_by_api_key_id
+            .values()
+            .filter(|record| {
+                !record.is_standalone && user_ids.iter().any(|id| id == &record.user_id)
+            })
+            .cloned()
+            .collect())
+    }
+
+    async fn list_export_api_keys_by_ids(
+        &self,
+        api_key_ids: &[String],
+    ) -> Result<Vec<StoredAuthApiKeyExportRecord>, DataLayerError> {
+        let index = self
+            .index
+            .read()
+            .expect("auth api key snapshot repository lock");
+        Ok(api_key_ids
+            .iter()
+            .filter_map(|api_key_id| index.export_by_api_key_id.get(api_key_id).cloned())
+            .collect())
+    }
+
+    async fn list_export_standalone_api_keys_page(
+        &self,
+        query: &StandaloneApiKeyExportListQuery,
+    ) -> Result<Vec<StoredAuthApiKeyExportRecord>, DataLayerError> {
+        let index = self
+            .index
+            .read()
+            .expect("auth api key snapshot repository lock");
+        Ok(index
+            .export_by_api_key_id
+            .values()
+            .filter(|record| {
+                record.is_standalone
+                    && query
+                        .is_active
+                        .is_none_or(|is_active| record.is_active == is_active)
+            })
+            .skip(query.skip)
+            .take(query.limit)
+            .cloned()
+            .collect())
+    }
+
+    async fn count_export_standalone_api_keys(
+        &self,
+        is_active: Option<bool>,
+    ) -> Result<u64, DataLayerError> {
+        let index = self
+            .index
+            .read()
+            .expect("auth api key snapshot repository lock");
+        Ok(index
+            .export_by_api_key_id
+            .values()
+            .filter(|record| {
+                record.is_standalone
+                    && is_active.is_none_or(|expected| record.is_active == expected)
+            })
+            .count() as u64)
+    }
+
+    async fn summarize_export_api_keys_by_user_ids(
+        &self,
+        user_ids: &[String],
+        now_unix_secs: u64,
+    ) -> Result<AuthApiKeyExportSummary, DataLayerError> {
+        let index = self
+            .index
+            .read()
+            .expect("auth api key snapshot repository lock");
+        let mut summary = AuthApiKeyExportSummary::default();
+        for record in index.export_by_api_key_id.values().filter(|record| {
+            !record.is_standalone && user_ids.iter().any(|id| id == &record.user_id)
+        }) {
+            summary.total = summary.total.saturating_add(1);
+            if record.is_active
+                && record
+                    .expires_at_unix_secs
+                    .is_none_or(|expires_at_unix_secs| expires_at_unix_secs >= now_unix_secs)
+            {
+                summary.active = summary.active.saturating_add(1);
+            }
+        }
+        Ok(summary)
+    }
+
+    async fn summarize_export_non_standalone_api_keys(
+        &self,
+        now_unix_secs: u64,
+    ) -> Result<AuthApiKeyExportSummary, DataLayerError> {
+        let index = self
+            .index
+            .read()
+            .expect("auth api key snapshot repository lock");
+        let mut summary = AuthApiKeyExportSummary::default();
+        for record in index
+            .export_by_api_key_id
+            .values()
+            .filter(|record| !record.is_standalone)
+        {
+            summary.total = summary.total.saturating_add(1);
+            if record.is_active
+                && record
+                    .expires_at_unix_secs
+                    .is_none_or(|expires_at_unix_secs| expires_at_unix_secs >= now_unix_secs)
+            {
+                summary.active = summary.active.saturating_add(1);
+            }
+        }
+        Ok(summary)
+    }
+
+    async fn find_export_standalone_api_key_by_id(
+        &self,
+        api_key_id: &str,
+    ) -> Result<Option<StoredAuthApiKeyExportRecord>, DataLayerError> {
+        let index = self
+            .index
+            .read()
+            .expect("auth api key snapshot repository lock");
+        Ok(index
+            .export_by_api_key_id
+            .get(api_key_id)
+            .filter(|record| record.is_standalone)
+            .cloned())
+    }
+
+    async fn summarize_export_standalone_api_keys(
+        &self,
+        now_unix_secs: u64,
+    ) -> Result<AuthApiKeyExportSummary, DataLayerError> {
+        let index = self
+            .index
+            .read()
+            .expect("auth api key snapshot repository lock");
+        let mut summary = AuthApiKeyExportSummary::default();
+        for record in index
+            .export_by_api_key_id
+            .values()
+            .filter(|record| record.is_standalone)
+        {
+            summary.total = summary.total.saturating_add(1);
+            if record.is_active
+                && record
+                    .expires_at_unix_secs
+                    .is_none_or(|expires_at_unix_secs| expires_at_unix_secs >= now_unix_secs)
+            {
+                summary.active = summary.active.saturating_add(1);
+            }
+        }
+        Ok(summary)
+    }
+
+    async fn list_export_standalone_api_keys(
+        &self,
+    ) -> Result<Vec<StoredAuthApiKeyExportRecord>, DataLayerError> {
+        let index = self
+            .index
+            .read()
+            .expect("auth api key snapshot repository lock");
+        Ok(index
+            .export_by_api_key_id
+            .values()
+            .filter(|record| record.is_standalone)
+            .cloned()
+            .collect())
+    }
+}
+
+#[async_trait]
+impl AuthApiKeyWriteRepository for InMemoryAuthApiKeySnapshotRepository {
+    async fn touch_last_used_at(&self, api_key_id: &str) -> Result<bool, DataLayerError> {
+        let mut index = self
+            .index
+            .write()
+            .expect("auth api key snapshot repository lock");
+        if !index.by_api_key_id.contains_key(api_key_id) {
+            return Ok(false);
+        }
+        let counter = index
+            .touch_counts
+            .entry(api_key_id.to_string())
+            .or_insert(0);
+        *counter += 1;
+        Ok(true)
+    }
+
+    async fn create_user_api_key(
+        &self,
+        record: CreateUserApiKeyRecord,
+    ) -> Result<Option<StoredAuthApiKeyExportRecord>, DataLayerError> {
+        let mut index = self
+            .index
+            .write()
+            .expect("auth api key snapshot repository lock");
+        if index.by_api_key_id.contains_key(&record.api_key_id) {
+            return Err(DataLayerError::UnexpectedValue(format!(
+                "duplicate api_keys.id: {}",
+                record.api_key_id
+            )));
+        }
+        if index.by_key_hash.contains_key(&record.key_hash) {
+            return Err(DataLayerError::UnexpectedValue(format!(
+                "duplicate api_keys.key_hash: {}",
+                record.key_hash
+            )));
+        }
+
+        let template = index
+            .by_api_key_id
+            .values()
+            .find(|snapshot| snapshot.user_id == record.user_id)
+            .cloned();
+        let snapshot = if let Some(template) = template {
+            StoredAuthApiKeySnapshot {
+                api_key_id: record.api_key_id.clone(),
+                api_key_name: record.name.clone(),
+                api_key_is_active: true,
+                api_key_is_locked: false,
+                api_key_is_standalone: false,
+                api_key_rate_limit: Some(record.rate_limit),
+                api_key_concurrent_limit: Some(record.concurrent_limit),
+                api_key_expires_at_unix_secs: None,
+                api_key_allowed_providers: None,
+                api_key_allowed_api_formats: None,
+                api_key_allowed_models: None,
+                ..template
+            }
+        } else {
+            StoredAuthApiKeySnapshot::new(
+                record.user_id.clone(),
+                format!(
+                    "user-{}",
+                    &record.user_id.chars().take(8).collect::<String>()
+                ),
+                None,
+                "user".to_string(),
+                "local".to_string(),
+                true,
+                false,
+                None,
+                None,
+                None,
+                record.api_key_id.clone(),
+                record.name.clone(),
+                true,
+                false,
+                false,
+                Some(record.rate_limit),
+                Some(record.concurrent_limit),
+                None,
+                None,
+                None,
+                None,
+            )?
+        };
+
+        let export = StoredAuthApiKeyExportRecord::new(
+            record.user_id.clone(),
+            record.api_key_id.clone(),
+            record.key_hash.clone(),
+            record.key_encrypted,
+            record.name,
+            None,
+            None,
+            None,
+            Some(record.rate_limit),
+            Some(record.concurrent_limit),
+            None,
+            true,
+            None,
+            false,
+            0,
+            0.0,
+            false,
+        )?;
+
+        index
+            .by_key_hash
+            .insert(record.key_hash, record.api_key_id.clone());
+        index
+            .by_api_key_id
+            .insert(record.api_key_id.clone(), snapshot);
+        index
+            .export_by_api_key_id
+            .insert(record.api_key_id, export.clone());
+        Ok(Some(export))
+    }
+
+    async fn create_standalone_api_key(
+        &self,
+        record: CreateStandaloneApiKeyRecord,
+    ) -> Result<Option<StoredAuthApiKeyExportRecord>, DataLayerError> {
+        let mut index = self
+            .index
+            .write()
+            .expect("auth api key snapshot repository lock");
+        if index.by_api_key_id.contains_key(&record.api_key_id) {
+            return Err(DataLayerError::UnexpectedValue(format!(
+                "duplicate api_keys.id: {}",
+                record.api_key_id
+            )));
+        }
+        if index.by_key_hash.contains_key(&record.key_hash) {
+            return Err(DataLayerError::UnexpectedValue(format!(
+                "duplicate api_keys.key_hash: {}",
+                record.key_hash
+            )));
+        }
+
+        let template = index
+            .by_api_key_id
+            .values()
+            .find(|snapshot| snapshot.user_id == record.user_id)
+            .cloned();
+        let snapshot = if let Some(template) = template {
+            StoredAuthApiKeySnapshot {
+                api_key_id: record.api_key_id.clone(),
+                api_key_name: record.name.clone(),
+                api_key_is_active: true,
+                api_key_is_locked: false,
+                api_key_is_standalone: true,
+                api_key_rate_limit: Some(record.rate_limit),
+                api_key_concurrent_limit: Some(record.concurrent_limit),
+                api_key_expires_at_unix_secs: None,
+                api_key_allowed_providers: record.allowed_providers.clone(),
+                api_key_allowed_api_formats: record.allowed_api_formats.clone(),
+                api_key_allowed_models: record.allowed_models.clone(),
+                ..template
+            }
+        } else {
+            StoredAuthApiKeySnapshot::new(
+                record.user_id.clone(),
+                format!(
+                    "admin-{}",
+                    &record.user_id.chars().take(8).collect::<String>()
+                ),
+                None,
+                "admin".to_string(),
+                "local".to_string(),
+                true,
+                false,
+                None,
+                None,
+                None,
+                record.api_key_id.clone(),
+                record.name.clone(),
+                true,
+                false,
+                true,
+                Some(record.rate_limit),
+                Some(record.concurrent_limit),
+                None,
+                record
+                    .allowed_providers
+                    .as_ref()
+                    .map(|value| serde_json::json!(value)),
+                record
+                    .allowed_api_formats
+                    .as_ref()
+                    .map(|value| serde_json::json!(value)),
+                record
+                    .allowed_models
+                    .as_ref()
+                    .map(|value| serde_json::json!(value)),
+            )?
+        };
+
+        let export = StoredAuthApiKeyExportRecord::new(
+            record.user_id.clone(),
+            record.api_key_id.clone(),
+            record.key_hash.clone(),
+            record.key_encrypted,
+            record.name,
+            record
+                .allowed_providers
+                .as_ref()
+                .map(|value| serde_json::json!(value)),
+            record
+                .allowed_api_formats
+                .as_ref()
+                .map(|value| serde_json::json!(value)),
+            record
+                .allowed_models
+                .as_ref()
+                .map(|value| serde_json::json!(value)),
+            Some(record.rate_limit),
+            Some(record.concurrent_limit),
+            None,
+            true,
+            None,
+            false,
+            0,
+            0.0,
+            true,
+        )?;
+
+        index
+            .by_key_hash
+            .insert(record.key_hash, record.api_key_id.clone());
+        index
+            .by_api_key_id
+            .insert(record.api_key_id.clone(), snapshot);
+        index
+            .export_by_api_key_id
+            .insert(record.api_key_id, export.clone());
+        Ok(Some(export))
+    }
+
+    async fn update_user_api_key_basic(
+        &self,
+        record: UpdateUserApiKeyBasicRecord,
+    ) -> Result<Option<StoredAuthApiKeyExportRecord>, DataLayerError> {
+        let mut index = self
+            .index
+            .write()
+            .expect("auth api key snapshot repository lock");
+        let Some(snapshot) = index.by_api_key_id.get(&record.api_key_id) else {
+            return Ok(None);
+        };
+        if snapshot.user_id != record.user_id || snapshot.api_key_is_standalone {
+            return Ok(None);
+        }
+        if let Some(name) = record.name {
+            if let Some(snapshot) = index.by_api_key_id.get_mut(&record.api_key_id) {
+                snapshot.api_key_name = Some(name.clone());
+            }
+            if let Some(export) = index.export_by_api_key_id.get_mut(&record.api_key_id) {
+                export.name = Some(name);
+            }
+        }
+        if let Some(rate_limit) = record.rate_limit {
+            if let Some(snapshot) = index.by_api_key_id.get_mut(&record.api_key_id) {
+                snapshot.api_key_rate_limit = Some(rate_limit);
+            }
+            if let Some(export) = index.export_by_api_key_id.get_mut(&record.api_key_id) {
+                export.rate_limit = Some(rate_limit);
+            }
+        }
+        Ok(index.export_by_api_key_id.get(&record.api_key_id).cloned())
+    }
+
+    async fn update_standalone_api_key_basic(
+        &self,
+        record: UpdateStandaloneApiKeyBasicRecord,
+    ) -> Result<Option<StoredAuthApiKeyExportRecord>, DataLayerError> {
+        let mut index = self
+            .index
+            .write()
+            .expect("auth api key snapshot repository lock");
+        let Some(snapshot) = index.by_api_key_id.get(&record.api_key_id) else {
+            return Ok(None);
+        };
+        if !snapshot.api_key_is_standalone {
+            return Ok(None);
+        }
+        if let Some(name) = record.name {
+            if let Some(snapshot) = index.by_api_key_id.get_mut(&record.api_key_id) {
+                snapshot.api_key_name = Some(name.clone());
+            }
+            if let Some(export) = index.export_by_api_key_id.get_mut(&record.api_key_id) {
+                export.name = Some(name);
+            }
+        }
+        if let Some(rate_limit) = record.rate_limit {
+            if let Some(snapshot) = index.by_api_key_id.get_mut(&record.api_key_id) {
+                snapshot.api_key_rate_limit = Some(rate_limit);
+            }
+            if let Some(export) = index.export_by_api_key_id.get_mut(&record.api_key_id) {
+                export.rate_limit = Some(rate_limit);
+            }
+        }
+        if let Some(allowed_providers) = record.allowed_providers {
+            if let Some(snapshot) = index.by_api_key_id.get_mut(&record.api_key_id) {
+                snapshot.api_key_allowed_providers = allowed_providers.clone();
+            }
+            if let Some(export) = index.export_by_api_key_id.get_mut(&record.api_key_id) {
+                export.allowed_providers = allowed_providers;
+            }
+        }
+        if let Some(allowed_api_formats) = record.allowed_api_formats {
+            if let Some(snapshot) = index.by_api_key_id.get_mut(&record.api_key_id) {
+                snapshot.api_key_allowed_api_formats = allowed_api_formats.clone();
+            }
+            if let Some(export) = index.export_by_api_key_id.get_mut(&record.api_key_id) {
+                export.allowed_api_formats = allowed_api_formats;
+            }
+        }
+        if let Some(allowed_models) = record.allowed_models {
+            if let Some(snapshot) = index.by_api_key_id.get_mut(&record.api_key_id) {
+                snapshot.api_key_allowed_models = allowed_models.clone();
+            }
+            if let Some(export) = index.export_by_api_key_id.get_mut(&record.api_key_id) {
+                export.allowed_models = allowed_models;
+            }
+        }
+        Ok(index.export_by_api_key_id.get(&record.api_key_id).cloned())
+    }
+
+    async fn set_user_api_key_active(
+        &self,
+        user_id: &str,
+        api_key_id: &str,
+        is_active: bool,
+    ) -> Result<Option<StoredAuthApiKeyExportRecord>, DataLayerError> {
+        let mut index = self
+            .index
+            .write()
+            .expect("auth api key snapshot repository lock");
+        let Some(snapshot) = index.by_api_key_id.get(api_key_id) else {
+            return Ok(None);
+        };
+        if snapshot.user_id != user_id || snapshot.api_key_is_standalone {
+            return Ok(None);
+        }
+        if let Some(snapshot) = index.by_api_key_id.get_mut(api_key_id) {
+            snapshot.api_key_is_active = is_active;
+        }
+        if let Some(export) = index.export_by_api_key_id.get_mut(api_key_id) {
+            export.is_active = is_active;
+        }
+        Ok(index.export_by_api_key_id.get(api_key_id).cloned())
+    }
+
+    async fn set_standalone_api_key_active(
+        &self,
+        api_key_id: &str,
+        is_active: bool,
+    ) -> Result<Option<StoredAuthApiKeyExportRecord>, DataLayerError> {
+        let mut index = self
+            .index
+            .write()
+            .expect("auth api key snapshot repository lock");
+        let Some(snapshot) = index.by_api_key_id.get(api_key_id) else {
+            return Ok(None);
+        };
+        if !snapshot.api_key_is_standalone {
+            return Ok(None);
+        }
+        if let Some(snapshot) = index.by_api_key_id.get_mut(api_key_id) {
+            snapshot.api_key_is_active = is_active;
+        }
+        if let Some(export) = index.export_by_api_key_id.get_mut(api_key_id) {
+            export.is_active = is_active;
+        }
+        Ok(index.export_by_api_key_id.get(api_key_id).cloned())
+    }
+
+    async fn set_user_api_key_locked(
+        &self,
+        user_id: &str,
+        api_key_id: &str,
+        is_locked: bool,
+    ) -> Result<bool, DataLayerError> {
+        let mut index = self
+            .index
+            .write()
+            .expect("auth api key snapshot repository lock");
+        let Some(snapshot) = index.by_api_key_id.get(api_key_id) else {
+            return Ok(false);
+        };
+        if snapshot.user_id != user_id || snapshot.api_key_is_standalone {
+            return Ok(false);
+        }
+        if let Some(snapshot) = index.by_api_key_id.get_mut(api_key_id) {
+            snapshot.api_key_is_locked = is_locked;
+        }
+        Ok(true)
+    }
+
+    async fn set_user_api_key_allowed_providers(
+        &self,
+        user_id: &str,
+        api_key_id: &str,
+        allowed_providers: Option<Vec<String>>,
+    ) -> Result<Option<StoredAuthApiKeyExportRecord>, DataLayerError> {
+        let mut index = self
+            .index
+            .write()
+            .expect("auth api key snapshot repository lock");
+        let Some(snapshot) = index.by_api_key_id.get(api_key_id) else {
+            return Ok(None);
+        };
+        if snapshot.user_id != user_id || snapshot.api_key_is_standalone {
+            return Ok(None);
+        }
+        if let Some(snapshot) = index.by_api_key_id.get_mut(api_key_id) {
+            snapshot.api_key_allowed_providers = allowed_providers.clone();
+        }
+        if let Some(export) = index.export_by_api_key_id.get_mut(api_key_id) {
+            export.allowed_providers = allowed_providers;
+        }
+        Ok(index.export_by_api_key_id.get(api_key_id).cloned())
+    }
+
+    async fn set_user_api_key_force_capabilities(
+        &self,
+        user_id: &str,
+        api_key_id: &str,
+        force_capabilities: Option<serde_json::Value>,
+    ) -> Result<Option<StoredAuthApiKeyExportRecord>, DataLayerError> {
+        let mut index = self
+            .index
+            .write()
+            .expect("auth api key snapshot repository lock");
+        let Some(snapshot) = index.by_api_key_id.get(api_key_id) else {
+            return Ok(None);
+        };
+        if snapshot.user_id != user_id || snapshot.api_key_is_standalone {
+            return Ok(None);
+        }
+        let Some(export) = index.export_by_api_key_id.get_mut(api_key_id) else {
+            return Ok(None);
+        };
+        export.force_capabilities = force_capabilities;
+        Ok(Some(export.clone()))
+    }
+
+    async fn delete_user_api_key(
+        &self,
+        user_id: &str,
+        api_key_id: &str,
+    ) -> Result<bool, DataLayerError> {
+        let mut index = self
+            .index
+            .write()
+            .expect("auth api key snapshot repository lock");
+        let Some(snapshot) = index.by_api_key_id.get(api_key_id) else {
+            return Ok(false);
+        };
+        if snapshot.user_id != user_id || snapshot.api_key_is_standalone {
+            return Ok(false);
+        }
+        index.by_api_key_id.remove(api_key_id);
+        index.export_by_api_key_id.remove(api_key_id);
+        index.by_key_hash.retain(|_, value| value != api_key_id);
+        index.touch_counts.remove(api_key_id);
+        Ok(true)
+    }
+
+    async fn delete_standalone_api_key(&self, api_key_id: &str) -> Result<bool, DataLayerError> {
+        let mut index = self
+            .index
+            .write()
+            .expect("auth api key snapshot repository lock");
+        let Some(snapshot) = index.by_api_key_id.get(api_key_id) else {
+            return Ok(false);
+        };
+        if !snapshot.api_key_is_standalone {
+            return Ok(false);
+        }
+        index.by_api_key_id.remove(api_key_id);
+        index.export_by_api_key_id.remove(api_key_id);
+        index.by_key_hash.retain(|_, value| value != api_key_id);
+        index.touch_counts.remove(api_key_id);
+        Ok(true)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::InMemoryAuthApiKeySnapshotRepository;
     use crate::repository::auth::{
-        AuthApiKeyLookupKey, AuthApiKeyReadRepository, StoredAuthApiKeySnapshot,
+        AuthApiKeyLookupKey, AuthApiKeyReadRepository, AuthApiKeyWriteRepository,
+        StandaloneApiKeyExportListQuery, StoredAuthApiKeyExportRecord, StoredAuthApiKeySnapshot,
     };
 
     fn sample_snapshot(api_key_id: &str, user_id: &str) -> StoredAuthApiKeySnapshot {
@@ -129,5 +887,132 @@ mod tests {
             .await
             .expect("find by user/api key ids should succeed")
             .is_some());
+        let snapshots = repository
+            .list_api_key_snapshots_by_ids(&["key-1".to_string(), "missing".to_string()])
+            .await
+            .expect("batch lookup should succeed");
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].api_key_id, "key-1");
+    }
+
+    #[tokio::test]
+    async fn touches_last_used_for_existing_key() {
+        let repository = InMemoryAuthApiKeySnapshotRepository::seed(vec![(
+            Some("hash-1".to_string()),
+            sample_snapshot("key-1", "user-1"),
+        )]);
+
+        assert!(repository
+            .touch_last_used_at("key-1")
+            .await
+            .expect("touch should succeed"));
+        assert_eq!(repository.touch_count("key-1"), 1);
+        assert!(!repository
+            .touch_last_used_at("missing")
+            .await
+            .expect("missing touch should succeed"));
+    }
+
+    #[tokio::test]
+    async fn lists_export_records_for_user_bound_and_standalone_keys() {
+        let repository = InMemoryAuthApiKeySnapshotRepository::seed(vec![
+            (
+                Some("hash-user".to_string()),
+                sample_snapshot("key-user", "user-1"),
+            ),
+            (
+                Some("hash-standalone".to_string()),
+                sample_snapshot("key-standalone", "admin-1"),
+            ),
+        ])
+        .with_export_records(vec![
+            StoredAuthApiKeyExportRecord::new(
+                "user-1".to_string(),
+                "key-user".to_string(),
+                "hash-user".to_string(),
+                Some("enc-user".to_string()),
+                Some("default".to_string()),
+                Some(serde_json::json!(["openai"])),
+                Some(serde_json::json!(["openai:chat"])),
+                Some(serde_json::json!(["gpt-5"])),
+                Some(120),
+                Some(7),
+                Some(serde_json::json!({"cache_1h": true})),
+                true,
+                Some(200),
+                false,
+                14,
+                1.5,
+                false,
+            )
+            .expect("user export record should build"),
+            StoredAuthApiKeyExportRecord::new(
+                "admin-1".to_string(),
+                "key-standalone".to_string(),
+                "hash-standalone".to_string(),
+                Some("enc-standalone".to_string()),
+                Some("standalone".to_string()),
+                None,
+                None,
+                None,
+                None,
+                Some(1),
+                None,
+                true,
+                None,
+                true,
+                2,
+                0.25,
+                true,
+            )
+            .expect("standalone export record should build"),
+        ]);
+
+        let user_records = repository
+            .list_export_api_keys_by_user_ids(&["user-1".to_string()])
+            .await
+            .expect("user export lookup should succeed");
+        assert_eq!(user_records.len(), 1);
+        assert_eq!(user_records[0].api_key_id, "key-user");
+        assert_eq!(user_records[0].key_encrypted.as_deref(), Some("enc-user"));
+        assert_eq!(user_records[0].total_requests, 14);
+
+        let standalone_records = repository
+            .list_export_standalone_api_keys()
+            .await
+            .expect("standalone export lookup should succeed");
+        assert_eq!(standalone_records.len(), 1);
+        assert_eq!(standalone_records[0].api_key_id, "key-standalone");
+        assert!(standalone_records[0].is_standalone);
+
+        let selected_records = repository
+            .list_export_api_keys_by_ids(&[
+                "key-standalone".to_string(),
+                "missing".to_string(),
+                "key-user".to_string(),
+            ])
+            .await
+            .expect("api key id export lookup should succeed");
+        assert_eq!(selected_records.len(), 2);
+        assert_eq!(selected_records[0].api_key_id, "key-standalone");
+        assert_eq!(selected_records[1].api_key_id, "key-user");
+
+        let paged_records = repository
+            .list_export_standalone_api_keys_page(&StandaloneApiKeyExportListQuery {
+                skip: 0,
+                limit: 10,
+                is_active: Some(true),
+            })
+            .await
+            .expect("standalone export page should succeed");
+        assert_eq!(paged_records.len(), 1);
+        assert_eq!(paged_records[0].api_key_id, "key-standalone");
+        assert_eq!(
+            repository
+                .count_export_standalone_api_keys(Some(true))
+                .await
+                .expect("standalone export count should succeed"),
+            1
+        );
     }
 }

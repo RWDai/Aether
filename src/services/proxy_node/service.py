@@ -139,65 +139,13 @@ def build_heartbeat_ack(node: ProxyNode) -> dict[str, Any]:
 
 async def _test_proxy_connectivity(proxy_url: str) -> dict[str, Any]:
     """通过代理 URL 测试连通性，返回标准化结果 dict"""
-    import time as _time
-
-    test_url = "https://1.1.1.1/cdn-cgi/trace"
-    start = _time.monotonic()
-    proxy_param = make_proxy_param(proxy_url)
-
-    try:
-        async with httpx.AsyncClient(
-            proxy=proxy_param,
-            timeout=httpx.Timeout(15.0, connect=10.0),
-        ) as client:
-            response = await client.get(test_url)
-            elapsed_ms = round((_time.monotonic() - start) * 1000, 1)
-
-            exit_ip = None
-            if response.status_code == 200:
-                for line in response.text.splitlines():
-                    if line.startswith("ip="):
-                        exit_ip = line.split("=", 1)[1].strip()
-                        break
-
-            return {
-                "success": True,
-                "latency_ms": elapsed_ms,
-                "exit_ip": exit_ip,
-                "error": None,
-            }
-    except httpx.ProxyError as exc:
-        elapsed_ms = round((_time.monotonic() - start) * 1000, 1)
-        return {
-            "success": False,
-            "latency_ms": elapsed_ms,
-            "exit_ip": None,
-            "error": f"代理连接失败: {_sanitize_proxy_error(exc)}",
-        }
-    except httpx.ConnectError as exc:
-        elapsed_ms = round((_time.monotonic() - start) * 1000, 1)
-        return {
-            "success": False,
-            "latency_ms": elapsed_ms,
-            "exit_ip": None,
-            "error": f"连接失败: {_sanitize_proxy_error(exc)}",
-        }
-    except httpx.TimeoutException:
-        elapsed_ms = round((_time.monotonic() - start) * 1000, 1)
-        return {
-            "success": False,
-            "latency_ms": elapsed_ms,
-            "exit_ip": None,
-            "error": "连接超时（15秒）",
-        }
-    except Exception as exc:
-        elapsed_ms = round((_time.monotonic() - start) * 1000, 1)
-        return {
-            "success": False,
-            "latency_ms": elapsed_ms,
-            "exit_ip": None,
-            "error": _sanitize_proxy_error(exc),
-        }
+    _ = proxy_url
+    return {
+        "success": False,
+        "latency_ms": None,
+        "exit_ip": None,
+        "error": "代理连通性测试仅支持 Rust executor",
+    }
 
 
 def _build_test_proxy_url(node: ProxyNode) -> str:
@@ -218,56 +166,13 @@ def _build_test_proxy_url(node: ProxyNode) -> str:
 
 async def _test_tunnel_connectivity(node_id: str) -> dict[str, Any]:
     """通过 WebSocket tunnel 测试连通性，返回标准化结果 dict"""
-    import time as _time
-
-    from .tunnel_transport import create_tunnel_transport
-
-    test_url = "https://1.1.1.1/cdn-cgi/trace"
-    transport = create_tunnel_transport(node_id, timeout=15.0)
-    start = _time.monotonic()
-
-    try:
-        async with httpx.AsyncClient(transport=transport) as client:
-            response = await client.get(test_url)
-            elapsed_ms = round((_time.monotonic() - start) * 1000, 1)
-
-            exit_ip = None
-            if response.status_code == 200:
-                for line in response.text.splitlines():
-                    if line.startswith("ip="):
-                        exit_ip = line.split("=", 1)[1].strip()
-                        break
-
-            return {
-                "success": True,
-                "latency_ms": elapsed_ms,
-                "exit_ip": exit_ip,
-                "error": None,
-            }
-    except httpx.ConnectError as exc:
-        elapsed_ms = round((_time.monotonic() - start) * 1000, 1)
-        return {
-            "success": False,
-            "latency_ms": elapsed_ms,
-            "exit_ip": None,
-            "error": f"tunnel 连接失败: {_sanitize_proxy_error(exc)}",
-        }
-    except httpx.TimeoutException:
-        elapsed_ms = round((_time.monotonic() - start) * 1000, 1)
-        return {
-            "success": False,
-            "latency_ms": elapsed_ms,
-            "exit_ip": None,
-            "error": "连接超时（15秒）",
-        }
-    except Exception as exc:
-        elapsed_ms = round((_time.monotonic() - start) * 1000, 1)
-        return {
-            "success": False,
-            "latency_ms": elapsed_ms,
-            "exit_ip": None,
-            "error": _sanitize_proxy_error(exc),
-        }
+    _ = node_id
+    return {
+        "success": False,
+        "latency_ms": None,
+        "exit_ip": None,
+        "error": "Tunnel 连通性测试仅支持 Rust executor",
+    }
 
 
 # ---------------------------------------------------------------------------

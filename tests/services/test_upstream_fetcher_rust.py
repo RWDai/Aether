@@ -191,7 +191,7 @@ async def test_fetch_models_from_endpoints_uses_rust_for_gemini(
 
 
 @pytest.mark.asyncio
-async def test_fetch_models_from_endpoints_falls_back_to_python_when_rust_unavailable(
+async def test_fetch_models_from_endpoints_returns_rust_only_error_when_rust_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(fetcher_mod.config, "executor_backend", "rust")
@@ -224,7 +224,7 @@ async def test_fetch_models_from_endpoints_falls_back_to_python_when_rust_unavai
         timeout=1.0,
     )
 
-    assert ok is True
-    assert errors == []
-    assert models == [{"id": "fallback-model", "api_format": "openai:chat"}]
-    python_fetch.assert_awaited_once()
+    assert ok is False
+    assert models == []
+    assert errors == ["openai:chat: rust executor unavailable"]
+    python_fetch.assert_not_awaited()

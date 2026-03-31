@@ -75,6 +75,14 @@ def _wait_until(predicate: Any, *, timeout: float = 1.0, interval: float = 0.01)
     assert predicate()
 
 
+def _make_legacy_test_client(app: FastAPI) -> TestClient:
+    return TestClient(
+        app,
+        base_url="http://127.0.0.1",
+        headers={"x-aether-legacy-internal-gateway": "true"},
+    )
+
+
 def test_report_sync_route_applies_gemini_files_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
     app = FastAPI()
     app.include_router(router)
@@ -91,7 +99,7 @@ def test_report_sync_route_applies_gemini_files_mapping(monkeypatch: pytest.Monk
         _fake_store_mapping,
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/report-sync",
         json={
@@ -138,7 +146,7 @@ def test_report_sync_route_applies_gemini_files_delete_mapping(
         _fake_delete_mapping,
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/report-sync",
         json={
@@ -172,7 +180,7 @@ def test_report_sync_route_uses_lazy_session(
         lambda: (_ for _ in ()).throw(AssertionError("create_session should not be called")),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/report-sync",
         json={
@@ -213,7 +221,7 @@ def test_report_sync_route_runs_video_create_success_inline(
         lambda app_obj: ("db-inline-123", cleanup_mock),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/report-sync",
         json={

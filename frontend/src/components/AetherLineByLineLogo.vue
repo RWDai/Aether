@@ -43,9 +43,9 @@
       <!-- Layer 0: Ghost Tracks (Always visible, faint) -->
       <g class="ghost-layer">
         <path
-          v-for="(path, index) in linePaths"
-          :key="`ghost-${index}`"
-          :d="path"
+          v-for="line in orderedLines"
+          :key="`ghost-${line.order}`"
+          :d="line.path"
           class="ghost-path"
           fill="none"
           :stroke="currentColors.primary"
@@ -67,15 +67,15 @@
       <!-- Layer 2: Animated lines -->
       <g class="lines-layer">
         <path
-          v-for="(path, index) in linePaths"
-          :key="`line-${index}`"
-          :ref="(el) => setPathRef(el as SVGPathElement, index)"
-          :d="path"
+          v-for="line in orderedLines"
+          :key="`line-${line.order}`"
+          :ref="(el) => setPathRef(el as SVGPathElement, line.order)"
+          :d="line.path"
           class="line-path"
           fill="none"
           :stroke="currentColors.primary"
           :stroke-width="strokeWidth"
-          :style="getLineStyle(index)"
+          :style="getLineStyle(line.order)"
           stroke-linecap="round"
           stroke-linejoin="round"
         />
@@ -86,7 +86,12 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch, nextTick, computed } from 'vue'
-import { AETHER_SVG_VIEWBOX, AETHER_LINE_PATHS, AETHER_FULL_PATH } from '@/constants/logoPaths'
+import {
+  AETHER_SVG_VIEWBOX,
+  AETHER_ORDERED_LINES,
+  AETHER_FULL_PATH,
+  getAetherLineDelayMultiplier
+} from '@/constants/logoPaths'
 
 // Animation phases
 type AnimationPhase = 'idle' | 'drawOutline' | 'fillFadeIn' | 'hold' | 'fillFadeOut' | 'eraseOutline'
@@ -133,7 +138,7 @@ const emit = defineEmits<{
   (e: 'colorChange', colors: ColorScheme): void
 }>()
 // Constants
-const LINE_COUNT = AETHER_LINE_PATHS.length
+const LINE_COUNT = AETHER_ORDERED_LINES.length
 const DEFAULT_PATH_LENGTH = 3000
 
 // Light mode color schemes
@@ -172,7 +177,7 @@ const DARK_MODE_SCHEMES: ColorScheme[] = [
 const gradientId = `aether-gradient-${Math.random().toString(36).slice(2, 9)}`
 
 const viewBox = AETHER_SVG_VIEWBOX
-const linePaths = AETHER_LINE_PATHS
+const orderedLines = AETHER_ORDERED_LINES
 const fullPath = AETHER_FULL_PATH
 
 // Path refs and lengths
@@ -310,9 +315,11 @@ const startAnimation = async () => {
     currentPhase.value = 'drawOutline'
     emit('phaseChange', 'drawOutline')
 
-    for (let i = 0; i < LINE_COUNT; i++) {
-      lineDrawn.value[i] = true
-      if (i < LINE_COUNT - 1) await wait(props.lineDelay)
+    for (const line of orderedLines) {
+      lineDrawn.value[line.order] = true
+      if (line.order < LINE_COUNT - 1) {
+        await wait(Math.round(props.lineDelay * getAetherLineDelayMultiplier(line.order, LINE_COUNT)))
+      }
     }
     await wait(props.strokeDuration)
 
@@ -336,9 +343,11 @@ const startAnimation = async () => {
     currentPhase.value = 'eraseOutline'
     emit('phaseChange', 'eraseOutline')
 
-    for (let i = 0; i < LINE_COUNT; i++) {
-      lineDrawn.value[i] = false
-      if (i < LINE_COUNT - 1) await wait(props.lineDelay)
+    for (const line of [...orderedLines].reverse()) {
+      lineDrawn.value[line.order] = false
+      if (line.order > 0) {
+        await wait(Math.round(props.lineDelay * getAetherLineDelayMultiplier(line.order, LINE_COUNT)))
+      }
     }
     await wait(props.strokeDuration)
 

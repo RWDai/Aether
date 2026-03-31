@@ -205,7 +205,7 @@ fn parse_headers(data: &[u8], header_length: usize) -> Result<AwsHeaders, FrameP
             other => {
                 return Err(FrameParseError::Invalid(format!(
                     "invalid header type: {other}"
-                )))
+                )));
             }
         };
         values.insert(name, value);

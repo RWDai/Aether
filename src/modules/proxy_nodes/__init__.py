@@ -9,6 +9,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from fastapi import APIRouter
+from starlette.routing import BaseRoute
+
 from src.core.modules.base import (
     ModuleCategory,
     ModuleDefinition,
@@ -21,6 +24,35 @@ if TYPE_CHECKING:
 
 
 _proxy_node_task_coordinator: Any | None = None
+_RUST_OWNED_PROXY_NODE_ROUTE_SIGNATURES = frozenset(
+    {
+        ("GET", "/api/admin/proxy-nodes"),
+        ("GET", "/api/admin/proxy-nodes/"),
+        ("POST", "/api/admin/proxy-nodes/register"),
+        ("POST", "/api/admin/proxy-nodes/heartbeat"),
+        ("POST", "/api/admin/proxy-nodes/unregister"),
+        ("POST", "/api/admin/proxy-nodes/manual"),
+        ("POST", "/api/admin/proxy-nodes/upgrade"),
+        ("POST", "/api/admin/proxy-nodes/test-url"),
+        ("PATCH", "/api/admin/proxy-nodes/{node_id}"),
+        ("DELETE", "/api/admin/proxy-nodes/{node_id}"),
+        ("POST", "/api/admin/proxy-nodes/{node_id}/test"),
+        ("PUT", "/api/admin/proxy-nodes/{node_id}/config"),
+        ("GET", "/api/admin/proxy-nodes/{node_id}/events"),
+    }
+)
+
+
+def _route_is_rust_owned(route: BaseRoute) -> bool:
+    path = getattr(route, "path", None)
+    methods = getattr(route, "methods", None)
+    if not isinstance(path, str) or not methods:
+        return False
+    return any(
+        (method, path) in _RUST_OWNED_PROXY_NODE_ROUTE_SIGNATURES
+        for method in methods
+        if method not in {"HEAD", "OPTIONS"}
+    )
 
 
 def _reset_tunnel_connected_on_startup() -> None:
@@ -71,7 +103,12 @@ def _get_router() -> Any:
     """延迟导入路由"""
     from src.api.admin.proxy_nodes import router
 
-    return router
+    filtered_router = APIRouter()
+    filtered_router.include_router(router)
+    filtered_router.routes = [
+        route for route in filtered_router.routes if not _route_is_rust_owned(route)
+    ]
+    return filtered_router
 
 
 async def _on_startup() -> None:

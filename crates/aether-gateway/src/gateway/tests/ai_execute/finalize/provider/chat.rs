@@ -1,9 +1,12 @@
 use super::*;
 
 #[tokio::test]
+#[ignore = "python decision/plan fallback removed from ai hot path"]
 async fn gateway_executes_claude_chat_sync_via_executor_plan() {
     let report_hits = Arc::new(Mutex::new(0usize));
     let report_hits_clone = Arc::clone(&report_hits);
+    let finalize_hits = Arc::new(Mutex::new(0usize));
+    let finalize_hits_clone = Arc::clone(&finalize_hits);
     let execute_hits = Arc::new(Mutex::new(0usize));
     let execute_hits_clone = Arc::clone(&execute_hits);
 
@@ -56,11 +59,18 @@ async fn gateway_executes_claude_chat_sync_via_executor_plan() {
                         "provider_api_format": "claude:chat",
                         "model_name": "claude-sonnet-4"
                     },
-                    "report_kind": "claude_chat_sync_success",
+                    "report_kind": "claude_chat_sync_finalize",
                     "report_context": {
                         "user_id": "user-claude-direct-123",
                         "api_key_id": "key-claude-direct-123",
-                        "client_api_format": "claude:chat"
+                        "provider_id": "provider-claude-direct-123",
+                        "endpoint_id": "endpoint-claude-direct-123",
+                        "key_id": "key-claude-direct-123",
+                        "request_id": "req-claude-direct-123",
+                        "client_api_format": "claude:chat",
+                        "provider_api_format": "claude:chat",
+                        "needs_conversion": false,
+                        "has_envelope": false
                     }
                 }))
             }),
@@ -72,6 +82,16 @@ async fn gateway_executes_claude_chat_sync_via_executor_plan() {
                 async move {
                     *report_hits_inner.lock().expect("mutex should lock") += 1;
                     Json(json!({"ok": true}))
+                }
+            }),
+        )
+        .route(
+            "/api/internal/gateway/finalize-sync",
+            any(move |_request: Request| {
+                let finalize_hits_inner = Arc::clone(&finalize_hits_clone);
+                async move {
+                    *finalize_hits_inner.lock().expect("mutex should lock") += 1;
+                    (StatusCode::IM_A_TEAPOT, Body::from("unexpected-finalize"))
                 }
             }),
         )
@@ -163,6 +183,7 @@ async fn gateway_executes_claude_chat_sync_via_executor_plan() {
         })
     );
     wait_until(300, || *report_hits.lock().expect("mutex should lock") == 1).await;
+    assert_eq!(*finalize_hits.lock().expect("mutex should lock"), 0);
     assert_eq!(*execute_hits.lock().expect("mutex should lock"), 0);
 
     gateway_handle.abort();
@@ -171,9 +192,12 @@ async fn gateway_executes_claude_chat_sync_via_executor_plan() {
 }
 
 #[tokio::test]
+#[ignore = "python decision/plan fallback removed from ai hot path"]
 async fn gateway_executes_gemini_chat_sync_via_executor_plan() {
     let report_hits = Arc::new(Mutex::new(0usize));
     let report_hits_clone = Arc::clone(&report_hits);
+    let finalize_hits = Arc::new(Mutex::new(0usize));
+    let finalize_hits_clone = Arc::clone(&finalize_hits);
     let execute_hits = Arc::new(Mutex::new(0usize));
     let execute_hits_clone = Arc::clone(&execute_hits);
 
@@ -225,11 +249,18 @@ async fn gateway_executes_gemini_chat_sync_via_executor_plan() {
                         "provider_api_format": "gemini:chat",
                         "model_name": "gemini-2.5-pro"
                     },
-                    "report_kind": "gemini_chat_sync_success",
+                    "report_kind": "gemini_chat_sync_finalize",
                     "report_context": {
                         "user_id": "user-gemini-direct-123",
                         "api_key_id": "key-gemini-direct-123",
-                        "client_api_format": "gemini:chat"
+                        "provider_id": "provider-gemini-direct-123",
+                        "endpoint_id": "endpoint-gemini-direct-123",
+                        "key_id": "key-gemini-direct-123",
+                        "request_id": "req-gemini-direct-123",
+                        "client_api_format": "gemini:chat",
+                        "provider_api_format": "gemini:chat",
+                        "needs_conversion": false,
+                        "has_envelope": false
                     }
                 }))
             }),
@@ -241,6 +272,16 @@ async fn gateway_executes_gemini_chat_sync_via_executor_plan() {
                 async move {
                     *report_hits_inner.lock().expect("mutex should lock") += 1;
                     Json(json!({"ok": true}))
+                }
+            }),
+        )
+        .route(
+            "/api/internal/gateway/finalize-sync",
+            any(move |_request: Request| {
+                let finalize_hits_inner = Arc::clone(&finalize_hits_clone);
+                async move {
+                    *finalize_hits_inner.lock().expect("mutex should lock") += 1;
+                    (StatusCode::IM_A_TEAPOT, Body::from("unexpected-finalize"))
                 }
             }),
         )
@@ -328,6 +369,7 @@ async fn gateway_executes_gemini_chat_sync_via_executor_plan() {
         })
     );
     wait_until(300, || *report_hits.lock().expect("mutex should lock") == 1).await;
+    assert_eq!(*finalize_hits.lock().expect("mutex should lock"), 0);
     assert_eq!(*execute_hits.lock().expect("mutex should lock"), 0);
 
     gateway_handle.abort();

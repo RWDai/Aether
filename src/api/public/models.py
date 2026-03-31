@@ -7,10 +7,16 @@
 - Authorization: Bearer (bearer) -> OpenAI 格式
 """
 
+from dataclasses import dataclass
+from typing import Any
+
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
+from src.api.base.adapter import ApiAdapter, ApiMode
+from src.api.base.context import ApiRequestContext
+from src.api.base.pipeline import get_pipeline
 from src.api.base.models_service import (
     AccessRestrictions,
     ModelInfo,
@@ -33,6 +39,7 @@ from src.services.auth.service import AuthService
 from src.services.provider.format import normalize_endpoint_signature
 
 router = APIRouter(tags=["System Catalog"])
+pipeline = get_pipeline()
 
 # 各格式对应的 API 格式列表（包括对应的 CLI 格式）
 _CLAUDE_FORMATS = ["claude:chat", "claude:cli"]
@@ -407,8 +414,164 @@ def _build_404_response(model_id: str, api_format: str) -> JSONResponse:
 
 
 # ============================================================================
-# 路由端点
+# Adapter helpers
 # ============================================================================
+
+
+class PublicModelsApiAdapter(ApiAdapter):
+    mode = ApiMode.PUBLIC
+    eager_request_body = False
+
+    def authorize(self, context: ApiRequestContext) -> None:  # type: ignore[override]
+        return None
+
+
+def _handle_model_list_request(
+    context: ApiRequestContext,
+    *,
+    before_id: str | None,
+    after_id: str | None,
+    limit: int,
+    page_size: int,
+    page_token: str | None,
+) -> dict | JSONResponse:
+    request = context.request
+    db = context.db
+
+    api_format, api_key = _detect_api_format_and_key(request)
+    logger.info(f"[Models] GET /v1/models | format={api_format}")
+
+    user, key_record = _authenticate(db, api_key)
+    if not user:
+        return _build_auth_error_response(api_format)
+
+    restrictions = AccessRestrictions.from_api_key_and_user(key_record, user)
+    global_conversion_enabled = _is_format_conversion_enabled(db)
+    candidate_formats = _get_convertible_formats(api_format)
+    candidate_formats, empty_response = _filter_formats_by_restrictions(
+        candidate_formats, restrictions, api_format
+    )
+    if empty_response is not None:
+        return empty_response
+
+    provider_to_formats = get_compatible_provider_formats(
+        db, api_format, candidate_formats, global_conversion_enabled
+    )
+    formats = _flatten_provider_formats(provider_to_formats)
+
+    available_provider_ids = get_available_provider_ids(db, formats, provider_to_formats)
+    if not available_provider_ids:
+        return _build_empty_list_response(api_format)
+
+    async def _list() -> dict:
+        models = await list_available_models(
+            db,
+            available_provider_ids,
+            formats,
+            restrictions,
+            provider_to_formats=provider_to_formats,
+            client_format=api_format,
+        )
+        logger.debug(f"[Models] 返回 {len(models)} 个模型")
+
+        if _get_family(api_format) == "claude":
+            return _build_claude_list_response(models, before_id, after_id, limit)
+        if _get_family(api_format) == "gemini":
+            return _build_gemini_list_response(models, page_size, page_token)
+        return _build_openai_list_response(models)
+
+    return _list()
+
+
+def _handle_model_detail_request(
+    context: ApiRequestContext,
+    *,
+    model_id: str,
+    force_gemini_name: bool,
+) -> dict | JSONResponse:
+    request = context.request
+    db = context.db
+    api_format, api_key = _detect_api_format_and_key(request)
+
+    resolved_model_id = model_id
+    if force_gemini_name:
+        resolved_model_id = model_id[7:] if model_id.startswith("models/") else model_id
+        logger.info(f"[Models] GET /v1beta/models/{resolved_model_id} | format=gemini")
+    else:
+        if _get_family(api_format) == "gemini" and resolved_model_id.startswith("models/"):
+            resolved_model_id = resolved_model_id[7:]
+        logger.info(f"[Models] GET /v1/models/{resolved_model_id} | format={api_format}")
+
+    user, key_record = _authenticate(db, api_key)
+    if not user:
+        return _build_auth_error_response(api_format)
+
+    restrictions = AccessRestrictions.from_api_key_and_user(key_record, user)
+    global_conversion_enabled = _is_format_conversion_enabled(db)
+    candidate_formats = _get_convertible_formats(api_format)
+    candidate_formats, _ = _filter_formats_by_restrictions(
+        candidate_formats, restrictions, api_format
+    )
+    provider_to_formats = get_compatible_provider_formats(
+        db, api_format, candidate_formats, global_conversion_enabled
+    )
+    formats = _flatten_provider_formats(provider_to_formats)
+    if not formats:
+        return _build_404_response(resolved_model_id, api_format)
+
+    available_provider_ids = get_available_provider_ids(db, formats, provider_to_formats)
+    model_info = find_model_by_id(
+        db,
+        resolved_model_id,
+        available_provider_ids,
+        formats,
+        restrictions,
+        provider_to_formats=provider_to_formats,
+    )
+
+    if not model_info:
+        return _build_404_response(resolved_model_id, api_format)
+
+    if _get_family(api_format) == "claude":
+        return _build_claude_model_response(model_info)
+    if _get_family(api_format) == "gemini":
+        return _build_gemini_model_response(model_info)
+    return _build_openai_model_response(model_info)
+
+
+@dataclass
+class PublicModelsListAdapter(PublicModelsApiAdapter):
+    before_id: str | None
+    after_id: str | None
+    limit: int
+    page_size: int
+    page_token: str | None
+
+    async def handle(self, context: ApiRequestContext) -> dict | JSONResponse:  # type: ignore[override]
+        result = _handle_model_list_request(
+            context,
+            before_id=self.before_id,
+            after_id=self.after_id,
+            limit=self.limit,
+            page_size=self.page_size,
+            page_token=self.page_token,
+        )
+        if hasattr(result, "__await__"):
+            return await result
+        return result
+
+
+@dataclass
+class PublicModelDetailAdapter(PublicModelsApiAdapter):
+    model_id: str
+    force_gemini_name: bool = False
+
+    async def handle(self, context: ApiRequestContext) -> dict | JSONResponse:  # type: ignore[override]
+        return _handle_model_detail_request(
+            context,
+            model_id=self.model_id,
+            force_gemini_name=self.force_gemini_name,
+        )
 
 
 @router.get("/v1/models", response_model=None)
@@ -484,51 +647,14 @@ async def list_models(
     **错误响应**
     401: API Key 无效或未提供（格式根据检测到的 API 格式返回）
     """
-    api_format, api_key = _detect_api_format_and_key(request)
-    logger.info(f"[Models] GET /v1/models | format={api_format}")
-
-    # 认证
-    user, key_record = _authenticate(db, api_key)
-    if not user:
-        return _build_auth_error_response(api_format)
-
-    # 构建访问限制
-    restrictions = AccessRestrictions.from_api_key_and_user(key_record, user)
-
-    # 获取可用格式（包括可转换的格式）
-    global_conversion_enabled = _is_format_conversion_enabled(db)
-    candidate_formats = _get_convertible_formats(api_format)
-    candidate_formats, empty_response = _filter_formats_by_restrictions(
-        candidate_formats, restrictions, api_format
+    adapter = PublicModelsListAdapter(
+        before_id=before_id,
+        after_id=after_id,
+        limit=limit,
+        page_size=page_size,
+        page_token=page_token,
     )
-    if empty_response is not None:
-        return empty_response
-
-    provider_to_formats = get_compatible_provider_formats(
-        db, api_format, candidate_formats, global_conversion_enabled
-    )
-    formats = _flatten_provider_formats(provider_to_formats)
-
-    available_provider_ids = get_available_provider_ids(db, formats, provider_to_formats)
-    if not available_provider_ids:
-        return _build_empty_list_response(api_format)
-
-    models = await list_available_models(
-        db,
-        available_provider_ids,
-        formats,
-        restrictions,
-        provider_to_formats=provider_to_formats,
-        client_format=api_format,
-    )
-    logger.debug(f"[Models] 返回 {len(models)} 个模型")
-
-    if _get_family(api_format) == "claude":
-        return _build_claude_list_response(models, before_id, after_id, limit)
-    elif _get_family(api_format) == "gemini":
-        return _build_gemini_list_response(models, page_size, page_token)
-    else:
-        return _build_openai_list_response(models)
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=ApiMode.PUBLIC)
 
 
 @router.get("/v1/models/{model_id:path}", response_model=None)
@@ -583,54 +709,8 @@ async def retrieve_model(
     401: API Key 无效或未提供
     404: 模型不存在或不可访问
     """
-    api_format, api_key = _detect_api_format_and_key(request)
-
-    # Gemini 格式的 name 带 "models/" 前缀，需要移除
-    if _get_family(api_format) == "gemini" and model_id.startswith("models/"):
-        model_id = model_id[7:]
-
-    logger.info(f"[Models] GET /v1/models/{model_id} | format={api_format}")
-
-    # 认证
-    user, key_record = _authenticate(db, api_key)
-    if not user:
-        return _build_auth_error_response(api_format)
-
-    # 构建访问限制
-    restrictions = AccessRestrictions.from_api_key_and_user(key_record, user)
-
-    # 获取可用格式（包括可转换的格式）
-    global_conversion_enabled = _is_format_conversion_enabled(db)
-    candidate_formats = _get_convertible_formats(api_format)
-    candidate_formats, _ = _filter_formats_by_restrictions(
-        candidate_formats, restrictions, api_format
-    )
-    provider_to_formats = get_compatible_provider_formats(
-        db, api_format, candidate_formats, global_conversion_enabled
-    )
-    formats = _flatten_provider_formats(provider_to_formats)
-    if not formats:
-        return _build_404_response(model_id, api_format)
-
-    available_provider_ids = get_available_provider_ids(db, formats, provider_to_formats)
-    model_info = find_model_by_id(
-        db,
-        model_id,
-        available_provider_ids,
-        formats,
-        restrictions,
-        provider_to_formats=provider_to_formats,
-    )
-
-    if not model_info:
-        return _build_404_response(model_id, api_format)
-
-    if _get_family(api_format) == "claude":
-        return _build_claude_model_response(model_info)
-    elif _get_family(api_format) == "gemini":
-        return _build_gemini_model_response(model_info)
-    else:
-        return _build_openai_model_response(model_info)
+    adapter = PublicModelDetailAdapter(model_id=model_id)
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=ApiMode.PUBLIC)
 
 
 # Gemini 专用路径 /v1beta/models
@@ -670,48 +750,14 @@ async def list_models_gemini(
     **错误响应**
     401: API Key 无效或未提供
     """
-    logger.info("[Models] GET /v1beta/models | format=gemini")
-
-    api_format, api_key = _detect_api_format_and_key(request)
-
-    # 认证
-    user, key_record = _authenticate(db, api_key)
-    if not user:
-        return _build_auth_error_response(api_format)
-
-    # 构建访问限制
-    restrictions = AccessRestrictions.from_api_key_and_user(key_record, user)
-
-    # 获取可用格式（包括可转换的格式）
-    global_conversion_enabled = _is_format_conversion_enabled(db)
-    candidate_formats = _get_convertible_formats(api_format)
-    candidate_formats, empty_response = _filter_formats_by_restrictions(
-        candidate_formats, restrictions, api_format
+    adapter = PublicModelsListAdapter(
+        before_id=None,
+        after_id=None,
+        limit=20,
+        page_size=page_size,
+        page_token=page_token,
     )
-    if empty_response is not None:
-        return empty_response
-
-    provider_to_formats = get_compatible_provider_formats(
-        db, api_format, candidate_formats, global_conversion_enabled
-    )
-    formats = _flatten_provider_formats(provider_to_formats)
-
-    available_provider_ids = get_available_provider_ids(db, formats, provider_to_formats)
-    if not available_provider_ids:
-        return {"models": []}
-
-    models = await list_available_models(
-        db,
-        available_provider_ids,
-        formats,
-        restrictions,
-        provider_to_formats=provider_to_formats,
-        client_format=api_format,
-    )
-    logger.debug(f"[Models] 返回 {len(models)} 个模型")
-    response = _build_gemini_list_response(models, page_size, page_token)
-    logger.debug(f"[Models] Gemini 响应: {response}")
-    return response
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=ApiMode.PUBLIC)
 
 
 @router.get("/v1beta/models/{model_name:path}", response_model=None)
@@ -747,44 +793,5 @@ async def get_model_gemini(
     401: API Key 无效或未提供
     404: 模型不存在或不可访问
     """
-    # 移除 "models/" 前缀（如果有）
-    model_id = model_name[7:] if model_name.startswith("models/") else model_name
-    logger.info(f"[Models] GET /v1beta/models/{model_id} | format=gemini")
-
-    api_format, api_key = _detect_api_format_and_key(request)
-
-    # 认证
-    user, key_record = _authenticate(db, api_key)
-    if not user:
-        return _build_auth_error_response(api_format)
-
-    # 构建访问限制
-    restrictions = AccessRestrictions.from_api_key_and_user(key_record, user)
-
-    # 获取可用格式（包括可转换的格式）
-    global_conversion_enabled = _is_format_conversion_enabled(db)
-    candidate_formats = _get_convertible_formats(api_format)
-    candidate_formats, _ = _filter_formats_by_restrictions(
-        candidate_formats, restrictions, api_format
-    )
-    provider_to_formats = get_compatible_provider_formats(
-        db, api_format, candidate_formats, global_conversion_enabled
-    )
-    formats = _flatten_provider_formats(provider_to_formats)
-    if not formats:
-        return _build_404_response(model_id, api_format)
-
-    available_provider_ids = get_available_provider_ids(db, formats, provider_to_formats)
-    model_info = find_model_by_id(
-        db,
-        model_id,
-        available_provider_ids,
-        formats,
-        restrictions,
-        provider_to_formats=provider_to_formats,
-    )
-
-    if not model_info:
-        return _build_404_response(model_id, api_format)
-
-    return _build_gemini_model_response(model_info)
+    adapter = PublicModelDetailAdapter(model_id=model_name, force_gemini_name=True)
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=ApiMode.PUBLIC)

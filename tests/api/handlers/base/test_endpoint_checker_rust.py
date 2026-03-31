@@ -166,3 +166,27 @@ async def test_endpoint_checker_proxy_snapshot_falls_back_to_system_proxy(
     assert snapshot.enabled is True
     assert snapshot.url == "http://system-proxy.test:8080"
     assert snapshot.mode == "http"
+
+
+@pytest.mark.asyncio
+async def test_endpoint_checker_returns_503_when_rust_executor_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.api.handlers.base import endpoint_checker as mod
+
+    monkeypatch.setattr(mod.config, "executor_backend", "python")
+
+    executor = HttpRequestExecutor(timeout=5.0)
+    result = await executor.execute(
+        EndpointCheckRequest(
+            url="https://upstream.test/v1/chat/completions",
+            headers={"authorization": "Bearer test"},
+            json_body={"model": "gpt-test", "messages": [{"role": "user", "content": "hi"}]},
+            api_format="openai:chat",
+            provider_name="openai",
+            model_name="gpt-test",
+        )
+    )
+
+    assert result.status_code == 503
+    assert result.error_message == "端点检查仅支持 Rust executor"

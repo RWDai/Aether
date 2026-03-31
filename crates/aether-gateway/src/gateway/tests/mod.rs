@@ -10,18 +10,26 @@ pub(super) use http::StatusCode;
 pub(super) use serde_json::json;
 
 mod ai_execute;
+mod async_task;
 mod audit;
 mod concurrency;
 mod control;
 mod files;
+mod frontdoor;
+mod maintenance;
+mod model_fetch;
 mod proxy;
+mod usage;
 mod video;
 
 pub(super) use super::constants::*;
 pub(super) use super::{
     build_router, build_router_with_control, build_router_with_endpoints, build_router_with_state,
-    AppState, VideoTaskTruthSourceMode,
+    AppState, FrontdoorCorsConfig, FrontdoorUserRpmConfig, GatewayFallbackMetricKind,
+    GatewayFallbackReason, UsageRuntimeConfig, VideoTaskTruthSourceMode,
 };
+
+pub(super) const LEGACY_INTERNAL_GATEWAY_HEADER: &str = "x-aether-legacy-internal-gateway";
 
 pub(super) async fn start_server(app: Router) -> (String, tokio::task::JoinHandle<()>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")

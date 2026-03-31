@@ -20,7 +20,7 @@
 
     <!-- 加载状态 -->
     <div
-      v-if="loading"
+      v-if="isLoading"
       class="flex items-center justify-center py-12"
     >
       <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
@@ -269,6 +269,7 @@ const props = defineProps<{
   provider: ProviderWithEndpointsSummary
   models?: Model[]
   endpoints?: ProviderEndpoint[]
+  loading?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -300,6 +301,7 @@ const testRequestHeadersError = computed(() => parsedTestRequestHeaders.value.er
 const parsedTestRequestBody = computed(() => parseModelTestRequestBodyDraft(testRequestBodyDraft.value))
 const testRequestBodyError = computed(() => parsedTestRequestBody.value.error)
 const models = computed(() => props.models ?? localModels.value)
+const isLoading = computed(() => Boolean(props.loading) || loading.value)
 // 按名称排序的模型列表
 const sortedModels = computed(() => {
   return [...models.value].sort((a, b) => {

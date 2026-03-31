@@ -666,87 +666,24 @@ class HttpRequestExecutor:
             )
             if rust_result is not None:
                 return rust_result
-
-            from src.services.proxy_node.resolver import build_proxy_client_kwargs
-
-            # 统一通过 build_proxy_client_kwargs 构建（支持 tunnel 模式 + 普通代理 + 系统默认回退）
-            client_kwargs = build_proxy_client_kwargs(
-                proxy_config=request.proxy_config, timeout=effective_timeout
+            end_time = time.time()
+            response_time_ms = int((end_time - start_time) * 1000)
+            logger.warning(
+                "[{}] endpoint check requires Rust executor; Python HTTP fallback disabled",
+                request.api_format,
             )
-
-            async with httpx.AsyncClient(**client_kwargs) as client:
-                if is_stream:
-                    # 流式请求：读取 SSE 事件直到完成
-                    response_data = await self._execute_stream_request(client, request)
-                    end_time = time.time()
-                    response_time_ms = int((end_time - start_time) * 1000)
-
-                    if response_data.get("error"):
-                        # 流式请求返回错误
-                        return EndpointCheckResult(
-                            status_code=response_data.get("status_code", 500),
-                            headers=response_data.get("headers", {}),
-                            response_time_ms=response_time_ms,
-                            request_id=request_id,
-                            response_data=None,
-                            error_message=response_data.get("error"),
-                            raw_response_body=response_data.get("response_body"),
-                        )
-
-                    return EndpointCheckResult(
-                        status_code=200,
-                        headers=response_data.get("headers", {}),
-                        response_time_ms=response_time_ms,
-                        request_id=request_id,
-                        response_data=response_data.get("final_response"),
-                        raw_response_body=response_data.get("final_response"),
-                    )
-                else:
-                    # 非流式请求：直接读取响应
-                    response = await client.post(
-                        url=request.url, json=request.json_body, headers=request.headers
-                    )
-
-                    end_time = time.time()
-                    response_time_ms = int((end_time - start_time) * 1000)
-
-                    if response.status_code == 200:
-                        try:
-                            response_data = response.json()
-                            if "/v1internal:" in (request.url or ""):
-                                response_data = self._unwrap_gemini_cli_response_wrapper(
-                                    response_data
-                                )
-                            logger.debug(
-                                f"[{request.api_format}] check_endpoint | response | json={_truncate_repr(response_data)}"
-                            )
-                        except Exception:
-                            response_data = None
-                            logger.debug(
-                                f"[{request.api_format}] check_endpoint | response | invalid json"
-                            )
-
-                        return EndpointCheckResult(
-                            status_code=response.status_code,
-                            headers=dict(response.headers),
-                            response_time_ms=response_time_ms,
-                            request_id=request_id,
-                            response_data=response_data,
-                            raw_response_body=(
-                                response_data if response_data is not None else response.text
-                            ),
-                        )
-                    else:
-                        error_body = response.text[:500] if response.text else "(empty)"
-                        logger.debug(
-                            f"[{request.api_format}] check_endpoint | response | error={error_body}"
-                        )
-                        http_error = httpx.HTTPStatusError(
-                            message=f"HTTP {response.status_code}: {error_body}",
-                            request=None,
-                            response=response,
-                        )
-                        return await ErrorHandler.handle_error(http_error, request)
+            return EndpointCheckResult(
+                status_code=503,
+                headers={},
+                response_time_ms=response_time_ms,
+                request_id=request_id,
+                response_data={
+                    "error_type": "provider_unavailable",
+                    "retryable": True,
+                },
+                error_message="端点检查仅支持 Rust executor",
+                raw_response_body=None,
+            )
 
         except Exception as e:
             logger.warning(
@@ -761,26 +698,6 @@ class HttpRequestExecutor:
                 e,
             )
             return await ErrorHandler.handle_error(e, request)
-
-    async def _execute_stream_request(
-        self, client: httpx.AsyncClient, request: EndpointCheckRequest
-    ) -> dict[str, Any]:
-        """执行流式请求并收集响应"""
-        try:
-            async with client.stream(
-                "POST", request.url, json=request.json_body, headers=request.headers
-            ) as response:
-                return await self._consume_stream_lines(
-                    line_iter=response.aiter_lines(),
-                    request=request,
-                    status_code=response.status_code,
-                    headers=dict(response.headers),
-                    error_text_iter=response.aiter_text(),
-                )
-
-        except Exception as e:
-            logger.warning("[{}] check_endpoint | stream error | {}", request.api_format, e)
-            return {"error": str(e), "status_code": 500, "headers": {}, "response_body": None}
 
     async def _execute_via_rust(
         self,

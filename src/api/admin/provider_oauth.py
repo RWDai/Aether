@@ -7,6 +7,9 @@
 
 注意：
 - 该模块是“上游 Provider OAuth（用于反代调用）”，不是用户登录/绑定 OAuth。
+- 在 AI 运行时热路径逐步迁到 Rust 之后，这里仍然是 admin/status 维修面：
+  手动 refresh、manual clear-invalid、以及 oauth_invalid 状态修复仍由 Python 负责。
+- 不要把新的 AI request hot-path 逻辑继续扩展到这里。
 - 不得在日志或响应中返回 access_token/refresh_token/client_secret。
 """
 
@@ -26,12 +29,15 @@ from typing import Any, Literal
 from urllib.parse import parse_qsl, urlencode, urlparse
 
 import httpx
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 from redis.asyncio import Redis
 from sqlalchemy.orm import Session
 
+from src.api.base.admin_adapter import AdminApiAdapter
+from src.api.base.context import ApiRequestContext
+from src.api.base.pipeline import get_pipeline
 from src.clients.redis_client import get_redis_client
 from src.core.crypto import crypto_service
 from src.core.exceptions import InvalidRequestException, NotFoundException
@@ -49,6 +55,13 @@ from src.utils.async_utils import safe_create_task
 from src.utils.auth_utils import require_admin
 
 router = APIRouter(prefix="/api/admin/provider-oauth", tags=["Provider OAuth"])
+pipeline = get_pipeline()
+
+_PROVIDER_OAUTH_RUST_BACKEND_DETAIL = "Admin provider OAuth requires Rust maintenance backend"
+
+
+def _raise_provider_oauth_backend_unavailable() -> None:
+    raise HTTPException(status_code=503, detail=_PROVIDER_OAUTH_RUST_BACKEND_DETAIL)
 
 
 def _normalize_oauth_refresh_error_message(
@@ -145,6 +158,7 @@ def _store_completed_oauth_sync(
 
 
 def _mark_refresh_failed_sync(key_id: str, reason: str) -> None:
+    """记录 admin 手动 refresh 失败导致的 oauth_invalid 标记。"""
     with get_db_context() as db:
         key = db.query(ProviderAPIKey).filter(ProviderAPIKey.id == key_id).first()
         if not key:
@@ -870,29 +884,52 @@ def _check_duplicate_oauth_account(
 # ==============================================================================
 
 
-@router.get("/supported-types")
-async def supported_types(_: User = Depends(require_admin)) -> list[dict[str, Any]]:
-    # 不返回 client_secret
-    result: list[dict[str, Any]] = []
-    for provider_type, template in FIXED_PROVIDERS.items():
-        if not _supports_oauth(template):
-            continue
-        result.append(
-            {
-                "provider_type": (
-                    str(provider_type.value)
-                    if hasattr(provider_type, "value")
-                    else str(provider_type)
-                ),
-                "display_name": template.display_name,
-                "scopes": list(template.oauth.scopes),
-                "redirect_uri": template.oauth.redirect_uri,
-                "authorize_url": template.oauth.authorize_url,
-                "token_url": template.oauth.token_url,
-                "use_pkce": bool(template.oauth.use_pkce),
-            }
+class AdminProviderOAuthSupportedTypesAdapter(AdminApiAdapter):
+    async def handle(self, context: ApiRequestContext) -> list[dict[str, Any]]:  # type: ignore[override]
+        _ = context
+        result: list[dict[str, Any]] = []
+        for provider_type, template in FIXED_PROVIDERS.items():
+            if not _supports_oauth(template):
+                continue
+            result.append(
+                {
+                    "provider_type": (
+                        str(provider_type.value)
+                        if hasattr(provider_type, "value")
+                        else str(provider_type)
+                    ),
+                    "display_name": template.display_name,
+                    "scopes": list(template.oauth.scopes),
+                    "redirect_uri": template.oauth.redirect_uri,
+                    "authorize_url": template.oauth.authorize_url,
+                    "token_url": template.oauth.token_url,
+                    "use_pkce": bool(template.oauth.use_pkce),
+                }
+            )
+        return result
+
+
+class AdminProviderOAuthUnavailableAdapter(AdminApiAdapter):
+    def __init__(self, *, operation: str):
+        self.operation = operation
+
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        context.add_audit_metadata(
+            action="provider_oauth_unavailable",
+            operation=self.operation,
+            rust_backend_required=True,
         )
-    return result
+        _raise_provider_oauth_backend_unavailable()
+
+
+@router.get("/supported-types")
+async def supported_types(
+    request: Request,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_admin),
+) -> list[dict[str, Any]]:
+    adapter = AdminProviderOAuthUnavailableAdapter(operation="supported_types")
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
 
 
 @router.post("/keys/{key_id}/start", response_model=StartOAuthResponse)
@@ -902,6 +939,9 @@ async def start_oauth(
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
 ) -> StartOAuthResponse:
+    adapter = AdminProviderOAuthUnavailableAdapter(operation="start_oauth")
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+
     key = db.query(ProviderAPIKey).filter(ProviderAPIKey.id == key_id).first()
     if not key:
         raise NotFoundException("Key 不存在", "key")
@@ -977,6 +1017,9 @@ async def complete_oauth(
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
 ) -> CompleteOAuthResponse:
+    adapter = AdminProviderOAuthUnavailableAdapter(operation="complete_oauth")
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+
     redis = await get_redis_client(require_redis=True)
     assert redis is not None
 
@@ -1116,8 +1159,13 @@ async def refresh_oauth(
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
 ) -> CompleteOAuthResponse:
+    adapter = AdminProviderOAuthUnavailableAdapter(operation="refresh_oauth")
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+
     from src.services.provider.auth import _acquire_refresh_lock, _release_refresh_lock
 
+    # 这是管理员手动维修/校准 OAuth 状态的入口，不是 AI 运行时的通用 refresh 热路径。
+    # Rust 热路径即使已接手请求执行，这里仍保留 admin 驱动的 token 修复与状态回写。
     key = db.query(ProviderAPIKey).filter(ProviderAPIKey.id == key_id).first()
     if not key:
         raise NotFoundException("Key 不存在", "key")
@@ -1344,6 +1392,9 @@ async def start_provider_oauth(
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
 ) -> StartOAuthResponse:
+    adapter = AdminProviderOAuthUnavailableAdapter(operation="start_provider_oauth")
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+
     """基于 Provider 启动 OAuth（不需要预先创建 key）。"""
     provider = db.query(Provider).filter(Provider.id == provider_id).first()
     if not provider:
@@ -1416,6 +1467,9 @@ async def complete_provider_oauth(
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
 ) -> ProviderCompleteOAuthResponse:
+    adapter = AdminProviderOAuthUnavailableAdapter(operation="complete_provider_oauth")
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+
     """完成 Provider OAuth 并创建 key。"""
     redis = await get_redis_client(require_redis=True)
     assert redis is not None
@@ -1951,9 +2005,13 @@ def _apply_codex_import_hints(auth_config: dict[str, Any], import_entry: dict[st
 async def import_refresh_token(
     provider_id: str,
     payload: ImportRefreshTokenRequest,
+    request: Request,
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
 ) -> ProviderCompleteOAuthResponse:
+    adapter = AdminProviderOAuthUnavailableAdapter(operation="import_refresh_token")
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+
     """通过 Refresh Token 导入 OAuth 账号。
 
     使用导出的 Refresh Token 换取 Access Token 并创建新的 OAuth Key。
@@ -2574,9 +2632,13 @@ async def _batch_import_standard_oauth_internal(
 async def batch_import_oauth(
     provider_id: str,
     payload: BatchImportRequest,
+    request: Request,
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
 ) -> BatchImportResponse:
+    adapter = AdminProviderOAuthUnavailableAdapter(operation="batch_import_oauth")
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+
     """批量导入 OAuth 凭据（通用）。
 
     支持的 Provider 类型：Codex、Antigravity、GeminiCli、ClaudeCode、Kiro
@@ -2754,9 +2816,13 @@ async def _run_batch_import_task(
 async def start_batch_import_oauth_task(
     provider_id: str,
     payload: BatchImportRequest,
+    request: Request,
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
 ) -> BatchImportTaskStartResponse:
+    adapter = AdminProviderOAuthUnavailableAdapter(operation="start_batch_import_oauth_task")
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+
     """创建 OAuth 批量导入异步任务。"""
     provider = db.query(Provider).filter(Provider.id == provider_id).first()
     if not provider:
@@ -2819,8 +2885,13 @@ async def start_batch_import_oauth_task(
 async def get_batch_import_oauth_task_status(
     provider_id: str,
     task_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
     _: User = Depends(require_admin),
 ) -> BatchImportTaskStatusResponse:
+    adapter = AdminProviderOAuthUnavailableAdapter(operation="get_batch_import_oauth_task_status")
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+
     """获取 OAuth 批量导入异步任务状态。"""
     state = await _load_batch_task_state(task_id)
     if not state:
@@ -3096,44 +3167,8 @@ async def _sso_oidc_post(
     proxy_config: dict[str, Any] | None = None,
     timeout: float = 30.0,
 ) -> dict[str, Any]:
-    """POST to AWS SSO OIDC endpoint, return parsed JSON or raise."""
-    from src.clients.http_client import HTTPClientPool
-
-    client = await HTTPClientPool.get_proxy_client(proxy_config=proxy_config)
-    resp = await client.post(
-        url,
-        json=body,
-        timeout=timeout,
-    )
-    if resp.status_code >= 400:
-        # 返回原始 JSON 让调用方处理错误码
-        try:
-            err_data = resp.json()
-            err_code = err_data.get("error", "")
-            if err_code in ("authorization_pending", "slow_down"):
-                logger.debug(
-                    "SSO OIDC polling: {} returned {} ({})",
-                    url,
-                    resp.status_code,
-                    err_code,
-                )
-            else:
-                logger.warning(
-                    "SSO OIDC request failed: {} returned {} | body={}",
-                    url,
-                    resp.status_code,
-                    err_data,
-                )
-            return {"_error": True, "_status": resp.status_code, **err_data}
-        except Exception:
-            logger.warning(
-                "SSO OIDC request failed: {} returned {} | text={}",
-                url,
-                resp.status_code,
-                resp.text[:200],
-            )
-            raise InvalidRequestException(f"AWS SSO OIDC 请求失败: HTTP {resp.status_code}")
-    return resp.json()
+    del url, body, proxy_config, timeout
+    raise InvalidRequestException(_PROVIDER_OAUTH_RUST_BACKEND_DETAIL)
 
 
 async def _register_sso_oidc_client(
@@ -3208,9 +3243,13 @@ async def _poll_device_token(
 async def device_authorize(
     provider_id: str,
     payload: DeviceAuthorizeRequest,
+    request: Request,
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
 ) -> DeviceAuthorizeResponse:
+    adapter = AdminProviderOAuthUnavailableAdapter(operation="device_authorize")
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+
     """发起 AWS SSO OIDC 设备授权流程（仅限 Kiro provider）。"""
     provider = db.query(Provider).filter(Provider.id == provider_id).first()
     if not provider:
@@ -3295,9 +3334,13 @@ async def device_authorize(
 async def device_poll(
     provider_id: str,
     payload: DevicePollRequest,
+    request: Request,
     db: Session = Depends(get_db),
     _: User = Depends(require_admin),
 ) -> DevicePollResponse:
+    adapter = AdminProviderOAuthUnavailableAdapter(operation="device_poll")
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+
     """轮询设备授权状态，授权成功时自动创建 Key。"""
     redis = await get_redis_client(require_redis=True)
     assert redis is not None

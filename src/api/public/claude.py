@@ -19,6 +19,15 @@ router = APIRouter(tags=["Claude API"])
 pipeline = get_pipeline()
 
 
+async def _run_claude_route_shell(adapter: Any, http_request: Request, db: Session) -> Any:
+    return await pipeline.run(
+        adapter=adapter,
+        http_request=http_request,
+        db=db,
+        mode=adapter.mode,
+    )
+
+
 @router.post("/v1/messages")
 async def create_message(
     http_request: Request,
@@ -44,13 +53,7 @@ async def create_message(
     from src.api.handlers.claude import build_claude_adapter
 
     adapter = build_claude_adapter(http_request)
-    return await pipeline.run(
-        adapter=adapter,
-        http_request=http_request,
-        db=db,
-        mode=adapter.mode,
-        api_format_hint=adapter.allowed_api_formats[0],
-    )
+    return await _run_claude_route_shell(adapter, http_request, db)
 
 
 @router.post("/v1/messages/count_tokens")
@@ -68,9 +71,4 @@ async def count_tokens(
     from src.api.handlers.claude import ClaudeTokenCountAdapter
 
     adapter = ClaudeTokenCountAdapter()
-    return await pipeline.run(
-        adapter=adapter,
-        http_request=http_request,
-        db=db,
-        mode=adapter.mode,
-    )
+    return await _run_claude_route_shell(adapter, http_request, db)

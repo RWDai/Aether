@@ -213,6 +213,9 @@ async def clear_oauth_invalid(
     手动清除指定 Key 的 oauth_invalid_at / oauth_invalid_reason 状态，
     通常在管理员确认账号已完成验证后使用。
 
+    这是 admin/status 维修入口，不是 AI 运行时请求恢复路径。
+    Rust 热路径迁移完成后，这里仍负责人工解除 OAuth invalid 标记。
+
     **路径参数**:
     - `key_id`: Key ID
 

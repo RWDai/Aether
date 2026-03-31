@@ -79,3 +79,14 @@ def test_import_new_standalone_key_null_rate_limit_keeps_inherit_semantics() -> 
         )
         is None
     )
+
+
+def test_import_access_list_accepts_stringified_json_array() -> None:
+    assert AdminImportUsersAdapter._normalize_imported_access_list('["openai", " gemini "]') == [
+        "openai",
+        "gemini",
+    ]
+
+
+def test_import_access_list_wraps_single_string() -> None:
+    assert AdminImportUsersAdapter._normalize_imported_access_list("openai") == ["openai"]

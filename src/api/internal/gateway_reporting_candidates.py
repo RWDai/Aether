@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import BackgroundTasks
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.core.logger import logger
@@ -14,6 +15,26 @@ from src.models.database import ApiKey, RequestCandidate, User
 
 from .gateway_contract import GatewayStreamReportRequest, GatewaySyncReportRequest
 from .gateway_reporting_common import _gateway_module
+
+
+def _load_existing_gateway_direct_candidate_record_map(
+    *,
+    db: Session,
+    request_id: str,
+) -> dict[tuple[int, int], str]:
+    if not request_id or not hasattr(db, "query"):
+        return {}
+
+    rows = (
+        db.query(RequestCandidate)
+        .filter(RequestCandidate.request_id == request_id)
+        .order_by(RequestCandidate.candidate_index, RequestCandidate.retry_index)
+        .all()
+    )
+    return {
+        (int(row.candidate_index or 0), int(row.retry_index or 0)): str(row.id)
+        for row in rows
+    }
 
 
 def _record_gateway_direct_candidate_graph(
@@ -42,15 +63,38 @@ def _record_gateway_direct_candidate_graph(
     user_id = str(getattr(user_api_key, "user_id", "") or getattr(user, "id", "") or "") or None
 
     try:
-        candidate_record_map = candidate_resolver.create_candidate_records(
-            candidates,
+        candidate_record_map = _load_existing_gateway_direct_candidate_record_map(
+            db=db,
+            request_id=request_id,
+        )
+        if not candidate_record_map:
+            candidate_record_map = candidate_resolver.create_candidate_records(
+                candidates,
+                request_id,
+                user_id,
+                user_api_key,
+                required_capabilities,
+                expand_retries=False,
+            )
+    except IntegrityError as exc:
+        db.rollback()
+        candidate_record_map = _load_existing_gateway_direct_candidate_record_map(
+            db=db,
+            request_id=request_id,
+        )
+        if not candidate_record_map:
+            logger.warning(
+                "[Gateway] failed to create direct candidate graph for request {}: {}",
+                request_id,
+                exc,
+            )
+            return
+        logger.debug(
+            "[Gateway] reused existing direct candidate graph for request {} after duplicate insert",
             request_id,
-            user_id,
-            user_api_key,
-            required_capabilities,
-            expand_retries=False,
         )
     except Exception as exc:
+        db.rollback()
         logger.warning(
             "[Gateway] failed to create direct candidate graph for request {}: {}",
             request_id,

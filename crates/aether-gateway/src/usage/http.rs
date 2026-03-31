@@ -1,0 +1,69 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use axum::extract::{Path, Query, State};
+use axum::response::IntoResponse;
+use axum::Json;
+use serde::Deserialize;
+use serde_json::json;
+
+use crate::gateway::AppState;
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct GetRequestAuditBundleQuery {
+    pub(crate) attempted_only: Option<bool>,
+}
+
+pub(crate) async fn get_request_usage_audit(
+    State(state): State<AppState>,
+    Path(request_id): Path<String>,
+) -> Result<Json<super::RequestUsageAudit>, axum::response::Response> {
+    let usage = state
+        .read_request_usage_audit(&request_id)
+        .await
+        .map_err(IntoResponse::into_response)?;
+
+    match usage {
+        Some(usage) => Ok(Json(usage)),
+        None => Err((
+            axum::http::StatusCode::NOT_FOUND,
+            Json(json!({
+                "error": {
+                    "message": "Request usage not found",
+                }
+            })),
+        )
+            .into_response()),
+    }
+}
+
+pub(crate) async fn get_request_audit_bundle(
+    State(state): State<AppState>,
+    Path(request_id): Path<String>,
+    Query(query): Query<GetRequestAuditBundleQuery>,
+) -> Result<Json<super::RequestAuditBundle>, axum::response::Response> {
+    let attempted_only = query.attempted_only.unwrap_or(false);
+    let bundle = state
+        .read_request_audit_bundle(&request_id, attempted_only, current_unix_secs())
+        .await
+        .map_err(IntoResponse::into_response)?;
+
+    match bundle {
+        Some(bundle) => Ok(Json(bundle)),
+        None => Err((
+            axum::http::StatusCode::NOT_FOUND,
+            Json(json!({
+                "error": {
+                    "message": "Request audit bundle not found",
+                }
+            })),
+        )
+            .into_response()),
+    }
+}
+
+fn current_unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}

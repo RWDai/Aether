@@ -8,7 +8,9 @@ description = "Shared data access contracts and config for Aether Rust services"
 
 [dependencies]
 aether-cache.workspace = true
+aether-wallet.workspace = true
 async-trait.workspace = true
+chrono.workspace = true
 futures-util.workspace = true
 redis.workspace = true
 serde.workspace = true

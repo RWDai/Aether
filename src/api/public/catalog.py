@@ -44,6 +44,7 @@ from src.services.system.config import SystemConfigService
 from src.utils.cache_decorator import cache_result
 
 router = APIRouter(prefix="/api/public", tags=["System Catalog"])
+python_host_router = APIRouter(prefix="/api/public", tags=["System Catalog"])
 pipeline = get_pipeline()
 
 
@@ -74,12 +75,10 @@ def _fetch_recent_public_health_attempts_for_api_format(
 
 
 @router.get("/site-info")
-def get_site_info(db: Session = Depends(get_db)) -> dict[str, str]:
+async def get_site_info(request: Request, db: Session = Depends(get_db)) -> Any:
     """获取站点基本信息（公开接口，无需认证）"""
-    return {
-        "site_name": SystemConfigService.get_config(db, "site_name", default="Aether"),
-        "site_subtitle": SystemConfigService.get_config(db, "site_subtitle", default="AI Gateway"),
-    }
+    adapter = PublicSiteInfoAdapter()
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=ApiMode.PUBLIC)
 
 
 @router.get("/providers", response_model=list[PublicProviderResponse])
@@ -162,7 +161,6 @@ async def get_public_models(
     )
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=ApiMode.PUBLIC)
 
-
 @router.get("/stats", response_model=ProviderStatsResponse)
 async def get_public_stats(request: Request, db: Session = Depends(get_db)) -> Any:
     """
@@ -223,7 +221,6 @@ async def search_models(
     """
     adapter = PublicSearchModelsAdapter(query=q, provider_id=provider_id, limit=limit)
     return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=ApiMode.PUBLIC)
-
 
 @router.get("/health/api-formats", response_model=PublicApiFormatHealthMonitorResponse)
 async def get_public_api_format_health(
@@ -320,6 +317,19 @@ class PublicApiAdapter(ApiAdapter):
 
     def authorize(self, context: ApiRequestContext) -> None:  # type: ignore[override]
         return None
+
+
+class PublicSiteInfoAdapter(PublicApiAdapter):
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        db = context.db
+        return {
+            "site_name": SystemConfigService.get_config(db, "site_name", default="Aether"),
+            "site_subtitle": SystemConfigService.get_config(
+                db,
+                "site_subtitle",
+                default="AI Gateway",
+            ),
+        }
 
 
 @dataclass

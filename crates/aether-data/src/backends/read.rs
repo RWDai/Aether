@@ -2,20 +2,44 @@ use std::fmt;
 use std::sync::Arc;
 
 use super::PostgresBackend;
+use crate::repository::announcements::AnnouncementReadRepository;
 use crate::repository::auth::AuthApiKeyReadRepository;
+use crate::repository::auth_modules::AuthModuleReadRepository;
+use crate::repository::billing::BillingReadRepository;
+use crate::repository::candidate_selection::MinimalCandidateSelectionReadRepository;
 use crate::repository::candidates::RequestCandidateReadRepository;
+use crate::repository::gemini_file_mappings::GeminiFileMappingReadRepository;
+use crate::repository::global_models::GlobalModelReadRepository;
+use crate::repository::management_tokens::ManagementTokenReadRepository;
+use crate::repository::oauth_providers::OAuthProviderReadRepository;
 use crate::repository::provider_catalog::ProviderCatalogReadRepository;
+use crate::repository::proxy_nodes::ProxyNodeReadRepository;
+use crate::repository::quota::ProviderQuotaReadRepository;
 use crate::repository::shadow_results::ShadowResultReadRepository;
 use crate::repository::usage::UsageReadRepository;
+use crate::repository::users::UserReadRepository;
 use crate::repository::video_tasks::VideoTaskReadRepository;
+use crate::repository::wallet::WalletReadRepository;
 
 #[derive(Clone, Default)]
 pub struct DataReadRepositories {
+    announcements: Option<Arc<dyn AnnouncementReadRepository>>,
     auth_api_keys: Option<Arc<dyn AuthApiKeyReadRepository>>,
+    auth_modules: Option<Arc<dyn AuthModuleReadRepository>>,
+    billing: Option<Arc<dyn BillingReadRepository>>,
+    gemini_file_mappings: Option<Arc<dyn GeminiFileMappingReadRepository>>,
+    global_models: Option<Arc<dyn GlobalModelReadRepository>>,
+    management_tokens: Option<Arc<dyn ManagementTokenReadRepository>>,
+    oauth_providers: Option<Arc<dyn OAuthProviderReadRepository>>,
+    proxy_nodes: Option<Arc<dyn ProxyNodeReadRepository>>,
+    minimal_candidate_selection: Option<Arc<dyn MinimalCandidateSelectionReadRepository>>,
     request_candidates: Option<Arc<dyn RequestCandidateReadRepository>>,
     provider_catalog: Option<Arc<dyn ProviderCatalogReadRepository>>,
+    provider_quotas: Option<Arc<dyn ProviderQuotaReadRepository>>,
     usage: Option<Arc<dyn UsageReadRepository>>,
+    users: Option<Arc<dyn UserReadRepository>>,
     video_tasks: Option<Arc<dyn VideoTaskReadRepository>>,
+    wallets: Option<Arc<dyn WalletReadRepository>>,
     shadow_results: Option<Arc<dyn ShadowResultReadRepository>>,
 }
 
@@ -23,10 +47,28 @@ impl fmt::Debug for DataReadRepositories {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DataReadRepositories")
             .field("has_auth_api_keys", &self.auth_api_keys.is_some())
+            .field("has_announcements", &self.announcements.is_some())
+            .field("has_auth_modules", &self.auth_modules.is_some())
+            .field("has_billing", &self.billing.is_some())
+            .field(
+                "has_gemini_file_mappings",
+                &self.gemini_file_mappings.is_some(),
+            )
+            .field("has_global_models", &self.global_models.is_some())
+            .field("has_management_tokens", &self.management_tokens.is_some())
+            .field("has_oauth_providers", &self.oauth_providers.is_some())
+            .field("has_proxy_nodes", &self.proxy_nodes.is_some())
+            .field(
+                "has_minimal_candidate_selection",
+                &self.minimal_candidate_selection.is_some(),
+            )
             .field("has_request_candidates", &self.request_candidates.is_some())
             .field("has_provider_catalog", &self.provider_catalog.is_some())
+            .field("has_provider_quotas", &self.provider_quotas.is_some())
             .field("has_usage", &self.usage.is_some())
+            .field("has_users", &self.users.is_some())
             .field("has_video_tasks", &self.video_tasks.is_some())
+            .field("has_wallets", &self.wallets.is_some())
             .field("has_shadow_results", &self.shadow_results.is_some())
             .finish()
     }
@@ -35,17 +77,69 @@ impl fmt::Debug for DataReadRepositories {
 impl DataReadRepositories {
     pub(crate) fn from_postgres(postgres: Option<&PostgresBackend>) -> Self {
         Self {
+            announcements: postgres.map(PostgresBackend::announcement_read_repository),
             auth_api_keys: postgres.map(PostgresBackend::auth_api_key_read_repository),
+            auth_modules: postgres.map(PostgresBackend::auth_module_read_repository),
+            billing: postgres.map(PostgresBackend::billing_read_repository),
+            gemini_file_mappings: postgres
+                .map(PostgresBackend::gemini_file_mapping_read_repository),
+            global_models: postgres.map(PostgresBackend::global_model_read_repository),
+            management_tokens: postgres.map(PostgresBackend::management_token_read_repository),
+            oauth_providers: postgres.map(PostgresBackend::oauth_provider_read_repository),
+            proxy_nodes: postgres.map(PostgresBackend::proxy_node_read_repository),
+            minimal_candidate_selection: postgres
+                .map(PostgresBackend::minimal_candidate_selection_read_repository),
             request_candidates: postgres.map(PostgresBackend::request_candidate_read_repository),
             provider_catalog: postgres.map(PostgresBackend::provider_catalog_read_repository),
+            provider_quotas: postgres.map(PostgresBackend::provider_quota_read_repository),
             usage: postgres.map(PostgresBackend::usage_read_repository),
+            users: postgres.map(PostgresBackend::user_read_repository),
             video_tasks: postgres.map(PostgresBackend::video_task_read_repository),
+            wallets: postgres.map(PostgresBackend::wallet_read_repository),
             shadow_results: postgres.map(PostgresBackend::shadow_result_read_repository),
         }
     }
 
     pub fn auth_api_keys(&self) -> Option<Arc<dyn AuthApiKeyReadRepository>> {
         self.auth_api_keys.clone()
+    }
+
+    pub fn announcements(&self) -> Option<Arc<dyn AnnouncementReadRepository>> {
+        self.announcements.clone()
+    }
+
+    pub fn auth_modules(&self) -> Option<Arc<dyn AuthModuleReadRepository>> {
+        self.auth_modules.clone()
+    }
+
+    pub fn billing(&self) -> Option<Arc<dyn BillingReadRepository>> {
+        self.billing.clone()
+    }
+
+    pub fn gemini_file_mappings(&self) -> Option<Arc<dyn GeminiFileMappingReadRepository>> {
+        self.gemini_file_mappings.clone()
+    }
+
+    pub fn global_models(&self) -> Option<Arc<dyn GlobalModelReadRepository>> {
+        self.global_models.clone()
+    }
+
+    pub fn management_tokens(&self) -> Option<Arc<dyn ManagementTokenReadRepository>> {
+        self.management_tokens.clone()
+    }
+
+    pub fn oauth_providers(&self) -> Option<Arc<dyn OAuthProviderReadRepository>> {
+        self.oauth_providers.clone()
+    }
+
+    pub fn proxy_nodes(&self) -> Option<Arc<dyn ProxyNodeReadRepository>> {
+        self.proxy_nodes.clone()
+    }
+
+    pub fn minimal_candidate_selection(
+        &self,
+    ) -> Option<Arc<dyn MinimalCandidateSelectionReadRepository>> {
+        self.minimal_candidate_selection.clone()
     }
 
     pub fn request_candidates(&self) -> Option<Arc<dyn RequestCandidateReadRepository>> {
@@ -56,12 +150,24 @@ impl DataReadRepositories {
         self.provider_catalog.clone()
     }
 
+    pub fn provider_quotas(&self) -> Option<Arc<dyn ProviderQuotaReadRepository>> {
+        self.provider_quotas.clone()
+    }
+
     pub fn usage(&self) -> Option<Arc<dyn UsageReadRepository>> {
         self.usage.clone()
     }
 
+    pub fn users(&self) -> Option<Arc<dyn UserReadRepository>> {
+        self.users.clone()
+    }
+
     pub fn video_tasks(&self) -> Option<Arc<dyn VideoTaskReadRepository>> {
         self.video_tasks.clone()
+    }
+
+    pub fn wallets(&self) -> Option<Arc<dyn WalletReadRepository>> {
+        self.wallets.clone()
     }
 
     pub fn shadow_results(&self) -> Option<Arc<dyn ShadowResultReadRepository>> {
@@ -70,10 +176,22 @@ impl DataReadRepositories {
 
     pub fn has_any(&self) -> bool {
         self.auth_api_keys.is_some()
+            || self.announcements.is_some()
+            || self.auth_modules.is_some()
+            || self.billing.is_some()
+            || self.gemini_file_mappings.is_some()
+            || self.global_models.is_some()
+            || self.management_tokens.is_some()
+            || self.oauth_providers.is_some()
+            || self.proxy_nodes.is_some()
+            || self.minimal_candidate_selection.is_some()
             || self.request_candidates.is_some()
             || self.provider_catalog.is_some()
+            || self.provider_quotas.is_some()
             || self.usage.is_some()
+            || self.users.is_some()
             || self.video_tasks.is_some()
+            || self.wallets.is_some()
             || self.shadow_results.is_some()
     }
 }
@@ -101,11 +219,22 @@ mod tests {
         let read = DataReadRepositories::from_postgres(Some(&backend));
 
         assert!(read.has_any());
+        assert!(read.announcements().is_some());
         assert!(read.auth_api_keys().is_some());
+        assert!(read.auth_modules().is_some());
+        assert!(read.billing().is_some());
+        assert!(read.gemini_file_mappings().is_some());
+        assert!(read.global_models().is_some());
+        assert!(read.management_tokens().is_some());
+        assert!(read.oauth_providers().is_some());
+        assert!(read.proxy_nodes().is_some());
+        assert!(read.minimal_candidate_selection().is_some());
         assert!(read.request_candidates().is_some());
         assert!(read.provider_catalog().is_some());
+        assert!(read.provider_quotas().is_some());
         assert!(read.usage().is_some());
         assert!(read.video_tasks().is_some());
+        assert!(read.wallets().is_some());
         assert!(read.shadow_results().is_some());
     }
 }

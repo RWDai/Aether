@@ -1,7 +1,12 @@
 use std::sync::Arc;
 
+use aether_crypto::{encrypt_python_fernet_plaintext, DEVELOPMENT_ENCRYPTION_KEY};
 use aether_data::repository::auth::{
     InMemoryAuthApiKeySnapshotRepository, StoredAuthApiKeySnapshot,
+};
+use aether_data::repository::candidate_selection::{
+    InMemoryMinimalCandidateSelectionReadRepository, StoredMinimalCandidateSelectionRow,
+    StoredProviderModelMapping,
 };
 use aether_data::repository::candidates::{
     InMemoryRequestCandidateRepository, RequestCandidateStatus, StoredRequestCandidate,
@@ -13,13 +18,16 @@ use aether_data::repository::provider_catalog::{
 use aether_data::repository::shadow_results::{
     InMemoryShadowResultRepository, RecordShadowResultSample, ShadowResultLookupKey,
     ShadowResultMatchStatus, ShadowResultReadRepository, ShadowResultSampleOrigin,
-    UpsertShadowResult,
+    ShadowResultWriteRepository, StoredShadowResult, UpsertShadowResult,
 };
 use aether_data::repository::usage::{InMemoryUsageReadRepository, StoredRequestUsageAudit};
 use aether_data::repository::video_tasks::{
     InMemoryVideoTaskRepository, UpsertVideoTask, VideoTaskLookupKey, VideoTaskStatus,
     VideoTaskWriteRepository,
 };
+use aether_data::DataLayerError;
+use async_trait::async_trait;
+use serde_json::json;
 
 use super::{GatewayDataConfig, GatewayDataState};
 use crate::gateway::AppState;
@@ -31,8 +39,11 @@ fn disabled_gateway_data_state_has_no_backends() {
 
     assert!(!state.has_backends());
     assert!(!state.has_auth_api_key_reader());
+    assert!(!state.has_minimal_candidate_selection_reader());
     assert!(!state.has_request_candidate_reader());
     assert!(!state.has_provider_catalog_reader());
+    assert!(!state.has_proxy_node_reader());
+    assert!(!state.has_proxy_node_writer());
     assert!(!state.has_usage_reader());
     assert!(!state.has_video_task_reader());
     assert!(!state.has_shadow_result_reader());
@@ -49,8 +60,11 @@ async fn postgres_gateway_data_state_builds_video_task_reader() {
 
     assert!(state.has_backends());
     assert!(state.has_auth_api_key_reader());
+    assert!(state.has_minimal_candidate_selection_reader());
     assert!(state.has_request_candidate_reader());
     assert!(state.has_provider_catalog_reader());
+    assert!(state.has_proxy_node_reader());
+    assert!(state.has_proxy_node_writer());
     assert!(state.has_usage_reader());
     assert!(state.has_video_task_reader());
     assert!(state.has_shadow_result_reader());
@@ -64,19 +78,41 @@ async fn data_state_find_uses_configured_read_repository() {
         .upsert(UpsertVideoTask {
             id: "task-1".to_string(),
             short_id: Some("short-task-1".to_string()),
+            request_id: "request-1".to_string(),
             user_id: Some("user-1".to_string()),
+            api_key_id: Some("key-1".to_string()),
+            username: Some("user".to_string()),
+            api_key_name: Some("primary".to_string()),
             external_task_id: Some("ext-task-1".to_string()),
+            provider_id: Some("provider-1".to_string()),
+            endpoint_id: Some("endpoint-1".to_string()),
+            key_id: Some("provider-key-1".to_string()),
+            client_api_format: Some("openai:video".to_string()),
             provider_api_format: Some("openai:video".to_string()),
+            format_converted: false,
             model: Some("sora-2".to_string()),
             prompt: Some("hello".to_string()),
+            original_request_body: Some(json!({"prompt": "hello"})),
+            duration_seconds: Some(4),
+            resolution: Some("720p".to_string()),
+            aspect_ratio: Some("16:9".to_string()),
             size: Some("1280x720".to_string()),
             status: VideoTaskStatus::Queued,
             progress_percent: 0,
+            progress_message: None,
+            retry_count: 0,
+            poll_interval_seconds: 10,
+            next_poll_at_unix_secs: Some(100),
+            poll_count: 0,
+            max_poll_count: 360,
             created_at_unix_secs: 100,
+            submitted_at_unix_secs: Some(100),
+            completed_at_unix_secs: None,
             updated_at_unix_secs: 100,
             error_code: None,
             error_message: None,
             video_url: None,
+            request_metadata: None,
         })
         .await
         .expect("upsert should succeed");
@@ -107,8 +143,11 @@ async fn app_state_wires_gateway_data_state_from_config() {
 
     assert!(state.data.has_backends());
     assert!(state.data.has_auth_api_key_reader());
+    assert!(state.data.has_minimal_candidate_selection_reader());
     assert!(state.data.has_request_candidate_reader());
     assert!(state.data.has_provider_catalog_reader());
+    assert!(state.data.has_proxy_node_reader());
+    assert!(state.data.has_proxy_node_writer());
     assert!(state.data.has_usage_reader());
     assert!(state.data.has_video_task_reader());
     assert!(state.data.has_shadow_result_reader());
@@ -240,6 +279,85 @@ fn sample_request_usage(request_id: &str) -> StoredRequestUsageAudit {
         Some(102),
     )
     .expect("usage should build")
+}
+
+#[derive(Default)]
+struct MissingShadowResultsRelationRepository;
+
+fn missing_shadow_results_relation_error() -> DataLayerError {
+    DataLayerError::UnexpectedValue(
+        "postgres error: error returned from database: relation \"gateway_shadow_results\" does not exist"
+            .to_string(),
+    )
+}
+
+#[async_trait]
+impl ShadowResultReadRepository for MissingShadowResultsRelationRepository {
+    async fn find(
+        &self,
+        _key: ShadowResultLookupKey<'_>,
+    ) -> Result<Option<StoredShadowResult>, DataLayerError> {
+        Err(missing_shadow_results_relation_error())
+    }
+
+    async fn list_recent(&self, _limit: usize) -> Result<Vec<StoredShadowResult>, DataLayerError> {
+        Err(missing_shadow_results_relation_error())
+    }
+}
+
+#[async_trait]
+impl ShadowResultWriteRepository for MissingShadowResultsRelationRepository {
+    async fn upsert(
+        &self,
+        _result: UpsertShadowResult,
+    ) -> Result<StoredShadowResult, DataLayerError> {
+        Err(missing_shadow_results_relation_error())
+    }
+}
+
+fn sample_minimal_candidate_selection_row(
+    provider_id: &str,
+    provider_name: &str,
+    provider_priority: i32,
+    key_id: &str,
+    key_name: &str,
+    key_internal_priority: i32,
+) -> StoredMinimalCandidateSelectionRow {
+    StoredMinimalCandidateSelectionRow {
+        provider_id: provider_id.to_string(),
+        provider_name: provider_name.to_string(),
+        provider_type: "custom".to_string(),
+        provider_priority,
+        provider_is_active: true,
+        endpoint_id: format!("endpoint-{provider_id}"),
+        endpoint_api_format: "openai:chat".to_string(),
+        endpoint_api_family: Some("openai".to_string()),
+        endpoint_kind: Some("chat".to_string()),
+        endpoint_is_active: true,
+        key_id: key_id.to_string(),
+        key_name: key_name.to_string(),
+        key_auth_type: "api_key".to_string(),
+        key_is_active: true,
+        key_api_formats: Some(vec!["openai:chat".to_string()]),
+        key_allowed_models: None,
+        key_capabilities: Some(serde_json::json!({"cache_1h": true})),
+        key_internal_priority,
+        key_global_priority_by_format: Some(serde_json::json!({"openai:chat": 3})),
+        model_id: format!("model-{provider_id}"),
+        global_model_id: "global-model-1".to_string(),
+        global_model_name: "gpt-4.1".to_string(),
+        global_model_mappings: Some(vec!["gpt-4\\.1-.*".to_string()]),
+        global_model_supports_streaming: Some(true),
+        model_provider_model_name: "gpt-4.1-upstream".to_string(),
+        model_provider_model_mappings: Some(vec![StoredProviderModelMapping {
+            name: "gpt-4.1-canary".to_string(),
+            priority: 1,
+            api_formats: Some(vec!["openai:chat".to_string()]),
+        }]),
+        model_supports_streaming: None,
+        model_is_active: true,
+        model_is_available: true,
+    }
 }
 
 #[tokio::test]
@@ -408,25 +526,189 @@ async fn data_state_reads_request_audit_bundle_from_multiple_readers() {
 }
 
 #[tokio::test]
+async fn data_state_reads_decrypted_provider_transport_snapshot() {
+    let encrypted_api_key =
+        encrypt_python_fernet_plaintext(DEVELOPMENT_ENCRYPTION_KEY, "sk-live-openai")
+            .expect("api key ciphertext should build");
+    let encrypted_auth_config = encrypt_python_fernet_plaintext(
+        DEVELOPMENT_ENCRYPTION_KEY,
+        "{\"refresh_token\":\"rt-1\",\"project\":\"demo\"}",
+    )
+    .expect("auth config ciphertext should build");
+    let provider = sample_provider_catalog_provider().with_transport_fields(
+        true,
+        false,
+        true,
+        Some(32),
+        Some(3),
+        Some(serde_json::json!({"url":"http://provider-proxy"})),
+        Some(20.0),
+        Some(8.0),
+        Some(serde_json::json!({"region":"global"})),
+    );
+    let endpoint = sample_provider_catalog_endpoint()
+        .with_transport_fields(
+            "https://api.openai.com".to_string(),
+            Some(serde_json::json!([{"action":"set","key":"x-test","value":"1"}])),
+            Some(serde_json::json!([{"action":"drop","path":"stream"}])),
+            Some(2),
+            Some("/v1/chat/completions".to_string()),
+            Some(serde_json::json!({"api_version":"v1"})),
+            Some(serde_json::json!({"allow":["openai:chat"]})),
+            Some(serde_json::json!({"url":"http://endpoint-proxy"})),
+        )
+        .expect("endpoint transport should build");
+    let key = sample_provider_catalog_key()
+        .with_transport_fields(
+            Some(serde_json::json!(["openai:chat", "openai:cli"])),
+            encrypted_api_key,
+            Some(encrypted_auth_config),
+            Some(serde_json::json!({"openai:chat": 0.8})),
+            Some(serde_json::json!({"openai:chat": 1})),
+            Some(serde_json::json!(["gpt-4.1", "gpt-4.1-mini"])),
+            Some(1_800_000_000),
+            Some(serde_json::json!({"node_id":"proxy-node-1"})),
+            Some(serde_json::json!({"tls_profile":"chrome_136"})),
+        )
+        .expect("key transport should build");
+    let repository = Arc::new(InMemoryProviderCatalogReadRepository::seed(
+        vec![provider],
+        vec![endpoint],
+        vec![key],
+    ));
+    let state = GatewayDataState::with_provider_transport_reader_for_tests(
+        repository,
+        DEVELOPMENT_ENCRYPTION_KEY.to_string(),
+    );
+
+    let snapshot = state
+        .read_provider_transport_snapshot("provider-1", "endpoint-1", "provider-key-1")
+        .await
+        .expect("snapshot read should succeed")
+        .expect("snapshot should exist");
+
+    assert_eq!(snapshot.provider.name, "OpenAI");
+    assert_eq!(snapshot.endpoint.base_url, "https://api.openai.com");
+    assert_eq!(
+        snapshot.key.api_formats,
+        Some(vec!["openai:chat".to_string(), "openai:cli".to_string()])
+    );
+    assert_eq!(snapshot.key.decrypted_api_key, "sk-live-openai");
+    assert_eq!(
+        snapshot.key.decrypted_auth_config.as_deref(),
+        Some("{\"refresh_token\":\"rt-1\",\"project\":\"demo\"}")
+    );
+}
+
+#[tokio::test]
+async fn data_state_reads_minimal_candidate_selection_with_auth_filters() {
+    let candidate_selection_repository =
+        Arc::new(InMemoryMinimalCandidateSelectionReadRepository::seed(vec![
+            sample_minimal_candidate_selection_row(
+                "provider-2",
+                "OtherProvider",
+                20,
+                "key-2",
+                "key-two",
+                20,
+            ),
+            sample_minimal_candidate_selection_row(
+                "provider-1",
+                "OpenAI",
+                10,
+                "key-1",
+                "key-one",
+                10,
+            ),
+            StoredMinimalCandidateSelectionRow {
+                key_global_priority_by_format: Some(serde_json::json!({"openai:chat": 4})),
+                key_allowed_models: Some(vec!["gpt-4.1-edge".to_string()]),
+                ..sample_minimal_candidate_selection_row(
+                    "provider-1",
+                    "OpenAI",
+                    10,
+                    "key-3",
+                    "key-three",
+                    30,
+                )
+            },
+        ]));
+    let auth_repository = Arc::new(InMemoryAuthApiKeySnapshotRepository::seed(vec![(
+        Some("hash-1".to_string()),
+        sample_auth_snapshot("api-key-1", "user-1"),
+    )]));
+    let state = GatewayDataState::with_minimal_candidate_selection_and_auth_for_tests(
+        candidate_selection_repository,
+        auth_repository,
+    );
+    let auth_snapshot = state
+        .read_auth_api_key_snapshot("user-1", "api-key-1", 150)
+        .await
+        .expect("auth snapshot should read")
+        .expect("auth snapshot should exist");
+
+    let selection = state
+        .read_minimal_candidate_selection("openai:chat", "gpt-4.1", false, Some(&auth_snapshot))
+        .await
+        .expect("selection should read");
+
+    assert_eq!(selection.len(), 2);
+    assert_eq!(selection[0].provider_id, "provider-1");
+    assert_eq!(selection[0].selected_provider_model_name, "gpt-4.1-canary");
+    assert_eq!(selection[0].mapping_matched_model, None);
+    assert_eq!(selection[1].key_id, "key-3");
+    assert_eq!(
+        selection[1].selected_provider_model_name,
+        "gpt-4.1-edge".to_string()
+    );
+    assert_eq!(
+        selection[1].mapping_matched_model,
+        Some("gpt-4.1-edge".to_string())
+    );
+}
+
+#[tokio::test]
 async fn maps_openai_video_task_repository_row_into_read_response() {
     let repository = Arc::new(InMemoryVideoTaskRepository::default());
     repository
         .upsert(UpsertVideoTask {
             id: "task-1".to_string(),
             short_id: Some("short-task-1".to_string()),
+            request_id: "request-1".to_string(),
             user_id: Some("user-1".to_string()),
+            api_key_id: Some("key-1".to_string()),
+            username: Some("user".to_string()),
+            api_key_name: Some("primary".to_string()),
             external_task_id: Some("ext-task-1".to_string()),
+            provider_id: Some("provider-1".to_string()),
+            endpoint_id: Some("endpoint-1".to_string()),
+            key_id: Some("provider-key-1".to_string()),
+            client_api_format: Some("openai:video".to_string()),
             provider_api_format: Some("openai:video".to_string()),
+            format_converted: false,
             model: Some("sora-2".to_string()),
             prompt: Some("hello".to_string()),
+            original_request_body: Some(json!({"prompt": "hello"})),
+            duration_seconds: Some(4),
+            resolution: Some("720p".to_string()),
+            aspect_ratio: Some("16:9".to_string()),
             size: Some("1280x720".to_string()),
             status: VideoTaskStatus::Processing,
             progress_percent: 45,
+            progress_message: Some("working".to_string()),
+            retry_count: 0,
+            poll_interval_seconds: 10,
+            next_poll_at_unix_secs: Some(120),
+            poll_count: 1,
+            max_poll_count: 360,
             created_at_unix_secs: 100,
+            submitted_at_unix_secs: Some(100),
+            completed_at_unix_secs: None,
             updated_at_unix_secs: 120,
             error_code: None,
             error_message: None,
             video_url: None,
+            request_metadata: None,
         })
         .await
         .expect("upsert should succeed");
@@ -451,19 +733,55 @@ async fn maps_gemini_video_task_repository_row_into_read_response() {
         .upsert(UpsertVideoTask {
             id: "task-1".to_string(),
             short_id: Some("localshort123".to_string()),
+            request_id: "request-1".to_string(),
             user_id: Some("user-1".to_string()),
+            api_key_id: Some("key-1".to_string()),
+            username: Some("user".to_string()),
+            api_key_name: Some("primary".to_string()),
             external_task_id: Some("operations/ext-task-1".to_string()),
+            provider_id: Some("provider-1".to_string()),
+            endpoint_id: Some("endpoint-1".to_string()),
+            key_id: Some("provider-key-1".to_string()),
+            client_api_format: Some("gemini:video".to_string()),
             provider_api_format: Some("gemini:video".to_string()),
+            format_converted: false,
             model: Some("veo-3".to_string()),
             prompt: Some("hello".to_string()),
+            original_request_body: Some(json!({"prompt": "hello"})),
+            duration_seconds: Some(8),
+            resolution: Some("720p".to_string()),
+            aspect_ratio: Some("16:9".to_string()),
             size: Some("720p".to_string()),
             status: VideoTaskStatus::Completed,
             progress_percent: 100,
+            progress_message: None,
+            retry_count: 0,
+            poll_interval_seconds: 10,
+            next_poll_at_unix_secs: None,
+            poll_count: 4,
+            max_poll_count: 360,
             created_at_unix_secs: 100,
+            submitted_at_unix_secs: Some(100),
+            completed_at_unix_secs: Some(120),
             updated_at_unix_secs: 120,
             error_code: None,
             error_message: None,
             video_url: None,
+            request_metadata: Some(json!({
+                "rust_local_snapshot": {
+                    "metadata": {
+                        "generateVideoResponse": {
+                            "generatedSamples": [
+                                {
+                                    "video": {
+                                        "uri": "/v1beta/files/aev_localshort123:download?alt=media"
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            })),
         })
         .await
         .expect("upsert should succeed");
@@ -602,6 +920,44 @@ async fn data_state_lists_recent_shadow_results_from_reader() {
     assert_eq!(recent.len(), 1);
     assert_eq!(recent[0].trace_id, "trace-1");
     assert_eq!(recent[0].request_id.as_deref(), Some("req-shadow-1"));
+}
+
+#[tokio::test]
+async fn data_state_ignores_missing_shadow_results_relation_when_recording_sample() {
+    let repository = Arc::new(MissingShadowResultsRelationRepository);
+    let state = GatewayDataState::with_shadow_result_repository_for_tests(repository);
+
+    let recorded = state
+        .record_shadow_result_sample(RecordShadowResultSample {
+            trace_id: "trace-legacy".to_string(),
+            request_fingerprint: "fp-legacy".to_string(),
+            request_id: Some("req-legacy".to_string()),
+            route_family: Some("openai".to_string()),
+            route_kind: Some("chat".to_string()),
+            candidate_id: None,
+            origin: ShadowResultSampleOrigin::Rust,
+            result_digest: "digest-legacy".to_string(),
+            status_code: Some(200),
+            error_message: None,
+            recorded_at_unix_secs: 100,
+        })
+        .await
+        .expect("missing shadow result table should be ignored");
+
+    assert!(recorded.is_none());
+}
+
+#[tokio::test]
+async fn data_state_returns_empty_shadow_results_when_relation_missing() {
+    let repository = Arc::new(MissingShadowResultsRelationRepository);
+    let state = GatewayDataState::with_shadow_result_repository_for_tests(repository);
+
+    let recent = state
+        .list_recent_shadow_results(5)
+        .await
+        .expect("missing shadow result table should be ignored");
+
+    assert!(recent.is_empty());
 }
 
 fn sample_request_candidate(

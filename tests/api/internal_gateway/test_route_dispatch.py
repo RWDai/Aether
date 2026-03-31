@@ -75,6 +75,29 @@ def _wait_until(predicate: Any, *, timeout: float = 1.0, interval: float = 0.01)
     assert predicate()
 
 
+def _make_legacy_test_client(app: FastAPI) -> TestClient:
+    return TestClient(
+        app,
+        base_url="http://127.0.0.1",
+        headers={"x-aether-legacy-internal-gateway": "true"},
+    )
+
+
+def _make_internal_test_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    monkeypatch.setattr("src.api.internal.gateway.ensure_loopback", lambda request: None)
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_db] = lambda: object()
+    return TestClient(app, base_url="http://127.0.0.1")
+
+
+def _assert_legacy_guard_response(response) -> None:
+    assert response.status_code == 410
+    assert response.json() == {
+        "detail": "legacy internal gateway route removed; use public proxy"
+    }
+
+
 def test_build_gateway_sync_telemetry_writer_uses_queue_writer_when_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -314,7 +337,7 @@ def test_auth_context_route_returns_openai_bearer_auth_context(
         ),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/auth-context",
         json={
@@ -371,14 +394,17 @@ def test_execute_sync_route_returns_controlled_response(monkeypatch: pytest.Monk
     )
     monkeypatch.setattr("src.api.internal.gateway.get_pipeline", lambda: fake_pipeline)
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/execute-sync",
         json={
             "trace_id": "trace-sync-123",
             "method": "POST",
             "path": "/v1/chat/completions",
-            "headers": {"user-agent": "pytest"},
+            "headers": {
+                "user-agent": "pytest",
+                "x-aether-control-execute-fallback": "true",
+            },
             "body_json": {"model": "gpt-5", "messages": []},
             "auth_context": {
                 "user_id": "user-123",
@@ -438,7 +464,7 @@ def test_execute_sync_route_resolves_auth_context_when_missing(
     )
     monkeypatch.setattr("src.api.internal.gateway.get_pipeline", lambda: fake_pipeline)
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/execute-sync",
         json={
@@ -448,6 +474,7 @@ def test_execute_sync_route_resolves_auth_context_when_missing(
             "headers": {
                 "user-agent": "pytest",
                 "authorization": "Bearer client-key",
+                "x-aether-control-execute-fallback": "true",
             },
             "body_json": {"model": "gpt-5", "messages": []},
         },
@@ -465,14 +492,17 @@ def test_execute_sync_route_falls_back_for_stream_payload() -> None:
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr("src.api.internal.gateway.ensure_loopback", lambda request: None)
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/execute-sync",
         json={
             "trace_id": "trace-stream-123",
             "method": "POST",
             "path": "/v1/chat/completions",
-            "headers": {"user-agent": "pytest"},
+            "headers": {
+                "user-agent": "pytest",
+                "x-aether-control-execute-fallback": "true",
+            },
             "body_json": {"model": "gpt-5", "messages": [], "stream": True},
             "auth_context": {
                 "user_id": "user-123",
@@ -522,14 +552,17 @@ def test_execute_stream_route_returns_controlled_stream(monkeypatch: pytest.Monk
     )
     monkeypatch.setattr("src.api.internal.gateway.get_pipeline", lambda: fake_pipeline)
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/execute-stream",
         json={
             "trace_id": "trace-stream-123",
             "method": "POST",
             "path": "/v1/chat/completions",
-            "headers": {"user-agent": "pytest"},
+            "headers": {
+                "user-agent": "pytest",
+                "x-aether-control-execute-fallback": "true",
+            },
             "body_json": {"model": "gpt-5", "messages": [], "stream": True},
             "auth_context": {
                 "user_id": "user-123",
@@ -567,7 +600,7 @@ def test_plan_sync_route_executes_control_when_direct_plan_missing(
         execute_mock,
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/plan-sync",
         json={
@@ -608,7 +641,7 @@ def test_plan_stream_route_executes_control_when_direct_plan_missing(
         execute_mock,
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/plan-stream",
         json={
@@ -626,13 +659,77 @@ def test_plan_stream_route_executes_control_when_direct_plan_missing(
     execute_mock.assert_awaited_once()
 
 
+def test_plan_sync_route_requires_legacy_header(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _make_internal_test_client(monkeypatch)
+    response = client.post(
+        "/api/internal/gateway/plan-sync",
+        json={
+            "trace_id": "trace-guard-plan-sync",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "headers": {"content-type": "application/json"},
+            "body_json": {"model": "gpt-5", "messages": []},
+        },
+    )
+
+    _assert_legacy_guard_response(response)
+
+
+def test_plan_stream_route_requires_legacy_header(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _make_internal_test_client(monkeypatch)
+    response = client.post(
+        "/api/internal/gateway/plan-stream",
+        json={
+            "trace_id": "trace-guard-plan-stream",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "headers": {"content-type": "application/json"},
+            "body_json": {"model": "gpt-5", "messages": [], "stream": True},
+        },
+    )
+
+    _assert_legacy_guard_response(response)
+
+
+def test_report_sync_route_requires_legacy_header(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _make_internal_test_client(monkeypatch)
+    response = client.post(
+        "/api/internal/gateway/report-sync",
+        json={
+            "trace_id": "trace-guard-report-sync",
+            "report_kind": "openai_chat_sync_finalize",
+            "report_context": {"user_id": "user-123", "api_key_id": "key-123"},
+            "status_code": 200,
+            "headers": {"content-type": "application/json"},
+        },
+    )
+
+    _assert_legacy_guard_response(response)
+
+
+def test_finalize_sync_route_requires_legacy_header(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _make_internal_test_client(monkeypatch)
+    response = client.post(
+        "/api/internal/gateway/finalize-sync",
+        json={
+            "trace_id": "trace-guard-finalize-sync",
+            "report_kind": "openai_chat_sync_finalize",
+            "report_context": {"user_id": "user-123", "api_key_id": "key-123"},
+            "status_code": 200,
+            "headers": {"content-type": "application/json"},
+        },
+    )
+
+    _assert_legacy_guard_response(response)
+
+
 def test_execute_stream_route_falls_back_for_sync_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     app = FastAPI()
     app.include_router(router)
     app.dependency_overrides[get_db] = lambda: object()
     monkeypatch.setattr("src.api.internal.gateway.ensure_loopback", lambda request: None)
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/execute-stream",
         json={
@@ -649,9 +746,10 @@ def test_execute_stream_route_falls_back_for_sync_payload(monkeypatch: pytest.Mo
         },
     )
 
-    assert response.status_code == 409
-    assert response.headers[CONTROL_ACTION_HEADER] == CONTROL_ACTION_PROXY_PUBLIC
-    assert response.json() == {"action": CONTROL_ACTION_PROXY_PUBLIC}
+    assert response.status_code == 410
+    assert response.json() == {
+        "detail": "legacy internal gateway route removed; use public proxy"
+    }
 
 
 def test_execute_sync_route_handles_gemini_files_list(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -683,7 +781,7 @@ def test_execute_sync_route_handles_gemini_files_list(monkeypatch: pytest.Monkey
 
     monkeypatch.setattr("src.api.public.gemini_files.list_files", _fake_list_files)
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/execute-sync",
         json={
@@ -732,7 +830,7 @@ def test_execute_sync_route_handles_gemini_files_upload_raw_body(
 
     monkeypatch.setattr("src.api.public.gemini_files.upload_file", _fake_upload_file)
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/execute-sync",
         json={
@@ -796,7 +894,7 @@ def test_execute_sync_route_handles_openai_video_remix_with_original_request(
         lambda: SimpleNamespace(_check_user_rate_limit=AsyncMock(return_value=None)),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/execute-sync",
         json={
@@ -860,7 +958,7 @@ def test_plan_stream_route_returns_executor_plan_for_gemini_files_download(
         AsyncMock(return_value=fake_plan),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/plan-stream",
         json={
@@ -924,7 +1022,7 @@ def test_plan_stream_route_returns_executor_plan_for_openai_video_content(
         AsyncMock(return_value=fake_plan),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/plan-stream",
         json={
@@ -988,7 +1086,7 @@ def test_plan_sync_route_returns_executor_plan_for_gemini_files_get(
         AsyncMock(return_value=(fake_plan, {"file_key_id": "file-key-123", "user_id": "user-123"})),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/plan-sync",
         json={
@@ -1051,7 +1149,7 @@ def test_plan_sync_route_returns_executor_plan_for_openai_chat(
         ),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/plan-sync",
         json={
@@ -1118,7 +1216,7 @@ def test_decision_sync_route_returns_executor_decision_for_openai_chat(
         ),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/decision-sync",
         json={
@@ -1201,7 +1299,7 @@ def test_decision_stream_route_returns_executor_decision_for_openai_chat(
         ),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/decision-stream",
         json={
@@ -1245,6 +1343,38 @@ def test_decision_stream_route_returns_executor_decision_for_openai_chat(
         "report_kind": "openai_chat_stream_success",
         "report_context": {"user_id": "user-123", "api_key_id": "key-123"},
     }
+
+
+def test_decision_sync_route_requires_legacy_header(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _make_internal_test_client(monkeypatch)
+    response = client.post(
+        "/api/internal/gateway/decision-sync",
+        json={
+            "trace_id": "trace-guard-decision-sync",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "headers": {"content-type": "application/json"},
+            "body_json": {"model": "gpt-5", "messages": []},
+        },
+    )
+
+    _assert_legacy_guard_response(response)
+
+
+def test_decision_stream_route_requires_legacy_header(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _make_internal_test_client(monkeypatch)
+    response = client.post(
+        "/api/internal/gateway/decision-stream",
+        json={
+            "trace_id": "trace-guard-decision-stream",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "headers": {"content-type": "application/json"},
+            "body_json": {"model": "gpt-5", "messages": [], "stream": True},
+        },
+    )
+
+    _assert_legacy_guard_response(response)
 
 
 @pytest.mark.parametrize(
@@ -1333,7 +1463,7 @@ def test_decision_stream_route_returns_executor_decision_for_claude_and_gemini_c
         else {"contents": [{"role": "user", "parts": [{"text": "hello"}]}]}
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/decision-stream",
         json={
@@ -1494,7 +1624,7 @@ def test_decision_stream_route_returns_executor_decision_for_cli_variants(
         ),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/decision-stream",
         json={
@@ -1591,7 +1721,7 @@ def test_decision_sync_route_returns_executor_decision_for_openai_cli_variants(
         ),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/decision-sync",
         json={
@@ -1708,7 +1838,7 @@ def test_decision_sync_route_returns_executor_decision_for_claude_variants(
         ),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/decision-sync",
         json={
@@ -1839,7 +1969,7 @@ def test_decision_sync_route_returns_executor_decision_for_gemini_variants(
         ),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/decision-sync",
         json={
@@ -1946,7 +2076,7 @@ def test_decision_sync_route_returns_executor_decision_for_gemini_files_get(
         ),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/decision-sync",
         json={
@@ -2097,7 +2227,7 @@ def test_decision_sync_route_returns_executor_decision_for_video_variants(
         ),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/decision-sync",
         json={
@@ -2198,7 +2328,7 @@ def test_decision_stream_route_returns_executor_decision_for_gemini_files_downlo
         ),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/decision-stream",
         json={
@@ -2266,7 +2396,7 @@ def test_decision_stream_route_returns_executor_decision_for_openai_video_conten
         ),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/decision-stream",
         json={
@@ -2322,7 +2452,7 @@ def test_plan_sync_route_resolves_auth_context_when_missing(
         ),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/plan-sync",
         json={
@@ -2384,7 +2514,7 @@ def test_plan_sync_route_returns_executor_plan_for_openai_video_create(
         ),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/plan-sync",
         json={
@@ -2450,7 +2580,7 @@ def test_plan_sync_route_returns_executor_plan_for_openai_video_remix(
         ),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/plan-sync",
         json={
@@ -2516,7 +2646,7 @@ def test_plan_sync_route_returns_executor_plan_for_gemini_video_create(
         ),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/plan-sync",
         json={
@@ -2582,7 +2712,7 @@ def test_plan_sync_route_returns_executor_plan_for_openai_video_cancel(
         ),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/plan-sync",
         json={
@@ -2646,7 +2776,7 @@ def test_plan_sync_route_returns_executor_plan_for_openai_video_delete(
         ),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/plan-sync",
         json={
@@ -2710,7 +2840,7 @@ def test_plan_sync_route_returns_executor_plan_for_gemini_video_cancel(
         ),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/plan-sync",
         json={
@@ -2785,7 +2915,7 @@ def test_plan_stream_route_returns_executor_plan_for_openai_chat(
         ),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/plan-stream",
         json={
@@ -2860,7 +2990,7 @@ def test_plan_stream_route_resolves_auth_context_when_missing(
         ),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/plan-stream",
         json={
@@ -2927,7 +3057,7 @@ def test_plan_stream_route_returns_executor_plan_for_claude_chat(
         ),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/plan-stream",
         json={
@@ -2997,7 +3127,7 @@ def test_plan_stream_route_returns_executor_plan_for_gemini_chat(
         ),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/plan-stream",
         json={
@@ -3067,7 +3197,7 @@ def test_plan_stream_route_returns_executor_plan_for_openai_cli(
         ),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/plan-stream",
         json={
@@ -3143,7 +3273,7 @@ def test_plan_stream_route_returns_executor_plan_for_claude_cli(
         ),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/plan-stream",
         json={
@@ -3218,7 +3348,7 @@ def test_plan_stream_route_returns_executor_plan_for_gemini_cli(
         ),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/plan-stream",
         json={
@@ -3285,7 +3415,7 @@ def test_plan_sync_route_returns_executor_plan_for_openai_cli(
         ),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/plan-sync",
         json={
@@ -3351,7 +3481,7 @@ def test_plan_sync_route_returns_executor_plan_for_openai_compact(
         ),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/plan-sync",
         json={
@@ -3417,7 +3547,7 @@ def test_plan_sync_route_returns_executor_plan_for_claude_chat(
         ),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/plan-sync",
         json={
@@ -3483,7 +3613,7 @@ def test_plan_sync_route_returns_executor_plan_for_gemini_chat(
         ),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/plan-sync",
         json={
@@ -3549,7 +3679,7 @@ def test_plan_sync_route_returns_executor_plan_for_claude_cli(
         ),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/plan-sync",
         json={
@@ -3615,7 +3745,7 @@ def test_plan_sync_route_returns_executor_plan_for_gemini_cli(
         ),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/plan-sync",
         json={
@@ -3685,7 +3815,7 @@ def test_plan_sync_route_returns_executor_plan_for_gemini_files_list(
         AsyncMock(return_value=(fake_plan, {"file_key_id": "file-key-123", "user_id": "user-123"})),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/plan-sync",
         json={
@@ -3751,7 +3881,7 @@ def test_plan_sync_route_returns_executor_plan_for_gemini_files_upload(
         AsyncMock(return_value=(fake_plan, {"file_key_id": "file-key-123", "user_id": "user-123"})),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/plan-sync",
         json={
@@ -3821,7 +3951,7 @@ def test_plan_sync_route_returns_executor_plan_for_gemini_files_delete(
         AsyncMock(return_value=(fake_plan, {})),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/plan-sync",
         json={

@@ -2,16 +2,18 @@
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 from starlette.responses import RedirectResponse
 
 from src.database import get_db
-from src.services.auth.oauth.service import OAuthService
-from src.services.auth.refresh_cookie import set_refresh_token_cookie
-from src.utils.request_utils import get_client_ip, get_user_agent
 
 router = APIRouter(prefix="/api/oauth", tags=["OAuth"])
+_OAUTH_PUBLIC_LEGACY_DETAIL = "OAuth public routes are retired; use Rust maintenance backend"
+
+
+def _raise_oauth_public_legacy_unavailable() -> None:
+    raise HTTPException(status_code=503, detail=_OAUTH_PUBLIC_LEGACY_DETAIL)
 
 
 @router.get("/providers")
@@ -21,8 +23,8 @@ async def list_oauth_providers(db: Session = Depends(get_db)) -> dict[str, Any]:
 
     模块未启用时返回空列表（前端友好）。
     """
-    providers = await OAuthService.list_public_providers(db)
-    return {"providers": providers}
+    _ = db
+    _raise_oauth_public_legacy_unavailable()
 
 
 @router.get("/{provider_type}/authorize")
@@ -34,10 +36,8 @@ async def oauth_authorize(
     """
     发起 OAuth 登录（login flow）。
     """
-    url = await OAuthService.build_login_authorize_url(
-        db, provider_type, client_device_id=client_device_id
-    )
-    return RedirectResponse(url=url, status_code=status.HTTP_302_FOUND)
+    _ = provider_type, client_device_id, db
+    _raise_oauth_public_legacy_unavailable()
 
 
 @router.get("/{provider_type}/callback")
@@ -55,18 +55,5 @@ async def oauth_callback(
 
     成功/失败都会重定向到前端回调页。
     """
-    callback_result = await OAuthService.handle_callback(
-        db=db,
-        provider_type=provider_type,
-        state=state or "",
-        code=code,
-        error=error,
-        error_description=error_description,
-        client_ip=get_client_ip(request),
-        user_agent=get_user_agent(request),
-        headers=dict(request.headers),
-    )
-    response = RedirectResponse(url=callback_result.redirect_url, status_code=status.HTTP_302_FOUND)
-    if callback_result.refresh_token:
-        set_refresh_token_cookie(response, callback_result.refresh_token)
-    return response
+    _ = provider_type, request, db, code, state, error, error_description
+    _raise_oauth_public_legacy_unavailable()

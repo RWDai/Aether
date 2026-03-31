@@ -9,6 +9,7 @@ from src.services.request.executor_plan import (
     ExecutionPlanTimeouts,
     ExecutionProxySnapshot,
     build_execution_plan_body,
+    should_bypass_remote_executor_url,
 )
 
 
@@ -342,3 +343,43 @@ def test_prepared_execution_plan_remote_eligible_allows_empty_get_body() -> None
     )
 
     assert prepared.remote_eligible is True
+
+
+def test_prepared_execution_plan_remote_eligible_rejects_codex_cli_transport() -> None:
+    prepared = PreparedExecutionPlan(
+        contract=ExecutionPlan(
+            request_id="req-1",
+            candidate_id=None,
+            provider_name="codex",
+            provider_id="prov-1",
+            endpoint_id="ep-1",
+            key_id="key-1",
+            method="POST",
+            url="https://chatgpt.com/backend-api/codex/responses",
+            headers={"content-type": "application/json"},
+            body=ExecutionPlanBody(json_body={"model": "gpt-5.4", "input": []}),
+            stream=True,
+            provider_api_format="openai:cli",
+            client_api_format="openai:cli",
+            model_name="gpt-5.4",
+        ),
+        payload={"model": "gpt-5.4", "input": []},
+        headers={"content-type": "application/json"},
+        upstream_is_stream=True,
+        needs_conversion=False,
+        provider_type="codex",
+        request_timeout=30.0,
+    )
+
+    assert prepared.remote_eligible is False
+
+
+def test_should_bypass_remote_executor_url_accepts_backendapi_codex_variant() -> None:
+    assert (
+        should_bypass_remote_executor_url(
+            "https://chatgpt.com/backendapi/codex/responses",
+            provider_api_format="openai:cli",
+            client_api_format="openai:cli",
+        )
+        is True
+    )

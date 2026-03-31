@@ -75,6 +75,14 @@ def _wait_until(predicate: Any, *, timeout: float = 1.0, interval: float = 0.01)
     assert predicate()
 
 
+def _make_legacy_test_client(app: FastAPI) -> TestClient:
+    return TestClient(
+        app,
+        base_url="http://127.0.0.1",
+        headers={"x-aether-legacy-internal-gateway": "true"},
+    )
+
+
 def test_finalize_sync_route_finalizes_openai_video_create_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -96,7 +104,7 @@ def test_finalize_sync_route_finalizes_openai_video_create_response(
         finalize_mock,
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/finalize-sync",
         json={
@@ -144,7 +152,7 @@ def test_finalize_sync_route_finalizes_openai_chat_response(
         finalize_mock,
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/finalize-sync",
         json={
@@ -193,7 +201,7 @@ def test_finalize_sync_route_finalizes_openai_cli_response(
         finalize_mock,
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/finalize-sync",
         json={
@@ -753,7 +761,7 @@ def test_finalize_sync_route_uses_chat_fast_path_without_db_session(
         lambda: (_ for _ in ()).throw(AssertionError("create_session should not be called")),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/finalize-sync",
         json={
@@ -802,7 +810,7 @@ def test_finalize_sync_route_uses_cli_fast_path_without_db_session(
         lambda: (_ for _ in ()).throw(AssertionError("create_session should not be called")),
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/finalize-sync",
         json={
@@ -847,7 +855,7 @@ def test_finalize_sync_route_finalizes_openai_video_remix_response(
         finalize_mock,
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/finalize-sync",
         json={
@@ -896,7 +904,7 @@ def test_finalize_sync_route_finalizes_gemini_video_create_response(
         finalize_mock,
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/finalize-sync",
         json={
@@ -945,7 +953,7 @@ def test_finalize_sync_route_finalizes_openai_video_delete_response(
         finalize_mock,
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/finalize-sync",
         json={
@@ -984,7 +992,7 @@ def test_finalize_sync_route_finalizes_openai_video_cancel_response(
         finalize_mock,
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/finalize-sync",
         json={
@@ -1019,7 +1027,7 @@ def test_finalize_sync_route_finalizes_gemini_video_cancel_response(
         finalize_mock,
     )
 
-    client = TestClient(app, base_url="http://127.0.0.1")
+    client = _make_legacy_test_client(app)
     response = client.post(
         "/api/internal/gateway/finalize-sync",
         json={
@@ -1040,3 +1048,278 @@ def test_finalize_sync_route_finalizes_gemini_video_cancel_response(
     assert response.headers[CONTROL_EXECUTED_HEADER] == "true"
     assert response.json() == {}
     finalize_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_finalize_gateway_openai_video_create_sync_reuses_rust_owned_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.api.internal import gateway as gateway_module
+
+    background_mock = AsyncMock(return_value=None)
+    begin_pending_usage = MagicMock()
+
+    class FakeQuery:
+        def __init__(self, value: Any) -> None:
+            self._value = value
+
+        def filter(self, *args: Any, **kwargs: Any) -> "FakeQuery":
+            return self
+
+        def first(self) -> Any:
+            return self._value
+
+    class FakeDB:
+        def __init__(self) -> None:
+            self._mapping = {
+                "User": SimpleNamespace(id="user-123"),
+                "ApiKey": SimpleNamespace(id="key-123"),
+                "VideoTask": SimpleNamespace(id="task-local-123"),
+            }
+
+        def query(self, model: Any) -> FakeQuery:
+            return FakeQuery(self._mapping.get(getattr(model, "__name__", "")))
+
+        def add(self, obj: Any) -> None:
+            raise AssertionError("legacy task creation should be skipped")
+
+    class FakeOpenAIVideoHandler:
+        FORMAT_ID = "openai:video"
+
+        def __init__(self, **kwargs: Any) -> None:
+            self._normalizer = SimpleNamespace(
+                video_task_from_internal=lambda task: {
+                    "id": task["id"],
+                    "object": "video",
+                    "status": "submitted",
+                }
+            )
+
+        def _task_to_internal(self, task: Any) -> dict[str, Any]:
+            return {"id": task.id}
+
+    monkeypatch.setattr(
+        "src.api.handlers.openai.video_handler.OpenAIVideoHandler",
+        FakeOpenAIVideoHandler,
+    )
+    monkeypatch.setattr(
+        "src.api.internal.gateway._run_gateway_video_finalize_submitted_background",
+        background_mock,
+    )
+    monkeypatch.setattr(
+        "src.services.usage.service.UsageService.begin_pending_usage",
+        begin_pending_usage,
+    )
+
+    payload = GatewaySyncReportRequest(
+        trace_id="trace-openai-video-rust-owner-123",
+        report_kind="openai_video_create_sync_success",
+        report_context={
+            "user_id": "user-123",
+            "api_key_id": "key-123",
+            "provider_id": "provider-123",
+            "endpoint_id": "endpoint-123",
+            "key_id": "provider-key-123",
+            "request_id": "req-openai-video-rust-owner-123",
+            "local_task_id": "task-local-123",
+            "provider_name": "openai",
+            "provider_api_format": "openai:video",
+            "rust_video_task_persisted": True,
+        },
+        status_code=200,
+        headers={"content-type": "application/json"},
+        body_json={"id": "ext-video-123", "status": "submitted"},
+        telemetry={"elapsed_ms": 42},
+    )
+
+    response = await gateway_module._finalize_gateway_openai_video_create_sync(
+        payload,
+        db=FakeDB(),
+    )
+
+    assert response.status_code == 200
+    assert json.loads(response.body) == {
+        "id": "task-local-123",
+        "object": "video",
+        "status": "submitted",
+    }
+    begin_pending_usage.assert_not_called()
+    background_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_finalize_gateway_openai_video_remix_sync_reuses_rust_owned_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.api.internal import gateway as gateway_module
+
+    class FakeQuery:
+        def __init__(self, value: Any) -> None:
+            self._value = value
+
+        def filter(self, *args: Any, **kwargs: Any) -> "FakeQuery":
+            return self
+
+        def first(self) -> Any:
+            return self._value
+
+    class FakeDB:
+        def __init__(self) -> None:
+            self._mapping = {
+                "User": SimpleNamespace(id="user-123"),
+                "ApiKey": SimpleNamespace(id="key-123"),
+                "VideoTask": SimpleNamespace(id="task-local-remix-123"),
+            }
+
+        def query(self, model: Any) -> FakeQuery:
+            return FakeQuery(self._mapping.get(getattr(model, "__name__", "")))
+
+        def add(self, obj: Any) -> None:
+            raise AssertionError("legacy remix task creation should be skipped")
+
+    class FakeOpenAIVideoHandler:
+        def __init__(self, **kwargs: Any) -> None:
+            self._normalizer = SimpleNamespace(
+                video_task_from_internal=lambda task: {
+                    "id": task["id"],
+                    "object": "video",
+                    "status": "submitted",
+                }
+            )
+
+        def _task_to_internal(self, task: Any) -> dict[str, Any]:
+            return {"id": task.id}
+
+        def _get_task(self, task_id: str) -> Any:
+            raise AssertionError("legacy remix source lookup should be skipped")
+
+    monkeypatch.setattr(
+        "src.api.handlers.openai.video_handler.OpenAIVideoHandler",
+        FakeOpenAIVideoHandler,
+    )
+
+    payload = GatewaySyncReportRequest(
+        trace_id="trace-openai-video-remix-rust-owner-123",
+        report_kind="openai_video_remix_sync_success",
+        report_context={
+            "user_id": "user-123",
+            "api_key_id": "key-123",
+            "task_id": "task-source-123",
+            "request_id": "req-openai-video-remix-rust-owner-123",
+            "local_task_id": "task-local-remix-123",
+            "rust_video_task_persisted": True,
+        },
+        status_code=200,
+        headers={"content-type": "application/json"},
+        body_json={"id": "ext-remix-task-123", "status": "submitted"},
+    )
+
+    response = await gateway_module._finalize_gateway_openai_video_remix_sync(
+        payload,
+        db=FakeDB(),
+    )
+
+    assert response.status_code == 200
+    assert json.loads(response.body) == {
+        "id": "task-local-remix-123",
+        "object": "video",
+        "status": "submitted",
+    }
+
+
+@pytest.mark.asyncio
+async def test_finalize_gateway_gemini_video_create_sync_reuses_rust_owned_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.api.internal import gateway as gateway_module
+
+    background_mock = AsyncMock(return_value=None)
+    begin_pending_usage = MagicMock()
+
+    class FakeQuery:
+        def __init__(self, value: Any) -> None:
+            self._value = value
+
+        def filter(self, *args: Any, **kwargs: Any) -> "FakeQuery":
+            return self
+
+        def first(self) -> Any:
+            return self._value
+
+    class FakeDB:
+        def __init__(self) -> None:
+            self._mapping = {
+                "User": SimpleNamespace(id="user-123"),
+                "ApiKey": SimpleNamespace(id="key-123"),
+                "VideoTask": SimpleNamespace(short_id="short12345678"),
+            }
+
+        def query(self, model: Any) -> FakeQuery:
+            return FakeQuery(self._mapping.get(getattr(model, "__name__", "")))
+
+        def add(self, obj: Any) -> None:
+            raise AssertionError("legacy gemini task creation should be skipped")
+
+    class FakeGeminiVeoHandler:
+        FORMAT_ID = "gemini:video"
+
+        def __init__(self, **kwargs: Any) -> None:
+            self._normalizer = SimpleNamespace(
+                video_task_from_internal=lambda task: {
+                    "name": f"models/veo-3/operations/{task['id']}",
+                    "done": False,
+                    "metadata": {},
+                }
+            )
+
+        def _task_to_internal(self, task: Any) -> dict[str, Any]:
+            return {"id": task.short_id}
+
+    monkeypatch.setattr(
+        "src.api.handlers.gemini.video_handler.GeminiVeoHandler",
+        FakeGeminiVeoHandler,
+    )
+    monkeypatch.setattr(
+        "src.api.internal.gateway._run_gateway_video_finalize_submitted_background",
+        background_mock,
+    )
+    monkeypatch.setattr(
+        "src.services.usage.service.UsageService.begin_pending_usage",
+        begin_pending_usage,
+    )
+
+    payload = GatewaySyncReportRequest(
+        trace_id="trace-gemini-video-rust-owner-123",
+        report_kind="gemini_video_create_sync_success",
+        report_context={
+            "user_id": "user-123",
+            "api_key_id": "key-123",
+            "provider_id": "provider-123",
+            "endpoint_id": "endpoint-123",
+            "key_id": "provider-key-123",
+            "request_id": "req-gemini-video-rust-owner-123",
+            "model": "veo-3",
+            "local_short_id": "short12345678",
+            "provider_name": "gemini",
+            "provider_api_format": "gemini:video",
+            "rust_video_task_persisted": True,
+        },
+        status_code=200,
+        headers={"content-type": "application/json"},
+        body_json={"name": "operations/ext-video-123"},
+        telemetry={"elapsed_ms": 48},
+    )
+
+    response = await gateway_module._finalize_gateway_gemini_video_create_sync(
+        payload,
+        db=FakeDB(),
+    )
+
+    assert response.status_code == 200
+    assert json.loads(response.body) == {
+        "name": "models/veo-3/operations/short12345678",
+        "done": False,
+        "metadata": {},
+    }
+    begin_pending_usage.assert_not_called()
+    background_mock.assert_awaited_once()

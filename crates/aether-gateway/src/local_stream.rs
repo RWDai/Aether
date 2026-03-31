@@ -162,31 +162,31 @@ impl LocalStreamRewriter {
             match &mut self.mode {
                 RewriteMode::ClaudeToOpenAIChat(state) => return Ok(state.finish()),
                 RewriteMode::GeminiToOpenAIChat(state) => {
-                    return state.finish(&self.report_context)
+                    return state.finish(&self.report_context);
                 }
                 RewriteMode::ClaudeToOpenAICli(state) => {
                     return state.finish(
                         &self.report_context,
                         aggregate_claude_stream_sync_response,
                         convert_claude_cli_response_to_openai_cli,
-                    )
+                    );
                 }
                 RewriteMode::GeminiToOpenAICli(state) => {
                     return state.finish(
                         &self.report_context,
                         aggregate_gemini_stream_sync_response,
                         convert_gemini_cli_response_to_openai_cli,
-                    )
+                    );
                 }
                 RewriteMode::AntigravityGeminiToOpenAIChat(state) => {
-                    return state.finish(&self.report_context)
+                    return state.finish(&self.report_context);
                 }
                 RewriteMode::AntigravityGeminiToOpenAICli(state) => {
                     return state.finish(
                         &self.report_context,
                         aggregate_gemini_stream_sync_response,
                         convert_gemini_cli_response_to_openai_cli,
-                    )
+                    );
                 }
                 RewriteMode::KiroToClaudeCli(_) => {}
                 RewriteMode::EnvelopeUnwrap => {}

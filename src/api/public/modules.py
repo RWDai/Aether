@@ -2,14 +2,18 @@
 
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from src.api.base.adapter import ApiAdapter, ApiMode
+from src.api.base.context import ApiRequestContext
+from src.api.base.pipeline import get_pipeline
 from src.core.modules import get_module_registry
 from src.database import get_db
 
 router = APIRouter(prefix="/api/modules", tags=["Modules"])
+pipeline = get_pipeline()
 
 
 class AuthModuleInfo(BaseModel):
@@ -20,8 +24,29 @@ class AuthModuleInfo(BaseModel):
     active: bool
 
 
+class PublicModulesApiAdapter(ApiAdapter):
+    mode = ApiMode.PUBLIC
+
+    def authorize(self, context: ApiRequestContext) -> None:  # type: ignore[override]
+        return None
+
+
+class PublicAuthModulesStatusAdapter(PublicModulesApiAdapter):
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        registry = get_module_registry()
+        auth_modules = registry.get_auth_modules_status(context.db)
+        return [
+            AuthModuleInfo(
+                name=status.name,
+                display_name=status.display_name,
+                active=status.active,
+            )
+            for status in auth_modules
+        ]
+
+
 @router.get("/auth-status", response_model=list[AuthModuleInfo])
-async def get_auth_modules_status(db: Session = Depends(get_db)) -> Any:
+async def get_auth_modules_status(request: Request, db: Session = Depends(get_db)) -> Any:
     """
     获取认证模块状态（公开接口）
 
@@ -33,14 +58,5 @@ async def get_auth_modules_status(db: Session = Depends(get_db)) -> Any:
     - `display_name`: 显示名称
     - `active`: 是否激活
     """
-    registry = get_module_registry()
-    auth_modules = registry.get_auth_modules_status(db)
-
-    return [
-        AuthModuleInfo(
-            name=status.name,
-            display_name=status.display_name,
-            active=status.active,
-        )
-        for status in auth_modules
-    ]
+    adapter = PublicAuthModulesStatusAdapter()
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=ApiMode.PUBLIC)

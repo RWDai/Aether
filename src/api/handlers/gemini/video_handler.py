@@ -24,7 +24,6 @@ from src.api.handlers.base.video_handler_base import (
     normalize_gemini_operation_id,
     sanitize_error_message,
 )
-from src.clients.http_client import HTTPClientPool
 from src.config.settings import config
 from src.core.api_format import (
     ApiFamily,
@@ -42,6 +41,7 @@ from src.core.api_format.conversion.normalizers.gemini import GeminiNormalizer
 from src.core.api_format.conversion.registry import format_conversion_registry
 from src.core.api_format.headers import HOP_BY_HOP_HEADERS
 from src.core.crypto import crypto_service
+from src.core.exceptions import ProviderNotAvailableException
 from src.core.logger import logger
 from src.models.database import ApiKey, ProviderAPIKey, ProviderEndpoint, User, VideoTask
 from src.services.billing.rule_service import BillingRuleLookupResult, BillingRuleService
@@ -183,7 +183,7 @@ class GeminiVeoHandler(VideoHandlerBase):
                     original_body=original_request_body,
                 )
 
-                rust_response = await self._try_rust_sync_http_response(
+                return await self._try_rust_sync_http_response(
                     method="POST",
                     url=upstream_url,
                     headers=headers,
@@ -199,11 +199,6 @@ class GeminiVeoHandler(VideoHandlerBase):
                     or "application/json",
                     log_label="GeminiVideoCreate",
                 )
-                if rust_response is not None:
-                    return rust_response
-
-                client = await HTTPClientPool.get_default_client_async()
-                return await client.post(upstream_url, headers=headers, json=converted_body)
             else:
                 # 原始 Gemini 格式
                 request_body = (
@@ -225,7 +220,7 @@ class GeminiVeoHandler(VideoHandlerBase):
                     body=request_body,
                     original_body=original_request_body,
                 )
-                rust_response = await self._try_rust_sync_http_response(
+                return await self._try_rust_sync_http_response(
                     method="POST",
                     url=upstream_url,
                     headers=headers,
@@ -241,11 +236,6 @@ class GeminiVeoHandler(VideoHandlerBase):
                     or "application/json",
                     log_label="GeminiVideoCreate",
                 )
-                if rust_response is not None:
-                    return rust_response
-
-                client = await HTTPClientPool.get_default_client_async()
-                return await client.post(upstream_url, headers=headers, json=request_body)
 
         def _extract_task_id(payload: dict[str, Any]) -> str | None:
             # 根据响应格式提取 task ID
@@ -508,61 +498,13 @@ class GeminiVeoHandler(VideoHandlerBase):
 
         # 代理下载而非直接重定向，避免暴露上游存储 URL
         # 使用 httpx 支持重定向（Gemini 视频 URL 会重定向到实际存储位置）
-        rust_response = await self._try_rust_download_stream(
+        return await self._try_rust_download_stream(
             url=task.video_url,
             headers=download_headers,
             task_id=str(task.id),
             endpoint=endpoint,
             key=key,
             model_name=str(getattr(task, "model", "") or "") or None,
-        )
-        if rust_response is not None:
-            return rust_response
-
-        import httpx
-
-        try:
-            # 解析代理配置（key > provider > 系统默认）
-            from src.services.proxy_node.resolver import (
-                build_proxy_client_kwargs,
-                resolve_effective_proxy,
-            )
-
-            eff_proxy = resolve_effective_proxy(
-                resolve_provider_proxy(endpoint=endpoint, key=key),
-                getattr(key, "proxy", None),
-            )
-
-            # 使用 follow_redirects=True 跟随重定向
-            async with httpx.AsyncClient(
-                **build_proxy_client_kwargs(
-                    eff_proxy,
-                    timeout=httpx.Timeout(300.0),
-                    follow_redirects=True,
-                )
-            ) as client:
-                response = await client.get(task.video_url, headers=download_headers)
-        except Exception as exc:
-            logger.error(
-                "[VideoDownload] Upstream fetch failed user={} task={}: {}",
-                self.user.id,
-                task.id,
-                sanitize_error_message(str(exc)),
-            )
-            raise HTTPException(status_code=502, detail="Failed to fetch video")
-
-        if response.status_code >= 400:
-            raise HTTPException(status_code=response.status_code, detail="Upstream error")
-
-        # 返回完整的视频内容（非 streaming，因为需要跟随重定向）
-        safe_headers = {
-            k: v for k, v in response.headers.items() if k.lower() not in HOP_BY_HOP_HEADERS
-        }
-        return Response(
-            content=response.content,
-            status_code=response.status_code,
-            headers=safe_headers,
-            media_type=response.headers.get("content-type", "video/mp4"),
         )
 
     async def _try_rust_download_stream(
@@ -574,7 +516,7 @@ class GeminiVeoHandler(VideoHandlerBase):
         endpoint: ProviderEndpoint,
         key: ProviderAPIKey,
         model_name: str | None = None,
-    ) -> Response | StreamingResponse | None:
+    ) -> Response | StreamingResponse:
         import httpx
 
         from src.services.proxy_node.resolver import (
@@ -596,59 +538,76 @@ class GeminiVeoHandler(VideoHandlerBase):
         )
 
         if config.executor_backend != "rust":
-            return None
-
-        effective_proxy = resolve_effective_proxy(
-            resolve_provider_proxy(endpoint=endpoint, key=key),
-            getattr(key, "proxy", None),
-        )
-        if not effective_proxy or not effective_proxy.get("enabled", True):
-            effective_proxy = await get_system_proxy_config_async()
-
-        delegate_cfg = await resolve_delegate_config_async(effective_proxy)
-        proxy_url: str | None = None
-        if effective_proxy and not (delegate_cfg and delegate_cfg.get("tunnel")):
-            proxy_url = await build_proxy_url_async(effective_proxy)
-
-        proxy_info = await resolve_proxy_info_async(effective_proxy)
-        proxy_snapshot = ExecutionProxySnapshot.from_proxy_info(
-            proxy_info,
-            proxy_url=proxy_url,
-            mode_override="tunnel" if delegate_cfg and delegate_cfg.get("tunnel") else None,
-            node_id_override=(
-                str(delegate_cfg.get("node_id") or "").strip() or None
-                if delegate_cfg and delegate_cfg.get("tunnel")
-                else None
-            ),
-        )
+            raise ProviderNotAvailableException(
+                "Video 下载仅支持 Rust executor",
+                provider_name="gemini",
+                upstream_response=f"executor_backend={config.executor_backend}",
+            )
 
         try:
-            rust_stream = await RustExecutorClient().execute_stream(
-                ExecutionPlan(
-                    request_id=str(self.request_id or ""),
-                    candidate_id=None,
-                    provider_name="gemini",
-                    provider_id=str(getattr(endpoint, "provider_id", "") or ""),
-                    endpoint_id=str(getattr(endpoint, "id", "") or ""),
-                    key_id=str(getattr(key, "id", "") or ""),
-                    method="GET",
-                    url=url,
-                    headers=dict(headers),
-                    body=ExecutionPlanBody(),
-                    stream=True,
-                    provider_api_format=self.FORMAT_ID,
-                    client_api_format=self.FORMAT_ID,
-                    model_name=str(model_name or ""),
-                    proxy=proxy_snapshot,
-                    timeouts=ExecutionPlanTimeouts(
-                        connect_ms=30_000,
-                        read_ms=300_000,
-                        write_ms=300_000,
-                        pool_ms=30_000,
-                        total_ms=None,
-                    ),
-                )
+            effective_proxy = resolve_effective_proxy(
+                resolve_provider_proxy(endpoint=endpoint, key=key),
+                getattr(key, "proxy", None),
             )
+            if not effective_proxy or not effective_proxy.get("enabled", True):
+                effective_proxy = await get_system_proxy_config_async()
+
+            delegate_cfg = await resolve_delegate_config_async(effective_proxy)
+            proxy_url: str | None = None
+            if effective_proxy and not (delegate_cfg and delegate_cfg.get("tunnel")):
+                proxy_url = await build_proxy_url_async(effective_proxy)
+
+            proxy_info = await resolve_proxy_info_async(effective_proxy)
+            proxy_snapshot = ExecutionProxySnapshot.from_proxy_info(
+                proxy_info,
+                proxy_url=proxy_url,
+                mode_override="tunnel" if delegate_cfg and delegate_cfg.get("tunnel") else None,
+                node_id_override=(
+                    str(delegate_cfg.get("node_id") or "").strip() or None
+                    if delegate_cfg and delegate_cfg.get("tunnel")
+                    else None
+                ),
+            )
+
+            plan = ExecutionPlan(
+                request_id=str(self.request_id or ""),
+                candidate_id=None,
+                provider_name="gemini",
+                provider_id=str(getattr(endpoint, "provider_id", "") or ""),
+                endpoint_id=str(getattr(endpoint, "id", "") or ""),
+                key_id=str(getattr(key, "id", "") or ""),
+                method="GET",
+                url=url,
+                headers=dict(headers),
+                body=ExecutionPlanBody(),
+                stream=True,
+                provider_api_format=self.FORMAT_ID,
+                client_api_format=self.FORMAT_ID,
+                model_name=str(model_name or ""),
+                proxy=proxy_snapshot,
+                timeouts=ExecutionPlanTimeouts(
+                    connect_ms=30_000,
+                    read_ms=300_000,
+                    write_ms=300_000,
+                    pool_ms=30_000,
+                    total_ms=None,
+                ),
+            )
+        except Exception as exc:
+            logger.warning(
+                "[VideoDownload] Rust plan build failed task={} url={}: {}",
+                task_id,
+                url,
+                sanitize_error_message(str(exc)),
+            )
+            raise ProviderNotAvailableException(
+                "Rust executor 请求计划构建失败",
+                provider_name="gemini",
+                upstream_response=sanitize_error_message(str(exc)),
+            ) from exc
+
+        try:
+            rust_stream = await RustExecutorClient().execute_stream(plan)
         except (RustExecutorClientError, httpx.HTTPError, ValueError) as exc:
             logger.warning(
                 "[VideoDownload] Rust executor unavailable task={} url={}: {}",
@@ -656,7 +615,11 @@ class GeminiVeoHandler(VideoHandlerBase):
                 url,
                 sanitize_error_message(str(exc)),
             )
-            return None
+            raise ProviderNotAvailableException(
+                "执行器暂时不可用，请稍后重试",
+                provider_name="gemini",
+                upstream_response=sanitize_error_message(str(exc)),
+            ) from exc
 
         safe_headers = {
             k: v for k, v in rust_stream.headers.items() if k.lower() not in HOP_BY_HOP_HEADERS

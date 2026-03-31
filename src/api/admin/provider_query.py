@@ -10,6 +10,7 @@ import json
 import time
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -20,6 +21,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import update
 from sqlalchemy.orm import Session, joinedload, selectinload
 
+from src.api.base.authenticated_adapter import AuthenticatedApiAdapter
+from src.api.base.context import ApiRequestContext
+from src.api.base.pipeline import get_pipeline
 from src.api.handlers.base.chat_adapter_base import get_adapter_class
 from src.api.handlers.base.cli_adapter_base import get_cli_adapter_class
 from src.config.constants import TimeoutDefaults
@@ -55,12 +59,17 @@ from src.services.request.model_test_debug import (
     merge_model_test_debug,
     set_candidate_model_test_debug,
 )
-from src.utils.auth_utils import get_current_user
 
 if TYPE_CHECKING:
     from src.services.scheduling.schemas import ProviderCandidate
 
 router = APIRouter(prefix="/api/admin/provider-query", tags=["Provider Query"])
+pipeline = get_pipeline()
+_PROVIDER_QUERY_RUST_BACKEND_DETAIL = "Admin provider query requires Rust maintenance backend"
+
+
+def _raise_provider_query_backend_unavailable() -> None:
+    raise HTTPException(status_code=503, detail=_PROVIDER_QUERY_RUST_BACKEND_DETAIL)
 
 
 # ---------------------------------------------------------------------------
@@ -449,11 +458,42 @@ def _test_check_should_fallback_to_non_stream(resp: dict[str, Any]) -> bool:
 # ============ API Endpoints ============
 
 
-@router.post("/models")
-async def query_available_models(
+class ProviderQueryApiAdapter(AuthenticatedApiAdapter):
+    """Provider Query 用户态壳层基类。"""
+
+
+@dataclass
+class ProviderQueryModelsAdapter(ProviderQueryApiAdapter):
+    payload: ModelsQueryRequest
+
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        return await _query_available_models_response(self.payload, context.db)
+
+
+@dataclass
+class ProviderQueryTestModelAdapter(ProviderQueryApiAdapter):
+    payload: TestModelRequest
+
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        return await _test_model_response(self.payload, context.db, context.user)
+
+
+@dataclass
+class ProviderQueryTestModelFailoverAdapter(ProviderQueryApiAdapter):
+    payload: TestModelFailoverRequest
+
+    async def handle(self, context: ApiRequestContext) -> Any:  # type: ignore[override]
+        return await _test_model_failover_response(
+            self.payload,
+            context.request,
+            context.db,
+            context.user,
+        )
+
+
+async def _query_available_models_response(
     request: ModelsQueryRequest,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    db: Session,
 ) -> Any:
     """
     查询提供商可用模型
@@ -865,11 +905,22 @@ async def _fetch_models_for_single_key(
     }
 
 
-@router.post("/test-model")
-async def test_model(
-    request: TestModelRequest,
+@router.post("/models")
+async def query_available_models(
+    request: ModelsQueryRequest,
+    http_request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+) -> Any:
+    _ = request, http_request, db
+    _raise_provider_query_backend_unavailable()
+    adapter = ProviderQueryModelsAdapter(payload=request)
+    return await pipeline.run(adapter=adapter, http_request=http_request, db=db, mode=adapter.mode)
+
+
+async def _test_model_response(
+    request: TestModelRequest,
+    db: Session,
+    current_user: User | None,
 ) -> Any:
     """
     测试模型连接性
@@ -2281,12 +2332,23 @@ def _build_test_attempts_from_candidate_keys(
     return attempts
 
 
-@router.post("/test-model-failover")
-async def test_model_failover(
-    request: TestModelFailoverRequest,
+@router.post("/test-model")
+async def test_model(
+    request: TestModelRequest,
     http_request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+) -> Any:
+    _ = request, http_request, db
+    _raise_provider_query_backend_unavailable()
+    adapter = ProviderQueryTestModelAdapter(payload=request)
+    return await pipeline.run(adapter=adapter, http_request=http_request, db=db, mode=adapter.mode)
+
+
+async def _test_model_failover_response(
+    request: TestModelFailoverRequest,
+    http_request: Request,
+    db: Session,
+    current_user: User | None,
 ) -> Any:
     """
     带故障转移的模型测试
@@ -2582,3 +2644,15 @@ async def test_model_failover(
         total_attempts=total_attempts,
         error=str(error_message)[:500],
     ).model_dump()
+
+
+@router.post("/test-model-failover")
+async def test_model_failover(
+    request: TestModelFailoverRequest,
+    http_request: Request,
+    db: Session = Depends(get_db),
+) -> Any:
+    _ = request, http_request, db
+    _raise_provider_query_backend_unavailable()
+    adapter = ProviderQueryTestModelFailoverAdapter(payload=request)
+    return await pipeline.run(adapter=adapter, http_request=http_request, db=db, mode=adapter.mode)

@@ -15,7 +15,10 @@ pub(super) fn local_finalize_allows_envelope(report_context: &Value) -> bool {
     }
     matches!(
         report_context.get("envelope_name").and_then(Value::as_str),
-        Some("gemini_cli:v1internal") | Some("antigravity:v1internal") | Some("claude:cli")
+        Some("gemini_cli:v1internal")
+            | Some("antigravity:v1internal")
+            | Some("claude:cli")
+            | Some("kiro:generateAssistantResponse")
     )
 }
 
@@ -114,7 +117,7 @@ pub(crate) fn unwrap_local_finalize_response_value(
         return Ok(Some(data));
     }
     let mut unwrapped = match report_context.get("envelope_name").and_then(Value::as_str) {
-        Some("claude:cli") => data,
+        Some("claude:cli") | Some("kiro:generateAssistantResponse") => data,
         Some("gemini_cli:v1internal") => {
             if let Some(response) = data
                 .get("response")

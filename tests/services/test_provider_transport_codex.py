@@ -79,6 +79,22 @@ def test_codex_openai_cli_does_not_duplicate_responses_suffix() -> None:
     assert url == "https://chatgpt.com/backend-api/codex/responses"
 
 
+def test_codex_openai_cli_supports_backendapi_variant() -> None:
+    endpoint = _DummyEndpoint(
+        base_url="https://chatgpt.com/backendapi/codex",
+        api_format="openai:cli",
+        provider=SimpleNamespace(provider_type="codex"),
+    )
+
+    url = build_provider_url(
+        endpoint,  # type: ignore[arg-type]
+        path_params={"model": "ignored"},
+        is_stream=True,
+    )
+
+    assert url == "https://chatgpt.com/backendapi/codex/responses"
+
+
 def test_codex_openai_cli_uses_compact_suffix_when_context_marked_compact() -> None:
     endpoint = _DummyEndpoint(
         base_url="https://chatgpt.com/backend-api/codex",

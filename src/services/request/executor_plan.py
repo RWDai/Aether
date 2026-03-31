@@ -104,6 +104,38 @@ class ExecutionPlan:
         return _drop_none(asdict(self))
 
 
+_REMOTE_EXECUTOR_BYPASS_FORMATS = {"openai:cli", "openai:compact"}
+
+
+def should_bypass_remote_executor_url(
+    url: str | None,
+    *,
+    provider_api_format: str | None = None,
+    client_api_format: str | None = None,
+) -> bool:
+    normalized_url = str(url or "").strip().lower()
+    if not normalized_url:
+        return False
+
+    normalized_provider_api_format = str(provider_api_format or "").strip().lower()
+    normalized_client_api_format = str(client_api_format or "").strip().lower()
+    if (
+        normalized_provider_api_format not in _REMOTE_EXECUTOR_BYPASS_FORMATS
+        and normalized_client_api_format not in _REMOTE_EXECUTOR_BYPASS_FORMATS
+    ):
+        return False
+
+    return "/backend-api/codex" in normalized_url or "/backendapi/codex" in normalized_url
+
+
+def should_bypass_remote_executor(contract: ExecutionPlan) -> bool:
+    return should_bypass_remote_executor_url(
+        contract.url,
+        provider_api_format=contract.provider_api_format,
+        client_api_format=contract.client_api_format,
+    )
+
+
 def is_remote_proxy_supported(proxy: ExecutionProxySnapshot | None) -> bool:
     proxy_mode = str((proxy.mode if proxy else "") or "").strip().lower()
     return (
@@ -122,6 +154,7 @@ def is_remote_contract_eligible(contract: ExecutionPlan) -> bool:
         ((not has_body and content_encoding == "") or has_body)
         and (not has_json_body or content_encoding in {"", "gzip"} or has_raw_body)
         and is_remote_proxy_supported(contract.proxy)
+        and not should_bypass_remote_executor(contract)
     )
 
 

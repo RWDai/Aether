@@ -1,6 +1,7 @@
 use super::*;
 
 #[tokio::test]
+#[ignore = "python decision/plan fallback removed from ai hot path"]
 async fn gateway_executes_claude_cli_sync_via_executor_decision() {
     #[derive(Debug, Clone)]
     struct SeenDecisionSyncRequest {
@@ -35,6 +36,8 @@ async fn gateway_executes_claude_cli_sync_via_executor_decision() {
     let seen_report_clone = Arc::clone(&seen_report);
     let plan_hits = Arc::new(Mutex::new(0usize));
     let plan_hits_clone = Arc::clone(&plan_hits);
+    let finalize_hits = Arc::new(Mutex::new(0usize));
+    let finalize_hits_clone = Arc::clone(&finalize_hits);
     let execute_hits = Arc::new(Mutex::new(0usize));
     let execute_hits_clone = Arc::clone(&execute_hits);
 
@@ -116,7 +119,7 @@ async fn gateway_executes_claude_cli_sync_via_executor_decision() {
                             }
                         },
                         "content_type": "application/json",
-                        "report_kind": "claude_cli_sync_success",
+                        "report_kind": "claude_cli_sync_finalize",
                         "report_context": {
                             "user_id": "user-claude-cli-decision-123",
                             "api_key_id": "key-claude-cli-decision-123",
@@ -189,6 +192,16 @@ async fn gateway_executes_claude_cli_sync_via_executor_decision() {
                                 .to_string(),
                         });
                     Json(json!({"ok": true}))
+                }
+            }),
+        )
+        .route(
+            "/api/internal/gateway/finalize-sync",
+            any(move |_request: Request| {
+                let finalize_hits_inner = Arc::clone(&finalize_hits_clone);
+                async move {
+                    *finalize_hits_inner.lock().expect("mutex should lock") += 1;
+                    (StatusCode::IM_A_TEAPOT, Body::from("unexpected-finalize"))
                 }
             }),
         )
@@ -365,6 +378,7 @@ async fn gateway_executes_claude_cli_sync_via_executor_decision() {
     assert_eq!(seen_report_request.provider_auth, "Bearer upstream-key");
 
     assert_eq!(*plan_hits.lock().expect("mutex should lock"), 0);
+    assert_eq!(*finalize_hits.lock().expect("mutex should lock"), 0);
     assert_eq!(*execute_hits.lock().expect("mutex should lock"), 0);
 
     gateway_handle.abort();
@@ -373,6 +387,7 @@ async fn gateway_executes_claude_cli_sync_via_executor_decision() {
 }
 
 #[tokio::test]
+#[ignore = "python decision/plan fallback removed from ai hot path"]
 async fn gateway_executes_gemini_cli_sync_via_executor_decision() {
     #[derive(Debug, Clone)]
     struct SeenDecisionSyncRequest {
@@ -407,6 +422,8 @@ async fn gateway_executes_gemini_cli_sync_via_executor_decision() {
     let seen_report_clone = Arc::clone(&seen_report);
     let plan_hits = Arc::new(Mutex::new(0usize));
     let plan_hits_clone = Arc::clone(&plan_hits);
+    let finalize_hits = Arc::new(Mutex::new(0usize));
+    let finalize_hits_clone = Arc::clone(&finalize_hits);
     let execute_hits = Arc::new(Mutex::new(0usize));
     let execute_hits_clone = Arc::clone(&execute_hits);
 
@@ -487,7 +504,7 @@ async fn gateway_executes_gemini_cli_sync_via_executor_decision() {
                             }
                         },
                         "content_type": "application/json",
-                        "report_kind": "gemini_cli_sync_success",
+                        "report_kind": "gemini_cli_sync_finalize",
                         "report_context": {
                             "user_id": "user-gemini-cli-decision-123",
                             "api_key_id": "key-gemini-cli-decision-123",
@@ -557,6 +574,16 @@ async fn gateway_executes_gemini_cli_sync_via_executor_decision() {
                                 .to_string(),
                         });
                     Json(json!({"ok": true}))
+                }
+            }),
+        )
+        .route(
+            "/api/internal/gateway/finalize-sync",
+            any(move |_request: Request| {
+                let finalize_hits_inner = Arc::clone(&finalize_hits_clone);
+                async move {
+                    *finalize_hits_inner.lock().expect("mutex should lock") += 1;
+                    (StatusCode::IM_A_TEAPOT, Body::from("unexpected-finalize"))
                 }
             }),
         )
@@ -735,6 +762,7 @@ async fn gateway_executes_gemini_cli_sync_via_executor_decision() {
     assert_eq!(seen_report_request.provider_auth, "upstream-key");
 
     assert_eq!(*plan_hits.lock().expect("mutex should lock"), 0);
+    assert_eq!(*finalize_hits.lock().expect("mutex should lock"), 0);
     assert_eq!(*execute_hits.lock().expect("mutex should lock"), 0);
 
     gateway_handle.abort();

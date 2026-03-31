@@ -6,7 +6,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -50,6 +50,34 @@ async def test_maintenance_scheduler_start_skips_startup_task_when_disabled(
 
 
 @pytest.mark.asyncio
+async def test_maintenance_scheduler_start_skips_startup_task_when_no_python_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(config, "maintenance_startup_tasks_enabled", True)
+    monkeypatch.setattr(config, "pending_cleanup_python_enabled", False)
+    monkeypatch.setattr(config, "antigravity_ua_refresh_python_enabled", False)
+
+    scheduler = MaintenanceScheduler()
+    safe_create_task = MagicMock()
+
+    monkeypatch.setattr("src.utils.async_utils.safe_create_task", safe_create_task)
+    monkeypatch.setattr(scheduler, "_get_checkin_time", lambda: (1, 5))
+    monkeypatch.setattr(
+        maintenance_scheduler_module,
+        "get_scheduler",
+        lambda: SimpleNamespace(
+            add_cron_job=lambda *args, **kwargs: None,
+            add_interval_job=lambda *args, **kwargs: None,
+        ),
+    )
+
+    await scheduler.start()
+
+    safe_create_task.assert_not_called()
+    assert scheduler._startup_task is None
+
+
+@pytest.mark.asyncio
 async def test_maintenance_scheduler_stop_cancels_startup_task_and_removes_jobs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -87,6 +115,518 @@ async def test_maintenance_scheduler_stop_cancels_startup_task_and_removes_jobs(
     assert scheduler._startup_task is None
     assert set(removed_jobs) == set(expected_job_ids)
     assert scheduler._registered_job_ids == []
+
+
+@pytest.mark.asyncio
+async def test_maintenance_scheduler_start_skips_rust_owned_maintenance_jobs_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(config, "maintenance_startup_tasks_enabled", False)
+    monkeypatch.setattr(config, "audit_cleanup_python_enabled", False)
+    monkeypatch.setattr(config, "db_maintenance_python_enabled", False)
+    monkeypatch.setattr(config, "gemini_file_mapping_cleanup_python_enabled", False)
+    monkeypatch.setattr(config, "http_client_idle_cleanup_python_enabled", False)
+    monkeypatch.setattr(config, "pending_cleanup_python_enabled", False)
+    monkeypatch.setattr(config, "pool_monitor_python_enabled", False)
+    monkeypatch.setattr(config, "provider_checkin_python_enabled", False)
+    monkeypatch.setattr(config, "request_candidate_cleanup_python_enabled", False)
+    monkeypatch.setattr(config, "stats_aggregation_python_enabled", False)
+    monkeypatch.setattr(config, "stats_hourly_aggregation_python_enabled", False)
+    monkeypatch.setattr(config, "antigravity_ua_refresh_python_enabled", False)
+    monkeypatch.setattr(config, "usage_cleanup_python_enabled", False)
+    monkeypatch.setattr(config, "wallet_daily_usage_aggregation_python_enabled", False)
+
+    scheduler = MaintenanceScheduler()
+    cron_job_ids: list[str] = []
+    interval_job_ids: list[str] = []
+
+    monkeypatch.setattr(scheduler, "_get_checkin_time", lambda: (1, 5))
+    monkeypatch.setattr(
+        maintenance_scheduler_module,
+        "get_scheduler",
+        lambda: SimpleNamespace(
+            add_cron_job=lambda *, job_id, **kwargs: cron_job_ids.append(job_id),
+            add_interval_job=lambda *, job_id, **kwargs: interval_job_ids.append(job_id),
+        ),
+    )
+
+    await scheduler.start()
+
+    assert "stats_aggregation" not in cron_job_ids
+    assert "audit_cleanup" not in cron_job_ids
+    assert "candidate_cleanup" not in cron_job_ids
+    assert "db_maintenance" not in cron_job_ids
+    assert "stats_hourly_aggregation" not in cron_job_ids
+    assert "pool_monitor" not in interval_job_ids
+    assert "http_client_idle_cleanup" not in interval_job_ids
+    assert "usage_cleanup" not in cron_job_ids
+    assert "wallet_daily_usage_aggregation" not in cron_job_ids
+    assert scheduler.CHECKIN_JOB_ID not in cron_job_ids
+    assert "antigravity_ua_refresh" not in interval_job_ids
+    assert "gemini_file_mapping_cleanup" not in interval_job_ids
+    assert "pending_cleanup" not in interval_job_ids
+    assert "stats_aggregation" not in scheduler._registered_job_ids
+    assert "audit_cleanup" not in scheduler._registered_job_ids
+    assert "candidate_cleanup" not in scheduler._registered_job_ids
+    assert "db_maintenance" not in scheduler._registered_job_ids
+    assert "stats_hourly_aggregation" not in scheduler._registered_job_ids
+    assert "pool_monitor" not in scheduler._registered_job_ids
+    assert "http_client_idle_cleanup" not in scheduler._registered_job_ids
+    assert "usage_cleanup" not in scheduler._registered_job_ids
+    assert "wallet_daily_usage_aggregation" not in scheduler._registered_job_ids
+    assert scheduler.CHECKIN_JOB_ID not in scheduler._registered_job_ids
+    assert "antigravity_ua_refresh" not in scheduler._registered_job_ids
+    assert "gemini_file_mapping_cleanup" not in scheduler._registered_job_ids
+    assert "pending_cleanup" not in scheduler._registered_job_ids
+
+
+@pytest.mark.asyncio
+async def test_maintenance_scheduler_start_registers_python_owned_maintenance_jobs_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(config, "maintenance_startup_tasks_enabled", False)
+    monkeypatch.setattr(config, "audit_cleanup_python_enabled", True)
+    monkeypatch.setattr(config, "db_maintenance_python_enabled", True)
+    monkeypatch.setattr(config, "gemini_file_mapping_cleanup_python_enabled", True)
+    monkeypatch.setattr(config, "http_client_idle_cleanup_python_enabled", True)
+    monkeypatch.setattr(config, "pending_cleanup_python_enabled", True)
+    monkeypatch.setattr(config, "pool_monitor_python_enabled", True)
+    monkeypatch.setattr(config, "provider_checkin_python_enabled", True)
+    monkeypatch.setattr(config, "request_candidate_cleanup_python_enabled", True)
+    monkeypatch.setattr(config, "stats_aggregation_python_enabled", True)
+    monkeypatch.setattr(config, "stats_hourly_aggregation_python_enabled", True)
+    monkeypatch.setattr(config, "antigravity_ua_refresh_python_enabled", True)
+    monkeypatch.setattr(config, "usage_cleanup_python_enabled", True)
+    monkeypatch.setattr(config, "wallet_daily_usage_aggregation_python_enabled", True)
+
+    scheduler = MaintenanceScheduler()
+    cron_job_ids: list[str] = []
+    interval_job_ids: list[str] = []
+
+    monkeypatch.setattr(scheduler, "_get_checkin_time", lambda: (1, 5))
+    monkeypatch.setattr(
+        maintenance_scheduler_module,
+        "get_scheduler",
+        lambda: SimpleNamespace(
+            add_cron_job=lambda *, job_id, **kwargs: cron_job_ids.append(job_id),
+            add_interval_job=lambda *, job_id, **kwargs: interval_job_ids.append(job_id),
+        ),
+    )
+
+    await scheduler.start()
+
+    assert "stats_aggregation" in cron_job_ids
+    assert "audit_cleanup" in cron_job_ids
+    assert "candidate_cleanup" in cron_job_ids
+    assert "db_maintenance" in cron_job_ids
+    assert "stats_hourly_aggregation" in cron_job_ids
+    assert "pool_monitor" in interval_job_ids
+    assert "http_client_idle_cleanup" in interval_job_ids
+    assert "usage_cleanup" in cron_job_ids
+    assert "wallet_daily_usage_aggregation" in cron_job_ids
+    assert scheduler.CHECKIN_JOB_ID in cron_job_ids
+    assert "antigravity_ua_refresh" in interval_job_ids
+    assert "gemini_file_mapping_cleanup" in interval_job_ids
+    assert "pending_cleanup" in interval_job_ids
+    assert "stats_aggregation" in scheduler._registered_job_ids
+    assert "audit_cleanup" in scheduler._registered_job_ids
+    assert "candidate_cleanup" in scheduler._registered_job_ids
+    assert "db_maintenance" in scheduler._registered_job_ids
+    assert "stats_hourly_aggregation" in scheduler._registered_job_ids
+    assert "pool_monitor" in scheduler._registered_job_ids
+    assert "http_client_idle_cleanup" in scheduler._registered_job_ids
+    assert "usage_cleanup" in scheduler._registered_job_ids
+    assert "wallet_daily_usage_aggregation" in scheduler._registered_job_ids
+    assert scheduler.CHECKIN_JOB_ID in scheduler._registered_job_ids
+    assert "antigravity_ua_refresh" in scheduler._registered_job_ids
+    assert "gemini_file_mapping_cleanup" in scheduler._registered_job_ids
+    assert "pending_cleanup" in scheduler._registered_job_ids
+
+
+@pytest.mark.asyncio
+async def test_maintenance_scheduler_startup_tasks_skip_python_pending_cleanup_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scheduler = MaintenanceScheduler()
+    refresh_user_agent = AsyncMock()
+    perform_pending_cleanup = AsyncMock()
+
+    monkeypatch.setattr(config, "pending_cleanup_python_enabled", False)
+    monkeypatch.setattr(config, "antigravity_ua_refresh_python_enabled", False)
+    monkeypatch.setattr(maintenance_scheduler_module.asyncio, "sleep", AsyncMock())
+    monkeypatch.setattr(
+        "src.services.provider.adapters.antigravity.client.refresh_user_agent",
+        refresh_user_agent,
+    )
+    monkeypatch.setattr(scheduler, "_perform_pending_cleanup", perform_pending_cleanup)
+
+    await scheduler._run_startup_tasks()
+
+    refresh_user_agent.assert_not_awaited()
+    perform_pending_cleanup.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_maintenance_scheduler_startup_tasks_run_python_pending_cleanup_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scheduler = MaintenanceScheduler()
+    refresh_user_agent = AsyncMock()
+    perform_pending_cleanup = AsyncMock()
+
+    monkeypatch.setattr(config, "pending_cleanup_python_enabled", True)
+    monkeypatch.setattr(config, "antigravity_ua_refresh_python_enabled", True)
+    monkeypatch.setattr(maintenance_scheduler_module.asyncio, "sleep", AsyncMock())
+    monkeypatch.setattr(
+        "src.services.provider.adapters.antigravity.client.refresh_user_agent",
+        refresh_user_agent,
+    )
+    monkeypatch.setattr(scheduler, "_perform_pending_cleanup", perform_pending_cleanup)
+
+    await scheduler._run_startup_tasks()
+
+    refresh_user_agent.assert_awaited_once()
+    perform_pending_cleanup.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_start_background_services_skips_python_maintenance_scheduler_when_unused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    coordinator, _quota_scheduler, _task_poller, _model_fetch_scheduler = (
+        _patch_background_services_dependencies(monkeypatch)
+    )
+    state = main_module.LifecycleState()
+
+    monkeypatch.setattr(config, "quota_scheduler_python_enabled", False)
+    monkeypatch.setattr(config, "video_task_python_poller_enabled", False)
+    monkeypatch.setattr(config, "model_fetch_scheduler_python_enabled", False)
+    monkeypatch.setattr(config, "audit_cleanup_python_enabled", False)
+    monkeypatch.setattr(config, "antigravity_ua_refresh_python_enabled", False)
+    monkeypatch.setattr(config, "db_maintenance_python_enabled", False)
+    monkeypatch.setattr(config, "gemini_file_mapping_cleanup_python_enabled", False)
+    monkeypatch.setattr(config, "http_client_idle_cleanup_python_enabled", False)
+    monkeypatch.setattr(config, "pending_cleanup_python_enabled", False)
+    monkeypatch.setattr(config, "pool_monitor_python_enabled", False)
+    monkeypatch.setattr(config, "provider_checkin_python_enabled", False)
+    monkeypatch.setattr(config, "request_candidate_cleanup_python_enabled", False)
+    monkeypatch.setattr(config, "stats_aggregation_python_enabled", False)
+    monkeypatch.setattr(config, "stats_hourly_aggregation_python_enabled", False)
+    monkeypatch.setattr(config, "usage_cleanup_python_enabled", False)
+    monkeypatch.setattr(config, "wallet_daily_usage_aggregation_python_enabled", False)
+
+    await main_module._start_background_services(state)
+
+    assert "maintenance_scheduler" not in coordinator.acquire_calls
+    assert state.maintenance_scheduler is None
+
+
+@pytest.mark.asyncio
+async def test_start_background_services_starts_python_maintenance_scheduler_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    coordinator, _quota_scheduler, _task_poller, _model_fetch_scheduler = (
+        _patch_background_services_dependencies(
+            monkeypatch,
+            acquire_results={"maintenance_scheduler": True},
+        )
+    )
+    state = main_module.LifecycleState()
+
+    monkeypatch.setattr(config, "quota_scheduler_python_enabled", False)
+    monkeypatch.setattr(config, "video_task_python_poller_enabled", False)
+    monkeypatch.setattr(config, "model_fetch_scheduler_python_enabled", False)
+    monkeypatch.setattr(config, "http_client_idle_cleanup_python_enabled", True)
+
+    await main_module._start_background_services(state)
+
+    assert "maintenance_scheduler" in coordinator.acquire_calls
+    assert "maintenance_scheduler" in coordinator.registered_callbacks
+    assert state.maintenance_scheduler is not None
+
+
+def _patch_core_infrastructure_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(config, "log_startup_warnings", lambda: None)
+    monkeypatch.setattr(main_module, "init_db", lambda: None)
+    monkeypatch.setattr(main_module, "initialize_providers", AsyncMock())
+    monkeypatch.setattr(
+        "src.clients.redis_client.get_redis_client",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "src.services.rate_limit.concurrency_manager.get_concurrency_manager",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "src.services.rate_limit.user_rpm_limiter.get_user_rpm_limiter",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr("src.core.batch_committer.init_batch_committer", AsyncMock())
+    monkeypatch.setattr(
+        "src.services.provider_keys.codex_quota_sync_dispatcher.init_codex_quota_sync_dispatcher",
+        AsyncMock(),
+    )
+
+
+def _patch_python_host_shutdown_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "src.services.provider_keys.codex_quota_sync_dispatcher.shutdown_codex_quota_sync_dispatcher",
+        AsyncMock(),
+    )
+    monkeypatch.setattr("src.core.batch_committer.shutdown_batch_committer", AsyncMock())
+    monkeypatch.setattr("src.clients.redis_client.close_redis_client", AsyncMock())
+    monkeypatch.setattr(main_module, "close_http_clients", AsyncMock())
+
+
+class _FakeStartupTaskCoordinator:
+    def __init__(self, acquire_results: dict[str, bool] | None = None) -> None:
+        self.acquire_results = acquire_results or {}
+        self.acquire_calls: list[str] = []
+        self.registered_callbacks: list[str] = []
+        self.released: list[str] = []
+
+    async def acquire(self, name: str) -> bool:
+        self.acquire_calls.append(name)
+        return self.acquire_results.get(name, False)
+
+    async def release(self, name: str) -> None:
+        self.released.append(name)
+
+    def register_lock_lost_callback(self, name: str, _callback: Any) -> None:
+        self.registered_callbacks.append(name)
+
+
+def _patch_background_services_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    acquire_results: dict[str, bool] | None = None,
+) -> tuple[_FakeStartupTaskCoordinator, Any, Any, Any]:
+    coordinator = _FakeStartupTaskCoordinator(acquire_results)
+    quota_scheduler = SimpleNamespace(start=AsyncMock(), stop=AsyncMock())
+    maintenance_scheduler = SimpleNamespace(start=AsyncMock(), stop=AsyncMock())
+    model_fetch_scheduler = SimpleNamespace(start=AsyncMock(), stop=AsyncMock())
+    pool_quota_probe_scheduler = SimpleNamespace(start=AsyncMock(), stop=AsyncMock())
+    task_poller = SimpleNamespace(start=AsyncMock(), stop=AsyncMock())
+    task_scheduler = SimpleNamespace(start=MagicMock())
+
+    monkeypatch.setattr(
+        "src.utils.task_coordinator.StartupTaskCoordinator",
+        lambda _redis: coordinator,
+    )
+    monkeypatch.setattr(
+        "src.services.usage.quota_scheduler.get_quota_scheduler",
+        lambda: quota_scheduler,
+    )
+    monkeypatch.setattr(
+        "src.services.system.maintenance_scheduler.get_maintenance_scheduler",
+        lambda: maintenance_scheduler,
+    )
+    monkeypatch.setattr(
+        "src.services.model.fetch_scheduler.get_model_fetch_scheduler",
+        lambda: model_fetch_scheduler,
+    )
+    monkeypatch.setattr(
+        "src.services.provider_keys.pool_quota_probe_scheduler.get_pool_quota_probe_scheduler",
+        lambda: pool_quota_probe_scheduler,
+    )
+    monkeypatch.setattr(
+        "src.services.task.polling.task_poller.get_task_poller",
+        lambda: task_poller,
+    )
+    monkeypatch.setattr(
+        "src.services.system.scheduler.get_scheduler",
+        lambda: task_scheduler,
+    )
+
+    return coordinator, quota_scheduler, task_poller, model_fetch_scheduler
+
+
+@pytest.mark.asyncio
+async def test_initialize_core_infrastructure_skips_python_usage_consumer_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_core_infrastructure_dependencies(monkeypatch)
+    started = AsyncMock()
+
+    monkeypatch.setattr(config, "require_redis", False)
+    monkeypatch.setattr(config, "usage_queue_enabled", True)
+    monkeypatch.setattr(config, "usage_queue_python_consumer_enabled", False)
+    monkeypatch.setattr("src.services.usage.consumer_streams.start_usage_queue_consumer", started)
+
+    await main_module._initialize_core_infrastructure(main_module.LifecycleState())
+
+    started.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_initialize_core_infrastructure_starts_python_usage_consumer_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_core_infrastructure_dependencies(monkeypatch)
+    started = AsyncMock()
+
+    monkeypatch.setattr(config, "require_redis", False)
+    monkeypatch.setattr(config, "usage_queue_enabled", True)
+    monkeypatch.setattr(config, "usage_queue_python_consumer_enabled", True)
+    monkeypatch.setattr("src.services.usage.consumer_streams.start_usage_queue_consumer", started)
+
+    await main_module._initialize_core_infrastructure(main_module.LifecycleState())
+
+    started.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_run_python_host_shutdown_skips_python_usage_consumer_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_python_host_shutdown_dependencies(monkeypatch)
+    stopped = AsyncMock()
+
+    monkeypatch.setattr(config, "usage_queue_enabled", True)
+    monkeypatch.setattr(config, "usage_queue_python_consumer_enabled", False)
+    monkeypatch.setattr("src.services.usage.consumer_streams.stop_usage_queue_consumer", stopped)
+
+    await main_module._run_python_host_shutdown(main_module.LifecycleState())
+
+    stopped.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_run_python_host_shutdown_stops_python_usage_consumer_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_python_host_shutdown_dependencies(monkeypatch)
+    stopped = AsyncMock()
+
+    monkeypatch.setattr(config, "usage_queue_enabled", True)
+    monkeypatch.setattr(config, "usage_queue_python_consumer_enabled", True)
+    monkeypatch.setattr("src.services.usage.consumer_streams.stop_usage_queue_consumer", stopped)
+
+    await main_module._run_python_host_shutdown(main_module.LifecycleState())
+
+    stopped.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_start_background_services_skips_python_video_poller_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    coordinator, _quota_scheduler, task_poller, _model_fetch_scheduler = _patch_background_services_dependencies(
+        monkeypatch
+    )
+    state = main_module.LifecycleState()
+
+    monkeypatch.setattr(config, "video_task_python_poller_enabled", False)
+
+    await main_module._start_background_services(state)
+
+    assert "task_poller:video" not in coordinator.acquire_calls
+    task_poller.start.assert_not_awaited()
+    assert state.task_poller is None
+
+
+@pytest.mark.asyncio
+async def test_start_background_services_starts_python_video_poller_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    coordinator, _quota_scheduler, task_poller, _model_fetch_scheduler = _patch_background_services_dependencies(
+        monkeypatch,
+        acquire_results={"task_poller:video": True},
+    )
+    state = main_module.LifecycleState()
+
+    monkeypatch.setattr(config, "video_task_python_poller_enabled", True)
+
+    await main_module._start_background_services(state)
+
+    assert "task_poller:video" in coordinator.acquire_calls
+    assert "task_poller:video" in coordinator.registered_callbacks
+    task_poller.start.assert_awaited_once()
+    assert state.task_poller is task_poller
+
+
+@pytest.mark.asyncio
+async def test_start_background_services_skips_python_quota_scheduler_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    coordinator, quota_scheduler, _task_poller, _model_fetch_scheduler = _patch_background_services_dependencies(
+        monkeypatch
+    )
+    state = main_module.LifecycleState()
+
+    monkeypatch.setattr(config, "quota_scheduler_python_enabled", False)
+    monkeypatch.setattr(config, "video_task_python_poller_enabled", False)
+
+    await main_module._start_background_services(state)
+
+    assert "quota_scheduler" not in coordinator.acquire_calls
+    quota_scheduler.start.assert_not_awaited()
+    assert state.quota_scheduler is None
+
+
+@pytest.mark.asyncio
+async def test_start_background_services_starts_python_quota_scheduler_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    coordinator, quota_scheduler, _task_poller, _model_fetch_scheduler = _patch_background_services_dependencies(
+        monkeypatch,
+        acquire_results={"quota_scheduler": True},
+    )
+    state = main_module.LifecycleState()
+
+    monkeypatch.setattr(config, "quota_scheduler_python_enabled", True)
+    monkeypatch.setattr(config, "video_task_python_poller_enabled", False)
+
+    await main_module._start_background_services(state)
+
+    assert "quota_scheduler" in coordinator.acquire_calls
+    assert "quota_scheduler" in coordinator.registered_callbacks
+    quota_scheduler.start.assert_awaited_once()
+    assert state.quota_scheduler is quota_scheduler
+
+
+@pytest.mark.asyncio
+async def test_start_background_services_skips_python_model_fetch_scheduler_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    coordinator, _quota_scheduler, _task_poller, model_fetch_scheduler = (
+        _patch_background_services_dependencies(monkeypatch)
+    )
+    state = main_module.LifecycleState()
+
+    monkeypatch.setattr(config, "quota_scheduler_python_enabled", False)
+    monkeypatch.setattr(config, "model_fetch_scheduler_python_enabled", False)
+    monkeypatch.setattr(config, "video_task_python_poller_enabled", False)
+
+    await main_module._start_background_services(state)
+
+    assert "model_fetch_scheduler" not in coordinator.acquire_calls
+    model_fetch_scheduler.start.assert_not_awaited()
+    assert state.model_fetch_scheduler is None
+
+
+@pytest.mark.asyncio
+async def test_start_background_services_starts_python_model_fetch_scheduler_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    coordinator, _quota_scheduler, _task_poller, model_fetch_scheduler = (
+        _patch_background_services_dependencies(
+            monkeypatch,
+            acquire_results={"model_fetch_scheduler": True},
+        )
+    )
+    state = main_module.LifecycleState()
+
+    monkeypatch.setattr(config, "quota_scheduler_python_enabled", False)
+    monkeypatch.setattr(config, "model_fetch_scheduler_python_enabled", True)
+    monkeypatch.setattr(config, "video_task_python_poller_enabled", False)
+
+    await main_module._start_background_services(state)
+
+    assert "model_fetch_scheduler" in coordinator.acquire_calls
+    assert "model_fetch_scheduler" in coordinator.registered_callbacks
+    model_fetch_scheduler.start.assert_awaited_once()
+    assert state.model_fetch_scheduler is model_fetch_scheduler
 
 
 @pytest.mark.asyncio

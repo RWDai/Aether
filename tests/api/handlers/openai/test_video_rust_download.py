@@ -5,11 +5,12 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import StreamingResponse
 
 import src.api.handlers.openai.video_handler as video_mod
 from src.api.handlers.openai.video_handler import OpenAIVideoHandler
 from src.core.api_format.conversion.internal_video import VideoStatus
+from src.core.exceptions import ProviderNotAvailableException
 from src.services.request.rust_executor_client import (
     RustExecutorClientError,
     RustExecutorStreamResult,
@@ -157,7 +158,7 @@ async def test_handle_download_content_uses_rust_executor_for_upstream_content_e
 
 
 @pytest.mark.asyncio
-async def test_handle_download_content_falls_back_to_python_proxy_when_rust_unavailable(
+async def test_handle_download_content_raises_when_rust_executor_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(video_mod.config, "executor_backend", "rust")
@@ -178,21 +179,11 @@ async def test_handle_download_content_falls_back_to_python_proxy_when_rust_unav
         del self, plan
         raise RustExecutorClientError("executor down")
 
-    fallback_response = Response(content=b"python-fallback", media_type="video/mp4")
-
-    async def _fake_proxy_direct_url(url: str, task_id: str) -> Response:
-        assert url == "https://cdn.example.com/video.mp4"
-        assert task_id == "task-1"
-        return fallback_response
-
     monkeypatch.setattr(video_mod.RustExecutorClient, "execute_stream", _failing_execute_stream)
-    monkeypatch.setattr(handler, "_proxy_direct_url", _fake_proxy_direct_url)
-
-    response = await handler.handle_download_content(
-        task_id="task-1",
-        http_request=SimpleNamespace(),
-        original_headers={},
-        query_params={"variant": "video"},
-    )
-
-    assert response is fallback_response
+    with pytest.raises(ProviderNotAvailableException):
+        await handler.handle_download_content(
+            task_id="task-1",
+            http_request=SimpleNamespace(),
+            original_headers={},
+            query_params={"variant": "video"},
+        )

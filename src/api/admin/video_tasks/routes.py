@@ -7,23 +7,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from src.api.base.context import ApiRequestContext
 from src.api.base.pipeline import get_pipeline
 from src.api.dashboard.routes import DashboardAdapter
-from src.clients.http_client import HTTPClientPool
 from src.config.constants import CacheTTL
-from src.core.crypto import crypto_service
 from src.core.enums import UserRole
-from src.core.logger import logger
 from src.database import get_db
-from src.models.database import Provider, ProviderAPIKey, ProviderEndpoint, User, VideoTask
+from src.models.database import Provider, ProviderEndpoint, User, VideoTask
 from src.utils.cache_decorator import cache_result
 
 router = APIRouter(prefix="/api/admin/video-tasks", tags=["Admin - Video Tasks"])
@@ -131,7 +127,7 @@ async def proxy_video_stream(
     request: Request,
     token: str | None = Query(None, description="JWT access token"),
     db: Session = Depends(get_db),
-) -> StreamingResponse:
+) -> Any:
     """
     代理视频流（用于需要认证的视频链接）
 
@@ -144,6 +140,18 @@ async def proxy_video_stream(
     **返回**:
     - 视频流
     """
+    adapter = VideoTaskProxyVideoAdapter(task_id=task_id, token=token)
+    return await pipeline.run(adapter=adapter, http_request=request, db=db, mode=adapter.mode)
+
+
+async def _proxy_video_stream_response(
+    *,
+    task_id: str,
+    request: Request,
+    token: str | None,
+    db: Session,
+) -> Any:
+    """代理视频流（用于需要认证的视频链接）"""
     from src.utils.auth_utils import authenticate_user_from_bearer_token
 
     # 尝试从多个来源获取 token：query param > cookie > header
@@ -186,45 +194,9 @@ async def proxy_video_stream(
         from fastapi.responses import RedirectResponse
 
         return RedirectResponse(url=video_url)
-
-    # 需要代理：获取 provider key 进行认证
-    if not task.key_id:
-        raise HTTPException(status_code=500, detail="Missing provider key")
-
-    key = db.query(ProviderAPIKey).filter(ProviderAPIKey.id == task.key_id).first()
-    if not key or not key.api_key:
-        raise HTTPException(status_code=500, detail="Provider key not found")
-
-    try:
-        api_key = crypto_service.decrypt(key.api_key)
-    except Exception:
-        raise HTTPException(status_code=500, detail="Failed to decrypt provider key")
-
-    # 构建认证头
-    headers = {"x-goog-api-key": api_key}
-
-    async def stream_video() -> AsyncIterator[bytes]:
-        """流式下载并返回视频"""
-        try:
-            client = await HTTPClientPool.get_default_client_async()
-            async with client.stream("GET", video_url, headers=headers) as response:
-                if response.status_code >= 400:
-                    logger.warning(
-                        "Video proxy failed: task={} status={}", task_id, response.status_code
-                    )
-                    return
-                async for chunk in response.aiter_bytes(chunk_size=65536):
-                    yield chunk
-        except Exception as e:
-            logger.exception("Video proxy error: task={} error={}", task_id, str(e))
-
-    return StreamingResponse(
-        stream_video(),
-        media_type="video/mp4",
-        headers={
-            "Content-Disposition": f'inline; filename="video_{task_id}.mp4"',
-            "Cache-Control": "private, max-age=3600",
-        },
+    raise HTTPException(
+        status_code=503,
+        detail="Admin video proxy requires Rust/public download path",
     )
 
 
@@ -548,3 +520,20 @@ class VideoTaskCancelAdapter(DashboardAdapter):
             "status": task.status,
             "message": "Task cancelled successfully",
         }
+
+
+@dataclass
+class VideoTaskProxyVideoAdapter(DashboardAdapter):
+    task_id: str
+    token: str | None
+
+    def authorize(self, context: ApiRequestContext) -> None:  # type: ignore[override]
+        del context
+
+    async def handle(self, context: ApiRequestContext) -> Any:
+        return await _proxy_video_stream_response(
+            task_id=self.task_id,
+            request=context.request,
+            token=self.token,
+            db=context.db,
+        )

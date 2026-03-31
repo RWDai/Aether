@@ -14,64 +14,6 @@ pub(super) enum StreamPrefetchInspection {
     EmbeddedError(serde_json::Value),
 }
 
-pub(super) fn should_fallback_to_control_stream(
-    plan_kind: &str,
-    status_code: u16,
-    mapped_error_finalize: bool,
-) -> bool {
-    if mapped_error_finalize {
-        return false;
-    }
-
-    matches!(
-        plan_kind,
-        OPENAI_CHAT_STREAM_PLAN_KIND
-            | CLAUDE_CHAT_STREAM_PLAN_KIND
-            | GEMINI_CHAT_STREAM_PLAN_KIND
-            | OPENAI_CLI_STREAM_PLAN_KIND
-            | OPENAI_COMPACT_STREAM_PLAN_KIND
-            | CLAUDE_CLI_STREAM_PLAN_KIND
-            | GEMINI_CLI_STREAM_PLAN_KIND
-    ) && status_code >= 400
-}
-
-pub(super) fn resolve_core_stream_error_finalize_report_kind(
-    plan_kind: &str,
-    status_code: u16,
-) -> Option<String> {
-    if status_code < 400 {
-        return None;
-    }
-
-    let report_kind = match plan_kind {
-        OPENAI_CHAT_STREAM_PLAN_KIND => "openai_chat_sync_finalize",
-        CLAUDE_CHAT_STREAM_PLAN_KIND => "claude_chat_sync_finalize",
-        GEMINI_CHAT_STREAM_PLAN_KIND => "gemini_chat_sync_finalize",
-        OPENAI_CLI_STREAM_PLAN_KIND => "openai_cli_sync_finalize",
-        OPENAI_COMPACT_STREAM_PLAN_KIND => "openai_compact_sync_finalize",
-        CLAUDE_CLI_STREAM_PLAN_KIND => "claude_cli_sync_finalize",
-        GEMINI_CLI_STREAM_PLAN_KIND => "gemini_cli_sync_finalize",
-        _ => return None,
-    };
-
-    Some(report_kind.to_string())
-}
-
-pub(super) fn resolve_core_stream_direct_finalize_report_kind(plan_kind: &str) -> Option<String> {
-    let report_kind = match plan_kind {
-        OPENAI_CHAT_STREAM_PLAN_KIND => "openai_chat_sync_finalize",
-        CLAUDE_CHAT_STREAM_PLAN_KIND => "claude_chat_sync_finalize",
-        GEMINI_CHAT_STREAM_PLAN_KIND => "gemini_chat_sync_finalize",
-        OPENAI_CLI_STREAM_PLAN_KIND => "openai_cli_sync_finalize",
-        OPENAI_COMPACT_STREAM_PLAN_KIND => "openai_compact_sync_finalize",
-        CLAUDE_CLI_STREAM_PLAN_KIND => "claude_cli_sync_finalize",
-        GEMINI_CLI_STREAM_PLAN_KIND => "gemini_cli_sync_finalize",
-        _ => return None,
-    };
-
-    Some(report_kind.to_string())
-}
-
 pub(super) fn decode_stream_error_body(
     headers: &BTreeMap<String, String>,
     error_body: &[u8],

@@ -125,11 +125,11 @@ fn provider_query_selected_fetch_endpoints(
 }
 
 async fn provider_query_read_cached_models(
-    state: &AppState,
+    state: &AdminAppState<'_>,
     provider_id: &str,
     key_id: &str,
 ) -> Option<Vec<Value>> {
-    let runner = state.redis_kv_runner()?;
+    let runner = state.app().redis_kv_runner()?;
     let cache_key = runner
         .keyspace()
         .key(&format!("upstream_models:{provider_id}:{key_id}"));
@@ -148,11 +148,11 @@ async fn provider_query_read_cached_models(
 }
 
 async fn provider_query_fetch_models_from_transport(
-    state: &AppState,
+    state: &AdminAppState<'_>,
     transport: &crate::provider_transport::GatewayProviderTransportSnapshot,
 ) -> Result<Vec<Value>, String> {
-    let plan = build_models_fetch_execution_plan(state, transport).await?;
-    let result = execution_runtime::execute_execution_runtime_sync_plan(state, None, &plan)
+    let plan = build_models_fetch_execution_plan(state.app(), transport).await?;
+    let result = execution_runtime::execute_execution_runtime_sync_plan(state.app(), None, &plan)
         .await
         .map_err(|err| format!("{err:?}"))?;
 
@@ -182,7 +182,7 @@ async fn provider_query_fetch_models_from_transport(
 }
 
 async fn provider_query_fetch_models_for_key(
-    state: &AppState,
+    state: &AdminAppState<'_>,
     provider: &StoredProviderCatalogProvider,
     endpoints: &[StoredProviderCatalogEndpoint],
     key: &StoredProviderCatalogKey,
@@ -213,6 +213,7 @@ async fn provider_query_fetch_models_for_key(
     let mut all_errors = Vec::new();
     for endpoint in selected_endpoints {
         let Some(transport) = state
+            .app()
             .read_provider_transport_snapshot(&provider.id, &endpoint.id, &key.id)
             .await?
         else {
@@ -231,7 +232,7 @@ async fn provider_query_fetch_models_for_key(
     let unique_models = aggregate_models_for_cache(&all_models);
     if !unique_models.is_empty() {
         <AppState as ModelFetchRuntimeState>::write_upstream_models_cache(
-            state,
+            state.app(),
             &provider.id,
             &key.id,
             &unique_models,
@@ -296,7 +297,7 @@ pub(crate) async fn build_admin_provider_query_models_response(
         };
 
         let result = provider_query_fetch_models_for_key(
-            state.app(),
+            state,
             &provider,
             &endpoints,
             selected_key,
@@ -330,7 +331,7 @@ pub(crate) async fn build_admin_provider_query_models_response(
     let mut fetch_count = 0usize;
     for key in active_keys {
         let result = provider_query_fetch_models_for_key(
-            state.app(),
+            state,
             &provider,
             &endpoints,
             key,

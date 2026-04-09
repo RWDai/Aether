@@ -70,7 +70,12 @@ pub(super) async fn maybe_handle(
         .unwrap_or(0);
 
     Ok(Some(
-        Json(state.build_admin_provider_key_response(&created, now_unix_secs)).into_response(),
+        Json(state.build_admin_provider_key_response(
+            &created,
+            &provider.provider_type,
+            now_unix_secs,
+        ))
+        .into_response(),
     ))
 }
 

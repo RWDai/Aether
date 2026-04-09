@@ -40,11 +40,13 @@ impl<'a> AdminAppState<'a> {
     pub(crate) fn build_admin_provider_key_response(
         &self,
         key: &aether_data_contracts::repository::provider_catalog::StoredProviderCatalogKey,
+        provider_type: &str,
         now_unix_secs: u64,
     ) -> serde_json::Value {
         crate::handlers::admin::shared::build_admin_provider_key_response(
             self.app,
             key,
+            provider_type,
             now_unix_secs,
         )
     }

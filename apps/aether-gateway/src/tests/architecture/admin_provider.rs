@@ -1091,7 +1091,7 @@ fn admin_provider_write_uses_specific_local_owners() {
     ] {
         assert!(
             endpoint_keys_mutations.contains(pattern),
-            "handlers/admin/provider/endpoint_keys/mutations/mod.rs should expose explicit mutation owner {pattern}"
+             "handlers/admin/provider/endpoint_keys/mutations/mod.rs should expose explicit mutation owner {pattern}"
         );
     }
 

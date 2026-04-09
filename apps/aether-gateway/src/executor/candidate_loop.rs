@@ -2,6 +2,7 @@ use axum::body::Body;
 use axum::http::Response;
 
 use aether_data_contracts::repository::candidates::RequestCandidateStatus;
+use aether_scheduler_core::SchedulerRequestCandidateStatusUpdate;
 
 use crate::ai_pipeline_api::{LocalStreamPlanAndReport, LocalSyncPlanAndReport};
 use crate::control::GatewayControlDecision;
@@ -118,13 +119,15 @@ where
             state,
             plan_and_report.plan(),
             plan_and_report.report_context().as_ref(),
-            RequestCandidateStatus::Unused,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
+            SchedulerRequestCandidateStatusUpdate {
+                status: RequestCandidateStatus::Unused,
+                status_code: None,
+                error_type: None,
+                error_message: None,
+                latency_ms: None,
+                started_at_unix_secs: None,
+                finished_at_unix_secs: None,
+            },
         )
         .await;
     }
@@ -144,13 +147,15 @@ pub(crate) async fn mark_unused_local_candidate_items<T, FPlan, FContext>(
             state,
             plan(&item),
             report_context(&item),
-            RequestCandidateStatus::Unused,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
+            SchedulerRequestCandidateStatusUpdate {
+                status: RequestCandidateStatus::Unused,
+                status_code: None,
+                error_type: None,
+                error_message: None,
+                latency_ms: None,
+                started_at_unix_secs: None,
+                finished_at_unix_secs: None,
+            },
         )
         .await;
     }

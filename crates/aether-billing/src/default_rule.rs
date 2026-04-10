@@ -51,6 +51,14 @@ impl DefaultBillingRuleGenerator {
             json!(base_cache_creation_price),
         );
         variables.insert(
+            "cache_creation_ephemeral_5m_price_per_1m".to_string(),
+            json!(base_cache_creation_price),
+        );
+        variables.insert(
+            "cache_creation_ephemeral_1h_price_per_1m".to_string(),
+            json!(base_cache_creation_price),
+        );
+        variables.insert(
             "cache_read_price_per_1m".to_string(),
             json!(base_cache_read_price),
         );
@@ -61,6 +69,21 @@ impl DefaultBillingRuleGenerator {
             ("input_tokens", "input_tokens", json!(0)),
             ("output_tokens", "output_tokens", json!(0)),
             ("cache_creation_tokens", "cache_creation_tokens", json!(0)),
+            (
+                "cache_creation_ephemeral_5m_tokens",
+                "cache_creation_ephemeral_5m_tokens",
+                json!(0),
+            ),
+            (
+                "cache_creation_ephemeral_1h_tokens",
+                "cache_creation_ephemeral_1h_tokens",
+                json!(0),
+            ),
+            (
+                "cache_creation_uncategorized_tokens",
+                "cache_creation_uncategorized_tokens",
+                json!(0),
+            ),
             ("cache_read_tokens", "cache_read_tokens", json!(0)),
             ("request_count", "request_count", json!(1)),
         ] {
@@ -83,8 +106,16 @@ impl DefaultBillingRuleGenerator {
                 "output_tokens * output_price_per_1m / 1000000",
             ),
             (
-                "cache_creation_cost",
-                "cache_creation_tokens * cache_creation_price_per_1m / 1000000",
+                "cache_creation_uncategorized_cost",
+                "cache_creation_uncategorized_tokens * cache_creation_price_per_1m / 1000000",
+            ),
+            (
+                "cache_creation_ephemeral_5m_cost",
+                "cache_creation_ephemeral_5m_tokens * cache_creation_ephemeral_5m_price_per_1m / 1000000",
+            ),
+            (
+                "cache_creation_ephemeral_1h_cost",
+                "cache_creation_ephemeral_1h_tokens * cache_creation_ephemeral_1h_price_per_1m / 1000000",
             ),
             (
                 "cache_read_cost",
@@ -137,6 +168,30 @@ impl DefaultBillingRuleGenerator {
                 }),
             );
             dimension_mappings.insert(
+                "cache_creation_ephemeral_5m_price_per_1m".to_string(),
+                json!({
+                    "source": "tiered",
+                    "tier_key": "total_input_context",
+                    "allow_zero": true,
+                    "ttl_key": "cache_creation_ephemeral_5m_ttl_minutes",
+                    "ttl_value_key": "cache_creation_price_per_1m",
+                    "tiers": build_tier_entries(&tiers, "cache_creation_price_per_1m", Some(1.25), true),
+                    "default": base_cache_creation_price,
+                }),
+            );
+            dimension_mappings.insert(
+                "cache_creation_ephemeral_1h_price_per_1m".to_string(),
+                json!({
+                    "source": "tiered",
+                    "tier_key": "total_input_context",
+                    "allow_zero": true,
+                    "ttl_key": "cache_creation_ephemeral_1h_ttl_minutes",
+                    "ttl_value_key": "cache_creation_price_per_1m",
+                    "tiers": build_tier_entries(&tiers, "cache_creation_price_per_1m", Some(1.25), true),
+                    "default": base_cache_creation_price,
+                }),
+            );
+            dimension_mappings.insert(
                 "cache_read_price_per_1m".to_string(),
                 json!({
                     "source": "tiered",
@@ -154,9 +209,7 @@ impl DefaultBillingRuleGenerator {
             id: "__default__".to_string(),
             name: format!("Default rule for {}", pricing.global_model_name),
             task_type: normalize_task_type(task_type).to_string(),
-            expression:
-                "input_cost + output_cost + cache_creation_cost + cache_read_cost + request_cost"
-                    .to_string(),
+            expression: "input_cost + output_cost + cache_creation_uncategorized_cost + cache_creation_ephemeral_5m_cost + cache_creation_ephemeral_1h_cost + cache_read_cost + request_cost".to_string(),
             variables,
             dimension_mappings,
             scope: "default".to_string(),

@@ -22,6 +22,7 @@ use crate::ai_pipeline::transport::antigravity::{
 };
 use crate::ai_pipeline::transport::apply_local_header_rules;
 use crate::ai_pipeline::transport::auth::{
+    build_claude_passthrough_headers, build_complete_passthrough_headers_with_auth,
     build_openai_passthrough_headers, ensure_upstream_auth_header, resolve_local_gemini_auth,
     resolve_local_standard_auth,
 };
@@ -354,16 +355,35 @@ pub(crate) async fn resolve_local_openai_cli_candidate_payload_parts(
         return None;
     };
 
-    let mut provider_request_headers = build_openai_passthrough_headers(
-        &parts.headers,
-        &auth_header,
-        &auth_value,
-        &antigravity_auth
-            .as_ref()
-            .map(build_antigravity_static_identity_headers)
-            .unwrap_or_default(),
-        Some("application/json"),
-    );
+    let extra_headers = antigravity_auth
+        .as_ref()
+        .map(build_antigravity_static_identity_headers)
+        .unwrap_or_default();
+    let mut provider_request_headers = if same_format {
+        build_complete_passthrough_headers_with_auth(
+            &parts.headers,
+            &auth_header,
+            &auth_value,
+            &extra_headers,
+            Some("application/json"),
+        )
+    } else if provider_api_format.starts_with("claude:") {
+        build_claude_passthrough_headers(
+            &parts.headers,
+            &auth_header,
+            &auth_value,
+            &extra_headers,
+            Some("application/json"),
+        )
+    } else {
+        build_openai_passthrough_headers(
+            &parts.headers,
+            &auth_header,
+            &auth_value,
+            &extra_headers,
+            Some("application/json"),
+        )
+    };
     if !apply_local_header_rules(
         &mut provider_request_headers,
         transport.endpoint.header_rules.as_ref(),

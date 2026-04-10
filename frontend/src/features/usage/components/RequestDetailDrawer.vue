@@ -194,7 +194,7 @@
                     <!-- 阶梯标题 -->
                     <div class="text-xs text-muted-foreground flex items-center gap-2 flex-wrap">
                       <span class="font-medium text-foreground">Token 计费</span>
-                      <span class="text-muted-foreground/60">(输入 {{ formatNumber(detail.tokens?.input || detail.input_tokens || 0) }} + 缓存创建 {{ cacheCreationSummaryText }} + 缓存读取 {{ formatNumber(detail.cache_read_input_tokens || 0) }})</span>
+                      <span class="text-muted-foreground/60">(输入 {{ formatNumber(displayInputTokens) }} + 缓存创建 {{ cacheCreationSummaryText }} + 缓存读取 {{ formatNumber(detail.cache_read_input_tokens || 0) }})</span>
                       <Badge
                         v-if="displayTiers.length > 1"
                         variant="outline"
@@ -260,7 +260,7 @@
                         <div class="flex items-center">
                           <div class="flex items-center flex-1">
                             <span class="text-xs text-muted-foreground w-[56px]">输入</span>
-                            <span class="text-sm font-semibold font-mono flex-1 text-center">{{ detail.tokens?.input || detail.input_tokens || 0 }}</span>
+                            <span class="text-sm font-semibold font-mono flex-1 text-center">{{ displayInputTokens }}</span>
                             <span class="text-xs font-mono">${{ (detail.cost?.input || detail.input_cost || 0).toFixed(6) }}</span>
                           </div>
                           <Separator
@@ -701,6 +701,7 @@ import { dashboardApi, type RequestDetail } from '@/api/dashboard'
 import { formatApiFormat } from '@/api/endpoints/types/api-format'
 import { formatShortRequestId } from '@/utils/format'
 import { log } from '@/utils/logger'
+import { getEffectiveInputTokens } from '../token-normalization'
 
 // 子组件
 import RequestHeadersContent from './RequestDetailDrawer/RequestHeadersContent.vue'
@@ -774,6 +775,16 @@ let timelineMountTimer: ReturnType<typeof setTimeout> | null = null
 
 const fullRequestId = computed(() => detail.value?.request_id || detail.value?.id || '-')
 const displayRequestId = computed(() => formatShortRequestId(fullRequestId.value))
+const displayInputTokens = computed(() => {
+  if (!detail.value) return 0
+  return getEffectiveInputTokens({
+    effective_input_tokens: detail.value.effective_input_tokens,
+    input_tokens: detail.value.input_tokens ?? detail.value.tokens?.input,
+    cache_read_input_tokens: detail.value.cache_read_input_tokens,
+    api_format: detail.value.api_format,
+    endpoint_api_format: detail.value.endpoint_api_format,
+  })
+})
 
 // 监听标签页切换
 watch(activeTab, (newTab) => {

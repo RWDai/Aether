@@ -9,7 +9,8 @@ use crate::ai_pipeline::planner::standard::{
     build_local_openai_chat_upstream_url,
 };
 use crate::ai_pipeline::transport::auth::{
-    build_openai_passthrough_headers, ensure_upstream_auth_header, resolve_local_openai_chat_auth,
+    build_complete_passthrough_headers_with_auth, ensure_upstream_auth_header,
+    resolve_local_openai_chat_auth,
 };
 use crate::ai_pipeline::transport::policy::supports_local_openai_chat_transport;
 use crate::ai_pipeline::transport::{
@@ -140,7 +141,7 @@ pub(super) async fn build_same_format_local_openai_chat_decision_payload_for_can
         return None;
     };
 
-    let mut provider_request_headers = build_openai_passthrough_headers(
+    let mut provider_request_headers = build_complete_passthrough_headers_with_auth(
         &parts.headers,
         &auth_header,
         &auth_value,

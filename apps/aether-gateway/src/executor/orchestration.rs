@@ -1,6 +1,3 @@
-use axum::body::Body;
-use axum::http::Response;
-
 use crate::ai_pipeline_api::{
     build_local_gemini_files_stream_plan_and_reports_for_kind,
     build_local_gemini_files_sync_plan_and_reports_for_kind,
@@ -21,6 +18,7 @@ use crate::control::GatewayControlDecision;
 use crate::executor::candidate_loop::{
     execute_stream_plan_and_reports, execute_sync_plan_and_reports,
 };
+use crate::executor::LocalExecutionRequestOutcome;
 use crate::{AppState, GatewayControlSyncDecisionResponse, GatewayError};
 
 pub(crate) async fn maybe_execute_sync_local_path(
@@ -29,7 +27,7 @@ pub(crate) async fn maybe_execute_sync_local_path(
     body_bytes: &axum::body::Bytes,
     trace_id: &str,
     decision: &GatewayControlDecision,
-) -> Result<Option<Response<Body>>, GatewayError> {
+) -> Result<LocalExecutionRequestOutcome, GatewayError> {
     super::maybe_execute_via_sync_decision_path(state, parts, body_bytes, trace_id, decision).await
 }
 
@@ -39,7 +37,7 @@ pub(crate) async fn maybe_execute_stream_local_path(
     body_bytes: &axum::body::Bytes,
     trace_id: &str,
     decision: &GatewayControlDecision,
-) -> Result<Option<Response<Body>>, GatewayError> {
+) -> Result<LocalExecutionRequestOutcome, GatewayError> {
     super::maybe_execute_via_stream_decision_path(state, parts, body_bytes, trace_id, decision)
         .await
 }
@@ -51,17 +49,17 @@ pub(crate) async fn maybe_execute_sync_via_local_decision(
     decision: &GatewayControlDecision,
     body_json: &serde_json::Value,
     plan_kind: &str,
-) -> Result<Option<Response<Body>>, GatewayError> {
+) -> Result<LocalExecutionRequestOutcome, GatewayError> {
     let plan_and_reports = build_local_openai_chat_sync_plan_and_reports_for_kind(
         state, parts, trace_id, decision, body_json, plan_kind,
     )
     .await?;
     if plan_and_reports.is_empty() {
-        return Ok(None);
+        return Ok(LocalExecutionRequestOutcome::NoPath);
     }
 
     let plan_count = plan_and_reports.len();
-    if let Some(response) = execute_sync_plan_and_reports(
+    let outcome = execute_sync_plan_and_reports(
         state,
         parts,
         trace_id,
@@ -69,15 +67,15 @@ pub(crate) async fn maybe_execute_sync_via_local_decision(
         plan_kind,
         plan_and_reports,
     )
-    .await?
-    {
-        return Ok(Some(response));
+    .await?;
+
+    if let LocalExecutionRequestOutcome::Exhausted(_) = &outcome {
+        set_local_openai_chat_execution_exhausted_diagnostic(
+            state, trace_id, decision, plan_kind, body_json, plan_count,
+        );
     }
 
-    set_local_openai_chat_execution_exhausted_diagnostic(
-        state, trace_id, decision, plan_kind, body_json, plan_count,
-    );
-    Ok(None)
+    Ok(outcome)
 }
 
 pub(crate) async fn maybe_execute_stream_via_local_decision(
@@ -87,27 +85,27 @@ pub(crate) async fn maybe_execute_stream_via_local_decision(
     decision: &GatewayControlDecision,
     body_json: &serde_json::Value,
     plan_kind: &str,
-) -> Result<Option<Response<Body>>, GatewayError> {
+) -> Result<LocalExecutionRequestOutcome, GatewayError> {
     let plan_and_reports = build_local_openai_chat_stream_plan_and_reports_for_kind(
         state, parts, trace_id, decision, body_json, plan_kind,
     )
     .await?;
     if plan_and_reports.is_empty() {
-        return Ok(None);
+        return Ok(LocalExecutionRequestOutcome::NoPath);
     }
 
     let plan_count = plan_and_reports.len();
-    if let Some(response) =
+    let outcome =
         execute_stream_plan_and_reports(state, trace_id, decision, plan_kind, plan_and_reports)
-            .await?
-    {
-        return Ok(Some(response));
+            .await?;
+
+    if let LocalExecutionRequestOutcome::Exhausted(_) = &outcome {
+        set_local_openai_chat_execution_exhausted_diagnostic(
+            state, trace_id, decision, plan_kind, body_json, plan_count,
+        );
     }
 
-    set_local_openai_chat_execution_exhausted_diagnostic(
-        state, trace_id, decision, plan_kind, body_json, plan_count,
-    );
-    Ok(None)
+    Ok(outcome)
 }
 
 pub(crate) async fn maybe_execute_sync_via_local_openai_cli_decision(
@@ -117,14 +115,14 @@ pub(crate) async fn maybe_execute_sync_via_local_openai_cli_decision(
     decision: &GatewayControlDecision,
     body_json: &serde_json::Value,
     plan_kind: &str,
-) -> Result<Option<Response<Body>>, GatewayError> {
+) -> Result<LocalExecutionRequestOutcome, GatewayError> {
     let plan_and_reports: Vec<LocalSyncPlanAndReport> =
         build_local_openai_cli_sync_plan_and_reports_for_kind(
             state, parts, trace_id, decision, body_json, plan_kind,
         )
         .await?;
     if plan_and_reports.is_empty() {
-        return Ok(None);
+        return Ok(LocalExecutionRequestOutcome::NoPath);
     }
 
     execute_sync_plan_and_reports(
@@ -145,14 +143,14 @@ pub(crate) async fn maybe_execute_stream_via_local_openai_cli_decision(
     decision: &GatewayControlDecision,
     body_json: &serde_json::Value,
     plan_kind: &str,
-) -> Result<Option<Response<Body>>, GatewayError> {
+) -> Result<LocalExecutionRequestOutcome, GatewayError> {
     let plan_and_reports: Vec<LocalStreamPlanAndReport> =
         build_local_openai_cli_stream_plan_and_reports_for_kind(
             state, parts, trace_id, decision, body_json, plan_kind,
         )
         .await?;
     if plan_and_reports.is_empty() {
-        return Ok(None);
+        return Ok(LocalExecutionRequestOutcome::NoPath);
     }
 
     execute_stream_plan_and_reports(state, trace_id, decision, plan_kind, plan_and_reports).await
@@ -166,9 +164,9 @@ pub(crate) async fn maybe_execute_sync_via_standard_family_decision(
     body_json: &serde_json::Value,
     plan_kind: &str,
     resolve_sync_spec: fn(&str) -> Option<LocalStandardSpec>,
-) -> Result<Option<Response<Body>>, GatewayError> {
+) -> Result<LocalExecutionRequestOutcome, GatewayError> {
     let Some(spec) = resolve_sync_spec(plan_kind) else {
-        return Ok(None);
+        return Ok(LocalExecutionRequestOutcome::NoPath);
     };
 
     let plan_and_reports: Vec<LocalSyncPlanAndReport> =
@@ -177,7 +175,7 @@ pub(crate) async fn maybe_execute_sync_via_standard_family_decision(
         )
         .await?;
     if plan_and_reports.is_empty() {
-        return Ok(None);
+        return Ok(LocalExecutionRequestOutcome::NoPath);
     }
 
     execute_sync_plan_and_reports(
@@ -199,9 +197,9 @@ pub(crate) async fn maybe_execute_stream_via_standard_family_decision(
     body_json: &serde_json::Value,
     plan_kind: &str,
     resolve_stream_spec: fn(&str) -> Option<LocalStandardSpec>,
-) -> Result<Option<Response<Body>>, GatewayError> {
+) -> Result<LocalExecutionRequestOutcome, GatewayError> {
     let Some(spec) = resolve_stream_spec(plan_kind) else {
-        return Ok(None);
+        return Ok(LocalExecutionRequestOutcome::NoPath);
     };
 
     let plan_and_reports: Vec<LocalStreamPlanAndReport> =
@@ -210,7 +208,7 @@ pub(crate) async fn maybe_execute_stream_via_standard_family_decision(
         )
         .await?;
     if plan_and_reports.is_empty() {
-        return Ok(None);
+        return Ok(LocalExecutionRequestOutcome::NoPath);
     }
 
     execute_stream_plan_and_reports(state, trace_id, decision, plan_kind, plan_and_reports).await
@@ -223,8 +221,10 @@ pub(crate) async fn maybe_execute_sync_via_local_standard_decision(
     decision: &GatewayControlDecision,
     body_json: &serde_json::Value,
     plan_kind: &str,
-) -> Result<Option<Response<Body>>, GatewayError> {
-    if let Some(response) = maybe_execute_sync_via_standard_family_decision(
+) -> Result<LocalExecutionRequestOutcome, GatewayError> {
+    let mut exhausted = None;
+
+    match maybe_execute_sync_via_standard_family_decision(
         state,
         parts,
         trace_id,
@@ -235,10 +235,14 @@ pub(crate) async fn maybe_execute_sync_via_local_standard_decision(
     )
     .await?
     {
-        return Ok(Some(response));
+        LocalExecutionRequestOutcome::Responded(response) => {
+            return Ok(LocalExecutionRequestOutcome::Responded(response));
+        }
+        LocalExecutionRequestOutcome::Exhausted(outcome) => exhausted = Some(outcome),
+        LocalExecutionRequestOutcome::NoPath => {}
     }
 
-    maybe_execute_sync_via_standard_family_decision(
+    match maybe_execute_sync_via_standard_family_decision(
         state,
         parts,
         trace_id,
@@ -247,7 +251,18 @@ pub(crate) async fn maybe_execute_sync_via_local_standard_decision(
         plan_kind,
         resolve_gemini_sync_spec,
     )
-    .await
+    .await?
+    {
+        LocalExecutionRequestOutcome::Responded(response) => {
+            Ok(LocalExecutionRequestOutcome::Responded(response))
+        }
+        LocalExecutionRequestOutcome::Exhausted(outcome) => {
+            Ok(LocalExecutionRequestOutcome::Exhausted(outcome))
+        }
+        LocalExecutionRequestOutcome::NoPath => Ok(exhausted
+            .map(LocalExecutionRequestOutcome::Exhausted)
+            .unwrap_or(LocalExecutionRequestOutcome::NoPath)),
+    }
 }
 
 pub(crate) async fn maybe_execute_stream_via_local_standard_decision(
@@ -257,8 +272,10 @@ pub(crate) async fn maybe_execute_stream_via_local_standard_decision(
     decision: &GatewayControlDecision,
     body_json: &serde_json::Value,
     plan_kind: &str,
-) -> Result<Option<Response<Body>>, GatewayError> {
-    if let Some(response) = maybe_execute_stream_via_standard_family_decision(
+) -> Result<LocalExecutionRequestOutcome, GatewayError> {
+    let mut exhausted = None;
+
+    match maybe_execute_stream_via_standard_family_decision(
         state,
         parts,
         trace_id,
@@ -269,10 +286,14 @@ pub(crate) async fn maybe_execute_stream_via_local_standard_decision(
     )
     .await?
     {
-        return Ok(Some(response));
+        LocalExecutionRequestOutcome::Responded(response) => {
+            return Ok(LocalExecutionRequestOutcome::Responded(response));
+        }
+        LocalExecutionRequestOutcome::Exhausted(outcome) => exhausted = Some(outcome),
+        LocalExecutionRequestOutcome::NoPath => {}
     }
 
-    maybe_execute_stream_via_standard_family_decision(
+    match maybe_execute_stream_via_standard_family_decision(
         state,
         parts,
         trace_id,
@@ -281,7 +302,18 @@ pub(crate) async fn maybe_execute_stream_via_local_standard_decision(
         plan_kind,
         resolve_gemini_stream_spec,
     )
-    .await
+    .await?
+    {
+        LocalExecutionRequestOutcome::Responded(response) => {
+            Ok(LocalExecutionRequestOutcome::Responded(response))
+        }
+        LocalExecutionRequestOutcome::Exhausted(outcome) => {
+            Ok(LocalExecutionRequestOutcome::Exhausted(outcome))
+        }
+        LocalExecutionRequestOutcome::NoPath => Ok(exhausted
+            .map(LocalExecutionRequestOutcome::Exhausted)
+            .unwrap_or(LocalExecutionRequestOutcome::NoPath)),
+    }
 }
 
 pub(crate) async fn maybe_execute_sync_via_local_same_format_provider_decision(
@@ -291,9 +323,9 @@ pub(crate) async fn maybe_execute_sync_via_local_same_format_provider_decision(
     decision: &GatewayControlDecision,
     body_json: &serde_json::Value,
     plan_kind: &str,
-) -> Result<Option<Response<Body>>, GatewayError> {
+) -> Result<LocalExecutionRequestOutcome, GatewayError> {
     let Some(spec) = resolve_local_same_format_sync_spec(plan_kind) else {
-        return Ok(None);
+        return Ok(LocalExecutionRequestOutcome::NoPath);
     };
 
     let plan_and_reports: Vec<LocalSyncPlanAndReport> =
@@ -302,7 +334,7 @@ pub(crate) async fn maybe_execute_sync_via_local_same_format_provider_decision(
         )
         .await?;
     if plan_and_reports.is_empty() {
-        return Ok(None);
+        return Ok(LocalExecutionRequestOutcome::NoPath);
     }
 
     execute_sync_plan_and_reports(
@@ -323,9 +355,9 @@ pub(crate) async fn maybe_execute_stream_via_local_same_format_provider_decision
     decision: &GatewayControlDecision,
     body_json: &serde_json::Value,
     plan_kind: &str,
-) -> Result<Option<Response<Body>>, GatewayError> {
+) -> Result<LocalExecutionRequestOutcome, GatewayError> {
     let Some(spec) = resolve_local_same_format_stream_spec(plan_kind) else {
-        return Ok(None);
+        return Ok(LocalExecutionRequestOutcome::NoPath);
     };
 
     let plan_and_reports: Vec<LocalStreamPlanAndReport> =
@@ -334,7 +366,7 @@ pub(crate) async fn maybe_execute_stream_via_local_same_format_provider_decision
         )
         .await?;
     if plan_and_reports.is_empty() {
-        return Ok(None);
+        return Ok(LocalExecutionRequestOutcome::NoPath);
     }
 
     execute_stream_plan_and_reports(state, trace_id, decision, plan_kind, plan_and_reports).await
@@ -349,7 +381,7 @@ pub(crate) async fn maybe_execute_sync_via_local_gemini_files_decision(
     trace_id: &str,
     decision: &GatewayControlDecision,
     plan_kind: &str,
-) -> Result<Option<Response<Body>>, GatewayError> {
+) -> Result<LocalExecutionRequestOutcome, GatewayError> {
     let plan_and_reports: Vec<LocalSyncPlanAndReport> =
         build_local_gemini_files_sync_plan_and_reports_for_kind(
             state,
@@ -363,7 +395,7 @@ pub(crate) async fn maybe_execute_sync_via_local_gemini_files_decision(
         )
         .await?;
     if plan_and_reports.is_empty() {
-        return Ok(None);
+        return Ok(LocalExecutionRequestOutcome::NoPath);
     }
 
     execute_sync_plan_and_reports(
@@ -383,14 +415,14 @@ pub(crate) async fn maybe_execute_stream_via_local_gemini_files_decision(
     trace_id: &str,
     decision: &GatewayControlDecision,
     plan_kind: &str,
-) -> Result<Option<Response<Body>>, GatewayError> {
+) -> Result<LocalExecutionRequestOutcome, GatewayError> {
     let plan_and_reports: Vec<LocalStreamPlanAndReport> =
         build_local_gemini_files_stream_plan_and_reports_for_kind(
             state, parts, trace_id, decision, plan_kind,
         )
         .await?;
     if plan_and_reports.is_empty() {
-        return Ok(None);
+        return Ok(LocalExecutionRequestOutcome::NoPath);
     }
 
     execute_stream_plan_and_reports(state, trace_id, decision, plan_kind, plan_and_reports).await
@@ -403,14 +435,14 @@ pub(crate) async fn maybe_execute_sync_via_local_video_decision(
     trace_id: &str,
     decision: &GatewayControlDecision,
     plan_kind: &str,
-) -> Result<Option<Response<Body>>, GatewayError> {
+) -> Result<LocalExecutionRequestOutcome, GatewayError> {
     let plan_and_reports: Vec<LocalSyncPlanAndReport> =
         build_local_video_sync_plan_and_reports_for_kind(
             state, parts, body_json, trace_id, decision, plan_kind,
         )
         .await?;
     if plan_and_reports.is_empty() {
-        return Ok(None);
+        return Ok(LocalExecutionRequestOutcome::NoPath);
     }
 
     execute_sync_plan_and_reports(
@@ -430,14 +462,14 @@ pub(crate) async fn maybe_execute_sync_request(
     body_bytes: &axum::body::Bytes,
     trace_id: &str,
     decision: Option<&GatewayControlDecision>,
-) -> Result<Option<Response<Body>>, GatewayError> {
+) -> Result<LocalExecutionRequestOutcome, GatewayError> {
     let Some(decision) = decision else {
-        return Ok(None);
+        return Ok(LocalExecutionRequestOutcome::NoPath);
     };
     #[cfg(not(test))]
     {
         if parts.method != http::Method::POST {
-            return Ok(None);
+            return Ok(LocalExecutionRequestOutcome::NoPath);
         }
         return maybe_execute_sync_local_path(state, parts, body_bytes, trace_id, decision).await;
     }
@@ -449,7 +481,7 @@ pub(crate) async fn maybe_execute_sync_request(
             .is_empty()
             && parts.method != http::Method::POST
         {
-            return Ok(None);
+            return Ok(LocalExecutionRequestOutcome::NoPath);
         }
         maybe_execute_sync_local_path(state, parts, body_bytes, trace_id, decision).await
     }
@@ -461,14 +493,14 @@ pub(crate) async fn maybe_execute_stream_request(
     body_bytes: &axum::body::Bytes,
     trace_id: &str,
     decision: Option<&GatewayControlDecision>,
-) -> Result<Option<Response<Body>>, GatewayError> {
+) -> Result<LocalExecutionRequestOutcome, GatewayError> {
     let Some(decision) = decision else {
-        return Ok(None);
+        return Ok(LocalExecutionRequestOutcome::NoPath);
     };
     #[cfg(not(test))]
     {
         if parts.method != http::Method::POST {
-            return Ok(None);
+            return Ok(LocalExecutionRequestOutcome::NoPath);
         }
         return maybe_execute_stream_local_path(state, parts, body_bytes, trace_id, decision).await;
     }
@@ -480,7 +512,7 @@ pub(crate) async fn maybe_execute_stream_request(
             .is_empty()
             && parts.method != http::Method::POST
         {
-            return Ok(None);
+            return Ok(LocalExecutionRequestOutcome::NoPath);
         }
         maybe_execute_stream_local_path(state, parts, body_bytes, trace_id, decision).await
     }

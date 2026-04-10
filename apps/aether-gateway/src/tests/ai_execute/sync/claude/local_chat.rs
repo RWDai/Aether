@@ -18,6 +18,8 @@ async fn gateway_executes_claude_chat_sync_via_local_decision_gate_with_local_sy
         url: String,
         model: String,
         auth_header_value: String,
+        anthropic_version: String,
+        anthropic_beta: String,
         endpoint_tag: String,
         metadata_mode: String,
         metadata_source: String,
@@ -261,6 +263,18 @@ async fn gateway_executes_claude_chat_sync_via_local_decision_gate_with_local_sy
                         .and_then(|value| value.as_str())
                         .unwrap_or_default()
                         .to_string(),
+                    anthropic_version: payload
+                        .get("headers")
+                        .and_then(|value| value.get("anthropic-version"))
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    anthropic_beta: payload
+                        .get("headers")
+                        .and_then(|value| value.get("anthropic-beta"))
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
                     endpoint_tag: payload
                         .get("headers")
                         .and_then(|value| value.get("x-endpoint-tag"))
@@ -357,6 +371,8 @@ async fn gateway_executes_claude_chat_sync_via_local_decision_gate_with_local_sy
         .post(format!("{gateway_url}/v1/messages"))
         .header(http::header::CONTENT_TYPE, "application/json")
         .header("x-api-key", "sk-client-claude-chat-local")
+        .header("anthropic-version", "2023-06-01")
+        .header("anthropic-beta", "prompt-caching-2024-07-31,context-1m-2025-08-07")
         .header(TRACE_ID_HEADER, "trace-claude-chat-local-123")
         .body(
             "{\"model\":\"claude-sonnet-4-5\",\"messages\":[],\"metadata\":{\"client\":\"desktop-claude\"}}",
@@ -389,6 +405,14 @@ async fn gateway_executes_claude_chat_sync_via_local_decision_gate_with_local_sy
     assert_eq!(
         seen_execution_runtime_request.auth_header_value,
         "sk-upstream-claude-chat"
+    );
+    assert_eq!(
+        seen_execution_runtime_request.anthropic_version,
+        "2023-06-01"
+    );
+    assert_eq!(
+        seen_execution_runtime_request.anthropic_beta,
+        "prompt-caching-2024-07-31,context-1m-2025-08-07"
     );
     assert_eq!(
         seen_execution_runtime_request.endpoint_tag,

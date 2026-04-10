@@ -23,6 +23,7 @@ dependencies = [
 name = "aether-admin"
 version = "0.1.0"
 dependencies = [
+ "aether-billing",
  "aether-contracts",
  "aether-data",
  "aether-data-contracts",
@@ -113,6 +114,7 @@ dependencies = [
  "sqlx",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
  "url",
  "uuid",
 ]

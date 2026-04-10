@@ -53,6 +53,29 @@ pub fn should_skip_upstream_passthrough_header(name: &str) -> bool {
     ) || should_skip_request_header(name)
 }
 
+pub(crate) fn should_skip_upstream_complete_passthrough_header(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "authorization"
+            | "x-api-key"
+            | "x-goog-api-key"
+            | "host"
+            | "content-length"
+            | "transfer-encoding"
+            | "connection"
+            | "accept-encoding"
+            | "content-encoding"
+            | "x-real-ip"
+            | "x-real-proto"
+            | "x-forwarded-for"
+            | "x-forwarded-proto"
+            | "x-forwarded-scheme"
+            | "x-forwarded-host"
+            | "x-forwarded-port"
+    ) || should_skip_request_header(name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::should_skip_upstream_passthrough_header;

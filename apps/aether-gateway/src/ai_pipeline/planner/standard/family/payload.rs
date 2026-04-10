@@ -6,7 +6,7 @@ use tracing::warn;
 use crate::ai_pipeline::planner::common::force_upstream_streaming_for_provider;
 use crate::ai_pipeline::planner::standard::apply_codex_openai_cli_special_headers;
 use crate::ai_pipeline::transport::auth::{
-    build_openai_passthrough_headers, ensure_upstream_auth_header,
+    build_claude_passthrough_headers, build_openai_passthrough_headers, ensure_upstream_auth_header,
 };
 use crate::ai_pipeline::transport::{
     apply_local_header_rules, resolve_transport_execution_timeouts,
@@ -245,13 +245,23 @@ pub(super) async fn maybe_build_local_standard_decision_payload_for_candidate(
         }
     };
 
-    let mut provider_request_headers = build_openai_passthrough_headers(
-        &parts.headers,
-        &auth_header,
-        &auth_value,
-        &BTreeMap::new(),
-        Some("application/json"),
-    );
+    let mut provider_request_headers = if provider_api_format.starts_with("claude:") {
+        build_claude_passthrough_headers(
+            &parts.headers,
+            &auth_header,
+            &auth_value,
+            &BTreeMap::new(),
+            Some("application/json"),
+        )
+    } else {
+        build_openai_passthrough_headers(
+            &parts.headers,
+            &auth_header,
+            &auth_value,
+            &BTreeMap::new(),
+            Some("application/json"),
+        )
+    };
     if !apply_local_header_rules(
         &mut provider_request_headers,
         transport.endpoint.header_rules.as_ref(),

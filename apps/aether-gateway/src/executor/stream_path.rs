@@ -4,20 +4,21 @@ use std::collections::BTreeMap;
 
 use crate::ai_pipeline_api::{
     is_matching_stream_request, resolve_execution_runtime_stream_plan_kind,
-    supports_stream_scheduler_decision_kind, OPENAI_VIDEO_CONTENT_PLAN_KIND,
+    supports_stream_scheduler_decision_kind, LocalStreamPlanAndReport,
+    OPENAI_VIDEO_CONTENT_PLAN_KIND,
 };
 use crate::api::response::build_client_response_from_parts;
 use crate::control::GatewayControlDecision;
-use crate::execution_runtime::execute_execution_runtime_stream;
 use crate::{AppState, GatewayError, GatewayFallbackReason};
 
 use super::{
-    build_direct_plan_bypass_cache_key, maybe_execute_stream_via_local_decision,
-    maybe_execute_stream_via_local_gemini_files_decision,
+    build_direct_plan_bypass_cache_key, execute_stream_plan_and_reports,
+    maybe_execute_stream_via_local_decision, maybe_execute_stream_via_local_gemini_files_decision,
     maybe_execute_stream_via_local_openai_cli_decision,
     maybe_execute_stream_via_local_same_format_provider_decision,
     maybe_execute_stream_via_local_standard_decision, maybe_execute_stream_via_plan_fallback,
     maybe_execute_stream_via_remote_decision, parse_local_request_body, should_skip_direct_plan,
+    LocalExecutionRequestOutcome,
 };
 
 pub(crate) async fn maybe_execute_via_stream_decision_path(
@@ -26,71 +27,96 @@ pub(crate) async fn maybe_execute_via_stream_decision_path(
     body_bytes: &Bytes,
     trace_id: &str,
     decision: &GatewayControlDecision,
-) -> Result<Option<Response<Body>>, GatewayError> {
+) -> Result<LocalExecutionRequestOutcome, GatewayError> {
     let Some(plan_kind) = resolve_execution_runtime_stream_plan_kind(parts, decision) else {
-        return Ok(None);
+        return Ok(LocalExecutionRequestOutcome::NoPath);
     };
 
     let Some((body_json, body_base64)) = parse_local_request_body(parts, body_bytes) else {
-        return Ok(None);
+        return Ok(LocalExecutionRequestOutcome::NoPath);
     };
 
     if !is_matching_stream_request(plan_kind, parts, &body_json) {
-        return Ok(None);
+        return Ok(LocalExecutionRequestOutcome::NoPath);
     }
 
     let bypass_cache_key =
         build_direct_plan_bypass_cache_key(plan_kind, parts, body_bytes, decision);
     if should_skip_direct_plan(state, &bypass_cache_key) {
-        return Ok(None);
+        return Ok(LocalExecutionRequestOutcome::NoPath);
     }
 
-    if let Some(response) =
-        maybe_execute_local_video_task_content_stream(state, parts, trace_id, decision, plan_kind)
-            .await?
+    let mut exhausted = None;
+
+    match maybe_execute_local_video_task_content_stream(state, parts, trace_id, decision, plan_kind)
+        .await?
     {
-        return Ok(Some(response));
+        LocalExecutionRequestOutcome::Responded(response) => {
+            return Ok(LocalExecutionRequestOutcome::Responded(response));
+        }
+        LocalExecutionRequestOutcome::Exhausted(outcome) => exhausted = Some(outcome),
+        LocalExecutionRequestOutcome::NoPath => {}
     }
 
     if supports_stream_scheduler_decision_kind(plan_kind) {
-        if let Some(response) = maybe_execute_stream_via_local_decision(
+        match maybe_execute_stream_via_local_decision(
             state, parts, trace_id, decision, &body_json, plan_kind,
         )
         .await?
         {
-            return Ok(Some(response));
+            LocalExecutionRequestOutcome::Responded(response) => {
+                return Ok(LocalExecutionRequestOutcome::Responded(response));
+            }
+            LocalExecutionRequestOutcome::Exhausted(outcome) => exhausted = Some(outcome),
+            LocalExecutionRequestOutcome::NoPath => {}
         }
 
-        if let Some(response) = maybe_execute_stream_via_local_openai_cli_decision(
+        match maybe_execute_stream_via_local_openai_cli_decision(
             state, parts, trace_id, decision, &body_json, plan_kind,
         )
         .await?
         {
-            return Ok(Some(response));
+            LocalExecutionRequestOutcome::Responded(response) => {
+                return Ok(LocalExecutionRequestOutcome::Responded(response));
+            }
+            LocalExecutionRequestOutcome::Exhausted(outcome) => exhausted = Some(outcome),
+            LocalExecutionRequestOutcome::NoPath => {}
         }
 
-        if let Some(response) = maybe_execute_stream_via_local_standard_decision(
+        match maybe_execute_stream_via_local_standard_decision(
             state, parts, trace_id, decision, &body_json, plan_kind,
         )
         .await?
         {
-            return Ok(Some(response));
+            LocalExecutionRequestOutcome::Responded(response) => {
+                return Ok(LocalExecutionRequestOutcome::Responded(response));
+            }
+            LocalExecutionRequestOutcome::Exhausted(outcome) => exhausted = Some(outcome),
+            LocalExecutionRequestOutcome::NoPath => {}
         }
 
-        if let Some(response) = maybe_execute_stream_via_local_same_format_provider_decision(
+        match maybe_execute_stream_via_local_same_format_provider_decision(
             state, parts, trace_id, decision, &body_json, plan_kind,
         )
         .await?
         {
-            return Ok(Some(response));
+            LocalExecutionRequestOutcome::Responded(response) => {
+                return Ok(LocalExecutionRequestOutcome::Responded(response));
+            }
+            LocalExecutionRequestOutcome::Exhausted(outcome) => exhausted = Some(outcome),
+            LocalExecutionRequestOutcome::NoPath => {}
         }
 
-        if let Some(response) = maybe_execute_stream_via_local_gemini_files_decision(
+        match maybe_execute_stream_via_local_gemini_files_decision(
             state, parts, trace_id, decision, plan_kind,
         )
         .await?
         {
-            return Ok(Some(response));
+            LocalExecutionRequestOutcome::Responded(response) => {
+                return Ok(LocalExecutionRequestOutcome::Responded(response));
+            }
+            LocalExecutionRequestOutcome::Exhausted(outcome) => exhausted = Some(outcome),
+            LocalExecutionRequestOutcome::NoPath => {}
         }
 
         if let Some(response) = maybe_execute_stream_via_remote_decision(
@@ -98,11 +124,11 @@ pub(crate) async fn maybe_execute_via_stream_decision_path(
         )
         .await?
         {
-            return Ok(Some(response));
+            return Ok(LocalExecutionRequestOutcome::Responded(response));
         }
     }
 
-    maybe_execute_stream_via_plan_fallback(
+    match maybe_execute_stream_via_plan_fallback(
         state,
         parts,
         trace_id,
@@ -117,7 +143,18 @@ pub(crate) async fn maybe_execute_via_stream_decision_path(
             GatewayFallbackReason::SchedulerDecisionUnsupported
         },
     )
-    .await
+    .await?
+    {
+        LocalExecutionRequestOutcome::Responded(response) => {
+            Ok(LocalExecutionRequestOutcome::Responded(response))
+        }
+        LocalExecutionRequestOutcome::Exhausted(outcome) => {
+            Ok(LocalExecutionRequestOutcome::Exhausted(outcome))
+        }
+        LocalExecutionRequestOutcome::NoPath => Ok(exhausted
+            .map(LocalExecutionRequestOutcome::Exhausted)
+            .unwrap_or(LocalExecutionRequestOutcome::NoPath)),
+    }
 }
 
 async fn maybe_execute_local_video_task_content_stream(
@@ -126,11 +163,11 @@ async fn maybe_execute_local_video_task_content_stream(
     trace_id: &str,
     decision: &GatewayControlDecision,
     plan_kind: &str,
-) -> Result<Option<Response<Body>>, GatewayError> {
+) -> Result<LocalExecutionRequestOutcome, GatewayError> {
     if plan_kind != OPENAI_VIDEO_CONTENT_PLAN_KIND
         || decision.route_family.as_deref() != Some("openai")
     {
-        return Ok(None);
+        return Ok(LocalExecutionRequestOutcome::NoPath);
     }
 
     let _ = state
@@ -155,22 +192,28 @@ async fn maybe_execute_local_video_task_content_stream(
         parts.uri.query(),
         trace_id,
     ) else {
-        return Ok(None);
+        return Ok(LocalExecutionRequestOutcome::NoPath);
     };
 
     match action {
         crate::video_tasks::LocalVideoTaskContentAction::Immediate {
             status_code,
             body_json,
-        } => Ok(Some(build_json_response(
-            trace_id,
-            decision,
-            status_code,
-            &body_json,
-        )?)),
+        } => Ok(LocalExecutionRequestOutcome::Responded(
+            build_json_response(trace_id, decision, status_code, &body_json)?,
+        )),
         crate::video_tasks::LocalVideoTaskContentAction::StreamPlan(plan) => {
-            execute_execution_runtime_stream(
-                state, *plan, trace_id, decision, plan_kind, None, None,
+            let plan = *plan;
+            execute_stream_plan_and_reports(
+                state,
+                trace_id,
+                decision,
+                plan_kind,
+                vec![LocalStreamPlanAndReport {
+                    plan,
+                    report_kind: None,
+                    report_context: None,
+                }],
             )
             .await
         }

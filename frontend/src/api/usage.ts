@@ -10,6 +10,7 @@ export interface UsageRecord {
   provider_name?: string
   model: string
   input_tokens: number
+  effective_input_tokens?: number
   output_tokens: number
   cache_creation_input_tokens?: number
   cache_read_input_tokens?: number
@@ -38,6 +39,10 @@ export interface UsageByModel {
   model: string
   request_count: number
   total_tokens: number
+  effective_input_tokens?: number
+  total_input_context?: number
+  output_tokens?: number
+  cache_creation_tokens?: number
   total_cost: number
   avg_response_time?: number
   cache_read_tokens?: number
@@ -58,6 +63,10 @@ export interface UsageByProvider {
   provider: string
   request_count: number
   total_tokens: number
+  effective_input_tokens?: number
+  total_input_context?: number
+  output_tokens?: number
+  cache_creation_tokens?: number
   total_cost: number
   actual_cost: number
   avg_response_time_ms: number
@@ -71,6 +80,10 @@ export interface UsageByApiFormat {
   api_format: string
   request_count: number
   total_tokens: number
+  effective_input_tokens?: number
+  total_input_context?: number
+  output_tokens?: number
+  cache_creation_tokens?: number
   total_cost: number
   actual_cost: number
   avg_response_time_ms: number
@@ -276,6 +289,7 @@ export const usageApi = {
       id: string
       status: 'pending' | 'streaming' | 'completed' | 'failed' | 'cancelled'
       input_tokens: number
+      effective_input_tokens?: number | null
       output_tokens: number
       cache_creation_input_tokens?: number | null
       cache_read_input_tokens?: number | null

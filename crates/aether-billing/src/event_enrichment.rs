@@ -73,6 +73,14 @@ pub async fn enrich_usage_event_with_billing(
         input_tokens: event.data.input_tokens.unwrap_or_default() as i64,
         output_tokens: event.data.output_tokens.unwrap_or_default() as i64,
         cache_creation_tokens: event.data.cache_creation_input_tokens.unwrap_or_default() as i64,
+        cache_creation_ephemeral_5m_tokens: event
+            .data
+            .cache_creation_ephemeral_5m_input_tokens
+            .unwrap_or_default() as i64,
+        cache_creation_ephemeral_1h_tokens: event
+            .data
+            .cache_creation_ephemeral_1h_input_tokens
+            .unwrap_or_default() as i64,
         cache_read_tokens: event.data.cache_read_input_tokens.unwrap_or_default() as i64,
         cache_ttl_minutes: pricing.provider_api_key_cache_ttl_minutes,
     };

@@ -16,7 +16,7 @@ use crate::ai_pipeline::planner::standard::{
     build_cross_format_openai_chat_upstream_url,
 };
 use crate::ai_pipeline::transport::auth::{
-    build_openai_passthrough_headers, ensure_upstream_auth_header,
+    build_claude_passthrough_headers, build_openai_passthrough_headers, ensure_upstream_auth_header,
 };
 use crate::ai_pipeline::transport::{
     apply_local_header_rules, resolve_transport_execution_timeouts,
@@ -182,13 +182,23 @@ pub(super) async fn build_cross_format_local_openai_chat_decision_payload_for_ca
         return None;
     };
 
-    let mut provider_request_headers = build_openai_passthrough_headers(
-        &parts.headers,
-        &auth_header,
-        &auth_value,
-        &BTreeMap::new(),
-        Some("application/json"),
-    );
+    let mut provider_request_headers = if provider_api_format.starts_with("claude:") {
+        build_claude_passthrough_headers(
+            &parts.headers,
+            &auth_header,
+            &auth_value,
+            &BTreeMap::new(),
+            Some("application/json"),
+        )
+    } else {
+        build_openai_passthrough_headers(
+            &parts.headers,
+            &auth_header,
+            &auth_value,
+            &BTreeMap::new(),
+            Some("application/json"),
+        )
+    };
     if !apply_local_header_rules(
         &mut provider_request_headers,
         transport.endpoint.header_rules.as_ref(),

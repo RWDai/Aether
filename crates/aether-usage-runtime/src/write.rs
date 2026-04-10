@@ -409,6 +409,8 @@ fn build_upsert_usage_record(
         output_tokens: data.output_tokens,
         total_tokens: data.total_tokens,
         cache_creation_input_tokens: data.cache_creation_input_tokens,
+        cache_creation_ephemeral_5m_input_tokens: data.cache_creation_ephemeral_5m_input_tokens,
+        cache_creation_ephemeral_1h_input_tokens: data.cache_creation_ephemeral_1h_input_tokens,
         cache_read_input_tokens: data.cache_read_input_tokens,
         cache_creation_cost_usd: data.cache_creation_cost_usd,
         cache_read_cost_usd: data.cache_read_cost_usd,
@@ -437,7 +439,10 @@ fn build_upsert_usage_record(
     })
 }
 
-fn build_base_usage_data(plan: &ExecutionPlan, report_context: Option<&Value>) -> UsageEventData {
+pub fn build_usage_event_data_seed(
+    plan: &ExecutionPlan,
+    report_context: Option<&Value>,
+) -> UsageEventData {
     let context = report_context.and_then(Value::as_object);
     let api_format = context_string(context, "client_api_format")
         .or_else(|| non_empty_string(Some(plan.client_api_format.clone())));
@@ -497,6 +502,10 @@ fn build_base_usage_data(plan: &ExecutionPlan, report_context: Option<&Value>) -
     }
 }
 
+fn build_base_usage_data(plan: &ExecutionPlan, report_context: Option<&Value>) -> UsageEventData {
+    build_usage_event_data_seed(plan, report_context)
+}
+
 fn merge_usage_data(base: UsageEventData, override_data: UsageEventData) -> UsageEventData {
     UsageEventData {
         user_id: override_data.user_id.or(base.user_id),
@@ -544,6 +553,12 @@ fn merge_usage_data(base: UsageEventData, override_data: UsageEventData) -> Usag
         cache_creation_input_tokens: override_data
             .cache_creation_input_tokens
             .or(base.cache_creation_input_tokens),
+        cache_creation_ephemeral_5m_input_tokens: override_data
+            .cache_creation_ephemeral_5m_input_tokens
+            .or(base.cache_creation_ephemeral_5m_input_tokens),
+        cache_creation_ephemeral_1h_input_tokens: override_data
+            .cache_creation_ephemeral_1h_input_tokens
+            .or(base.cache_creation_ephemeral_1h_input_tokens),
         cache_read_input_tokens: override_data
             .cache_read_input_tokens
             .or(base.cache_read_input_tokens),
@@ -667,6 +682,14 @@ fn apply_standardized_usage(
     }
     if usage.cache_creation_tokens > 0 {
         data.cache_creation_input_tokens = Some(usage.cache_creation_tokens as u64);
+    }
+    if usage.cache_creation_ephemeral_5m_tokens > 0 {
+        data.cache_creation_ephemeral_5m_input_tokens =
+            Some(usage.cache_creation_ephemeral_5m_tokens as u64);
+    }
+    if usage.cache_creation_ephemeral_1h_tokens > 0 {
+        data.cache_creation_ephemeral_1h_input_tokens =
+            Some(usage.cache_creation_ephemeral_1h_tokens as u64);
     }
     if usage.cache_read_tokens > 0 {
         data.cache_read_input_tokens = Some(usage.cache_read_tokens as u64);
@@ -1167,7 +1190,7 @@ mod tests {
             "event: response.output_text.delta\n",
             "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Hello from CLI stream\"}\n\n",
             "event: response.completed\n",
-            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_123\",\"object\":\"response\",\"model\":\"gpt-5.4\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"Hello from CLI stream\"}]}],\"usage\":{\"input_tokens\":3,\"output_tokens\":5,\"total_tokens\":8}}}\n\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_123\",\"object\":\"response\",\"model\":\"gpt-5.4\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"Hello from CLI stream\"}]}],\"usage\":{\"input_tokens\":3,\"input_tokens_details\":{\"cached_tokens\":2,\"cached_creation_tokens\":1},\"output_tokens\":5,\"output_tokens_details\":{\"reasoning_tokens\":1},\"total_tokens\":8}}}\n\n",
             "data: [DONE]\n",
         );
         let payload = GatewayStreamReportRequest {
@@ -1191,6 +1214,8 @@ mod tests {
         assert_eq!(event.data.input_tokens, Some(3));
         assert_eq!(event.data.output_tokens, Some(5));
         assert_eq!(event.data.total_tokens, Some(8));
+        assert_eq!(event.data.cache_creation_input_tokens, Some(1));
+        assert_eq!(event.data.cache_read_input_tokens, Some(2));
         assert_eq!(
             event.data.response_body,
             Some(json!({
@@ -1229,7 +1254,14 @@ mod tests {
                             ],
                             "usage": {
                                 "input_tokens": 3,
+                                "input_tokens_details": {
+                                    "cached_tokens": 2,
+                                    "cached_creation_tokens": 1
+                                },
                                 "output_tokens": 5,
+                                "output_tokens_details": {
+                                    "reasoning_tokens": 1
+                                },
                                 "total_tokens": 8
                             }
                         }

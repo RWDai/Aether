@@ -1,12 +1,10 @@
-use axum::body::Body;
-use axum::http::Response;
-
 use aether_data_contracts::repository::candidates::RequestCandidateStatus;
 use aether_scheduler_core::SchedulerRequestCandidateStatusUpdate;
 
 use crate::ai_pipeline_api::{LocalStreamPlanAndReport, LocalSyncPlanAndReport};
 use crate::control::GatewayControlDecision;
 use crate::execution_runtime::{execute_execution_runtime_stream, execute_execution_runtime_sync};
+use crate::executor::{build_local_execution_exhaustion, LocalExecutionRequestOutcome};
 use crate::request_candidate_runtime::record_local_request_candidate_status;
 use crate::{AppState, GatewayError};
 
@@ -53,12 +51,17 @@ pub(crate) async fn execute_sync_plan_and_reports<T>(
     decision: &GatewayControlDecision,
     plan_kind: &str,
     plan_and_reports: Vec<T>,
-) -> Result<Option<Response<Body>>, GatewayError>
+) -> Result<LocalExecutionRequestOutcome, GatewayError>
 where
     T: LocalPlanAndReport,
 {
     let mut remaining = plan_and_reports.into_iter();
+    let mut last_attempted = None;
     while let Some(plan_and_report) = remaining.next() {
+        last_attempted = Some((
+            plan_and_report.plan().clone(),
+            plan_and_report.report_context(),
+        ));
         if let Some(response) = execute_execution_runtime_sync(
             state,
             parts.uri.path(),
@@ -72,11 +75,16 @@ where
         .await?
         {
             mark_unused_local_candidates(state, remaining.collect()).await;
-            return Ok(Some(response));
+            return Ok(LocalExecutionRequestOutcome::responded(response));
         }
     }
 
-    Ok(None)
+    let Some((plan, report_context)) = last_attempted else {
+        return Ok(LocalExecutionRequestOutcome::NoPath);
+    };
+    Ok(LocalExecutionRequestOutcome::Exhausted(
+        build_local_execution_exhaustion(state, &plan, report_context.as_ref()).await,
+    ))
 }
 
 pub(crate) async fn execute_stream_plan_and_reports<T>(
@@ -85,12 +93,17 @@ pub(crate) async fn execute_stream_plan_and_reports<T>(
     decision: &GatewayControlDecision,
     plan_kind: &str,
     plan_and_reports: Vec<T>,
-) -> Result<Option<Response<Body>>, GatewayError>
+) -> Result<LocalExecutionRequestOutcome, GatewayError>
 where
     T: LocalPlanAndReport,
 {
     let mut remaining = plan_and_reports.into_iter();
+    let mut last_attempted = None;
     while let Some(plan_and_report) = remaining.next() {
+        last_attempted = Some((
+            plan_and_report.plan().clone(),
+            plan_and_report.report_context(),
+        ));
         if let Some(response) = execute_execution_runtime_stream(
             state,
             plan_and_report.plan().clone(),
@@ -103,11 +116,16 @@ where
         .await?
         {
             mark_unused_local_candidates(state, remaining.collect()).await;
-            return Ok(Some(response));
+            return Ok(LocalExecutionRequestOutcome::responded(response));
         }
     }
 
-    Ok(None)
+    let Some((plan, report_context)) = last_attempted else {
+        return Ok(LocalExecutionRequestOutcome::NoPath);
+    };
+    Ok(LocalExecutionRequestOutcome::Exhausted(
+        build_local_execution_exhaustion(state, &plan, report_context.as_ref()).await,
+    ))
 }
 
 pub(crate) async fn mark_unused_local_candidates<T>(state: &AppState, remaining: Vec<T>)

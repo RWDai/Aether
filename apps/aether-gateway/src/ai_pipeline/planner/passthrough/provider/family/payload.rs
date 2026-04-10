@@ -7,7 +7,9 @@ use crate::ai_pipeline::transport::antigravity::{
     classify_local_antigravity_request_support, AntigravityEnvelopeRequestType,
     AntigravityRequestEnvelopeSupport, AntigravityRequestSideSupport,
 };
-use crate::ai_pipeline::transport::auth::build_openai_passthrough_headers;
+use crate::ai_pipeline::transport::auth::{
+    build_complete_passthrough_headers, build_complete_passthrough_headers_with_auth,
+};
 use crate::ai_pipeline::transport::claude_code::build_claude_code_passthrough_headers;
 use crate::ai_pipeline::transport::kiro::{
     build_kiro_provider_headers, KiroProviderHeadersInput, KIRO_ENVELOPE_NAME,
@@ -198,13 +200,13 @@ pub(crate) async fn maybe_build_local_same_format_provider_decision_payload_for_
                 transport.key.fingerprint.as_ref(),
             )
         } else if is_vertex {
-            crate::ai_pipeline::transport::build_passthrough_headers(
+            build_complete_passthrough_headers(
                 &parts.headers,
                 &extra_headers,
                 Some("application/json"),
             )
         } else {
-            build_openai_passthrough_headers(
+            build_complete_passthrough_headers_with_auth(
                 &parts.headers,
                 auth_header.as_deref().unwrap_or_default(),
                 auth_value.as_deref().unwrap_or_default(),

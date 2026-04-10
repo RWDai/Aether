@@ -5,6 +5,8 @@ pub struct StandardizedUsage {
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub cache_creation_tokens: i64,
+    pub cache_creation_ephemeral_5m_tokens: i64,
+    pub cache_creation_ephemeral_1h_tokens: i64,
     pub cache_read_tokens: i64,
     pub reasoning_tokens: i64,
     pub cache_storage_token_hours: f64,
@@ -25,6 +27,12 @@ impl StandardizedUsage {
             "input_tokens" => Some(serde_json::json!(self.input_tokens)),
             "output_tokens" => Some(serde_json::json!(self.output_tokens)),
             "cache_creation_tokens" => Some(serde_json::json!(self.cache_creation_tokens)),
+            "cache_creation_ephemeral_5m_tokens" => {
+                Some(serde_json::json!(self.cache_creation_ephemeral_5m_tokens))
+            }
+            "cache_creation_ephemeral_1h_tokens" => {
+                Some(serde_json::json!(self.cache_creation_ephemeral_1h_tokens))
+            }
             "cache_read_tokens" => Some(serde_json::json!(self.cache_read_tokens)),
             "reasoning_tokens" => Some(serde_json::json!(self.reasoning_tokens)),
             "cache_storage_token_hours" => Some(serde_json::json!(self.cache_storage_token_hours)),
@@ -40,6 +48,12 @@ impl StandardizedUsage {
             "input_tokens" => self.input_tokens = as_i64(&value, 0),
             "output_tokens" => self.output_tokens = as_i64(&value, 0),
             "cache_creation_tokens" => self.cache_creation_tokens = as_i64(&value, 0),
+            "cache_creation_ephemeral_5m_tokens" => {
+                self.cache_creation_ephemeral_5m_tokens = as_i64(&value, 0)
+            }
+            "cache_creation_ephemeral_1h_tokens" => {
+                self.cache_creation_ephemeral_1h_tokens = as_i64(&value, 0)
+            }
             "cache_read_tokens" => self.cache_read_tokens = as_i64(&value, 0),
             "reasoning_tokens" => self.reasoning_tokens = as_i64(&value, 0),
             "cache_storage_token_hours" => self.cache_storage_token_hours = as_f64(&value, 0.0),
@@ -54,6 +68,18 @@ impl StandardizedUsage {
                 self.dimensions.insert(field_name.to_string(), value);
             }
         }
+    }
+
+    pub fn normalize_cache_creation_breakdown(mut self) -> Self {
+        if self.cache_creation_tokens <= 0 {
+            let derived = self
+                .cache_creation_ephemeral_5m_tokens
+                .saturating_add(self.cache_creation_ephemeral_1h_tokens);
+            if derived > 0 {
+                self.cache_creation_tokens = derived;
+            }
+        }
+        self
     }
 }
 

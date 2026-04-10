@@ -184,6 +184,212 @@ async fn gateway_handles_local_openai_chat_sync_report_with_local_reporting_when
 }
 
 #[tokio::test]
+async fn gateway_records_failed_usage_when_all_local_openai_chat_candidates_exhaust_after_retryable_sync_failure(
+) {
+    let usage_repository = Arc::new(InMemoryUsageReadRepository::default());
+    let request_candidate_repository = Arc::new(InMemoryRequestCandidateRepository::default());
+    let report_hits = Arc::new(Mutex::new(0usize));
+    let report_hits_clone = Arc::clone(&report_hits);
+    let decision_hits = Arc::new(Mutex::new(0usize));
+    let decision_hits_clone = Arc::clone(&decision_hits);
+    let plan_hits = Arc::new(Mutex::new(0usize));
+    let plan_hits_clone = Arc::clone(&plan_hits);
+    let public_hits = Arc::new(Mutex::new(0usize));
+    let public_hits_clone = Arc::clone(&public_hits);
+
+    let upstream = Router::new()
+        .route(
+            "/api/internal/gateway/decision-sync",
+            any(move |_request: Request| {
+                let decision_hits_inner = Arc::clone(&decision_hits_clone);
+                async move {
+                    *decision_hits_inner.lock().expect("mutex should lock") += 1;
+                    Json(json!({"action": "proxy_public"}))
+                }
+            }),
+        )
+        .route(
+            "/api/internal/gateway/plan-sync",
+            any(move |_request: Request| {
+                let plan_hits_inner = Arc::clone(&plan_hits_clone);
+                async move {
+                    *plan_hits_inner.lock().expect("mutex should lock") += 1;
+                    Json(json!({"action": "proxy_public"}))
+                }
+            }),
+        )
+        .route(
+            "/api/internal/gateway/report-sync",
+            any(move |_request: Request| {
+                let report_hits_inner = Arc::clone(&report_hits_clone);
+                async move {
+                    *report_hits_inner.lock().expect("mutex should lock") += 1;
+                    Json(json!({"ok": true}))
+                }
+            }),
+        )
+        .route(
+            "/v1/chat/completions",
+            any(move |_request: Request| {
+                let public_hits_inner = Arc::clone(&public_hits_clone);
+                async move {
+                    *public_hits_inner.lock().expect("mutex should lock") += 1;
+                    (StatusCode::IM_A_TEAPOT, Body::from("public-route-hit"))
+                }
+            }),
+        );
+
+    let execution_runtime = Router::new().route(
+        "/v1/execute/sync",
+        any(|_request: Request| async move {
+            Json(json!({
+                "request_id": "trace-openai-chat-local-report-sync-failure-123",
+                "status_code": 503,
+                "headers": {
+                    "content-type": "application/json"
+                },
+                "body": {
+                    "json_body": {
+                        "error": {
+                            "message": "primary unavailable"
+                        }
+                    }
+                },
+                "telemetry": {
+                    "elapsed_ms": 25
+                }
+            }))
+        }),
+    );
+
+    let auth_repository = Arc::new(InMemoryAuthApiKeySnapshotRepository::seed(vec![(
+        Some(hash_api_key("sk-client-openai-local-report-sync-failure")),
+        sample_local_openai_auth_snapshot(
+            "api-key-openai-usage-local-failure-1",
+            "user-openai-usage-local-failure-1",
+        ),
+    )]));
+    let candidate_selection_repository =
+        Arc::new(InMemoryMinimalCandidateSelectionReadRepository::seed(vec![
+            sample_local_openai_candidate_row(),
+        ]));
+    let provider_catalog_repository = Arc::new(InMemoryProviderCatalogReadRepository::seed(
+        vec![sample_local_openai_provider()],
+        vec![sample_local_openai_endpoint()],
+        vec![sample_local_openai_key()],
+    ));
+
+    let (upstream_url, upstream_handle) = start_server(upstream).await;
+    let (execution_runtime_url, execution_runtime_handle) = start_server(execution_runtime).await;
+    let gateway_state =
+        build_state_with_execution_runtime_override(execution_runtime_url)
+    .with_data_state_for_tests(
+        GatewayDataState::with_auth_candidate_selection_provider_catalog_request_candidates_and_usage_for_tests(
+            auth_repository,
+            candidate_selection_repository,
+            provider_catalog_repository,
+            Arc::clone(&request_candidate_repository),
+            Arc::clone(&usage_repository),
+            DEVELOPMENT_ENCRYPTION_KEY,
+        ),
+    )
+    .with_usage_runtime_for_tests(UsageRuntimeConfig {
+        enabled: true,
+        ..UsageRuntimeConfig::default()
+    });
+    let gateway = build_router_with_state(gateway_state);
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+
+    let response = reqwest::Client::new()
+        .post(format!("{gateway_url}/v1/chat/completions"))
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .header(
+            http::header::AUTHORIZATION,
+            "Bearer sk-client-openai-local-report-sync-failure",
+        )
+        .header(
+            TRACE_ID_HEADER,
+            "trace-openai-chat-local-report-sync-failure-123",
+        )
+        .body("{\"model\":\"gpt-5\",\"messages\":[]}")
+        .send()
+        .await
+        .expect("request should complete");
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body_json: serde_json::Value = response.json().await.expect("body should parse");
+    assert_eq!(body_json["error"]["type"], "http_error");
+
+    let mut stored_usage = None;
+    for _ in 0..50 {
+        stored_usage = usage_repository
+            .find_by_request_id("trace-openai-chat-local-report-sync-failure-123")
+            .await
+            .expect("usage lookup should succeed");
+        if stored_usage.is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let stored_usage = stored_usage.expect("failed usage should be recorded");
+    assert_eq!(stored_usage.status, "failed");
+    assert_eq!(stored_usage.billing_status, "void");
+    assert_eq!(stored_usage.status_code, Some(503));
+    assert_eq!(stored_usage.error_category.as_deref(), Some("server_error"));
+    assert_eq!(
+        stored_usage.user_id.as_deref(),
+        Some("user-openai-usage-local-failure-1")
+    );
+    assert_eq!(stored_usage.provider_name, "openai");
+    assert_eq!(stored_usage.model, "gpt-5");
+    assert_eq!(stored_usage.api_format.as_deref(), Some("openai:chat"));
+    assert_eq!(
+        stored_usage
+            .request_metadata
+            .as_ref()
+            .and_then(|value| value.get("trace_id"))
+            .and_then(|value| value.as_str()),
+        Some("trace-openai-chat-local-report-sync-failure-123")
+    );
+    assert_eq!(
+        stored_usage
+            .response_body
+            .as_ref()
+            .and_then(|value| value.get("error"))
+            .and_then(|value| value.get("type"))
+            .and_then(|value| value.as_str()),
+        Some("upstream_error")
+    );
+    assert_eq!(
+        stored_usage
+            .client_response_body
+            .as_ref()
+            .and_then(|value| value.get("error"))
+            .and_then(|value| value.get("type"))
+            .and_then(|value| value.as_str()),
+        Some("http_error")
+    );
+
+    let stored_candidates = request_candidate_repository
+        .list_by_request_id("trace-openai-chat-local-report-sync-failure-123")
+        .await
+        .expect("request candidate trace should read");
+    assert_eq!(stored_candidates.len(), 1);
+    assert_eq!(stored_candidates[0].status, RequestCandidateStatus::Failed);
+    assert_eq!(stored_candidates[0].status_code, Some(503));
+
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert_eq!(*report_hits.lock().expect("mutex should lock"), 0);
+    assert_eq!(*decision_hits.lock().expect("mutex should lock"), 0);
+    assert_eq!(*plan_hits.lock().expect("mutex should lock"), 0);
+    assert_eq!(*public_hits.lock().expect("mutex should lock"), 0);
+
+    gateway_handle.abort();
+    execution_runtime_handle.abort();
+    upstream_handle.abort();
+}
+
+#[tokio::test]
 async fn gateway_handles_local_openai_chat_stream_report_with_local_reporting_when_usage_runtime_enabled(
 ) {
     let usage_repository = Arc::new(InMemoryUsageReadRepository::default());

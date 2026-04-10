@@ -6,6 +6,7 @@ use super::super::{
 };
 use crate::ai_pipeline::provider_adaptation_requires_eventstream_accept;
 use crate::ai_pipeline::transport::auth::{
+    build_claude_passthrough_headers, build_complete_passthrough_headers_with_auth,
     build_openai_passthrough_headers, ensure_upstream_auth_header,
 };
 use crate::ai_pipeline::transport::url::{build_openai_chat_url, build_openai_cli_url};
@@ -132,13 +133,31 @@ pub(crate) fn build_openai_chat_stream_plan_from_decision(
     };
 
     let mut provider_request_headers = if payload.provider_request_headers.is_empty() {
-        build_openai_passthrough_headers(
-            &parts.headers,
-            &auth_header,
-            &auth_value,
-            &payload.extra_headers,
-            payload.content_type.as_deref(),
-        )
+        if provider_api_format == client_api_format {
+            build_complete_passthrough_headers_with_auth(
+                &parts.headers,
+                &auth_header,
+                &auth_value,
+                &payload.extra_headers,
+                payload.content_type.as_deref(),
+            )
+        } else if provider_api_format.starts_with("claude:") {
+            build_claude_passthrough_headers(
+                &parts.headers,
+                &auth_header,
+                &auth_value,
+                &payload.extra_headers,
+                payload.content_type.as_deref(),
+            )
+        } else {
+            build_openai_passthrough_headers(
+                &parts.headers,
+                &auth_header,
+                &auth_value,
+                &payload.extra_headers,
+                payload.content_type.as_deref(),
+            )
+        }
     } else {
         payload.provider_request_headers.clone()
     };
@@ -281,6 +300,11 @@ pub(crate) fn build_openai_cli_stream_plan_from_decision(
     } else {
         provider_request_headers.insert("accept".to_string(), "text/event-stream".to_string());
     }
+    let report_context = augment_sync_report_context(
+        payload.report_context,
+        &provider_request_headers,
+        &provider_request_body_value,
+    )?;
     let plan = ExecutionPlan {
         request_id,
         candidate_id: payload.candidate_id.clone(),
@@ -306,15 +330,276 @@ pub(crate) fn build_openai_cli_stream_plan_from_decision(
         timeouts: payload.timeouts.clone(),
     };
 
-    let report_context = augment_sync_report_context(
-        payload.report_context,
-        &plan.headers,
-        &provider_request_body_value,
-    )?;
-
     Ok(Some(LocalStreamPlanAndReport {
         plan,
         report_kind: payload.report_kind,
         report_context,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use serde_json::{json, Value};
+
+    use super::{
+        build_openai_chat_stream_plan_from_decision, build_openai_cli_stream_plan_from_decision,
+    };
+    use crate::GatewayControlSyncDecisionResponse;
+
+    fn object_keys(value: &Value) -> Vec<&str> {
+        value
+            .as_object()
+            .expect("value should be an object")
+            .keys()
+            .map(String::as_str)
+            .collect()
+    }
+
+    fn sample_cli_payload() -> GatewayControlSyncDecisionResponse {
+        GatewayControlSyncDecisionResponse {
+            action: "stream".to_string(),
+            decision_kind: Some("openai_cli_stream".to_string()),
+            execution_strategy: None,
+            conversion_mode: None,
+            request_id: Some("req_123".to_string()),
+            candidate_id: Some("cand_123".to_string()),
+            provider_name: Some("Codex".to_string()),
+            provider_id: Some("prov_123".to_string()),
+            endpoint_id: Some("ep_123".to_string()),
+            key_id: Some("key_123".to_string()),
+            upstream_base_url: Some("https://example.com".to_string()),
+            upstream_url: Some("https://example.com/v1/responses".to_string()),
+            provider_request_method: None,
+            auth_header: Some("authorization".to_string()),
+            auth_value: Some("Bearer test".to_string()),
+            provider_api_format: Some("openai:cli".to_string()),
+            client_api_format: Some("openai:cli".to_string()),
+            provider_contract: Some("openai:cli".to_string()),
+            client_contract: Some("openai:cli".to_string()),
+            model_name: Some("gpt-5.4".to_string()),
+            mapped_model: Some("gpt-5.4".to_string()),
+            prompt_cache_key: Some("cache-key".to_string()),
+            extra_headers: BTreeMap::new(),
+            provider_request_headers: BTreeMap::from([(
+                "content-type".to_string(),
+                "application/json".to_string(),
+            )]),
+            provider_request_body: Some(json!({
+                "text": {"verbosity": "low"},
+                "input": [],
+                "model": "gpt-5.4",
+                "store": false,
+                "tools": [],
+                "stream": true,
+                "include": ["reasoning.encrypted_content"],
+                "reasoning": {"effort": "high"},
+                "tool_choice": "auto",
+                "instructions": "You are Codex.",
+                "prompt_cache_key": "cache-key"
+            })),
+            provider_request_body_base64: None,
+            content_type: Some("application/json".to_string()),
+            proxy: None,
+            tls_profile: None,
+            timeouts: None,
+            upstream_is_stream: true,
+            report_kind: Some("openai_cli_stream_success".to_string()),
+            report_context: Some(json!({})),
+            auth_context: None,
+        }
+    }
+
+    #[test]
+    fn build_openai_cli_stream_plan_preserves_provider_request_body_order_in_plan_and_report() {
+        let parts = http::Request::builder()
+            .uri("http://localhost/v1/responses")
+            .body(())
+            .expect("request should build")
+            .into_parts()
+            .0;
+        let payload = sample_cli_payload();
+
+        let built = build_openai_cli_stream_plan_from_decision(&parts, &json!({}), payload, false)
+            .expect("plan build should succeed")
+            .expect("plan should be produced");
+        let plan_body = built
+            .plan
+            .body
+            .json_body
+            .as_ref()
+            .expect("plan json body should exist");
+        assert_eq!(
+            object_keys(plan_body),
+            vec![
+                "text",
+                "input",
+                "model",
+                "store",
+                "tools",
+                "stream",
+                "include",
+                "reasoning",
+                "tool_choice",
+                "instructions",
+                "prompt_cache_key",
+            ]
+        );
+        let report_context = built
+            .report_context
+            .as_ref()
+            .and_then(|value| value.get("provider_request_body"))
+            .expect("report context should contain provider request body");
+        assert_eq!(object_keys(report_context), object_keys(plan_body));
+    }
+
+    #[test]
+    fn build_openai_chat_stream_plan_fallback_preserves_complete_same_format_headers() {
+        let parts = http::Request::builder()
+            .uri("http://localhost/v1/chat/completions")
+            .header(http::header::AUTHORIZATION, "Bearer client-token")
+            .header("x-stainless-runtime-version", "v24.0.0")
+            .header("x-app", "codex")
+            .body(())
+            .expect("request should build")
+            .into_parts()
+            .0;
+        let payload = GatewayControlSyncDecisionResponse {
+            action: "stream".to_string(),
+            decision_kind: Some("openai_chat_stream".to_string()),
+            execution_strategy: None,
+            conversion_mode: None,
+            request_id: Some("req_stream_456".to_string()),
+            candidate_id: Some("cand_stream_456".to_string()),
+            provider_name: Some("OpenAI".to_string()),
+            provider_id: Some("prov_stream_456".to_string()),
+            endpoint_id: Some("ep_stream_456".to_string()),
+            key_id: Some("key_stream_456".to_string()),
+            upstream_base_url: Some("https://example.com".to_string()),
+            upstream_url: Some("https://example.com/v1/chat/completions".to_string()),
+            provider_request_method: None,
+            auth_header: Some("authorization".to_string()),
+            auth_value: Some("Bearer upstream-token".to_string()),
+            provider_api_format: Some("openai:chat".to_string()),
+            client_api_format: Some("openai:chat".to_string()),
+            provider_contract: Some("openai:chat".to_string()),
+            client_contract: Some("openai:chat".to_string()),
+            model_name: Some("gpt-5.4".to_string()),
+            mapped_model: Some("gpt-5.4".to_string()),
+            prompt_cache_key: None,
+            extra_headers: BTreeMap::new(),
+            provider_request_headers: BTreeMap::new(),
+            provider_request_body: Some(json!({"model":"gpt-5.4","messages":[],"stream":true})),
+            provider_request_body_base64: None,
+            content_type: Some("application/json".to_string()),
+            proxy: None,
+            tls_profile: None,
+            timeouts: None,
+            upstream_is_stream: true,
+            report_kind: Some("openai_chat_stream_success".to_string()),
+            report_context: Some(json!({})),
+            auth_context: None,
+        };
+
+        let built = build_openai_chat_stream_plan_from_decision(&parts, &json!({}), payload)
+            .expect("plan build should succeed")
+            .expect("plan should be produced");
+
+        assert_eq!(
+            built.plan.headers.get("authorization").map(String::as_str),
+            Some("Bearer upstream-token")
+        );
+        assert_eq!(
+            built
+                .plan
+                .headers
+                .get("x-stainless-runtime-version")
+                .map(String::as_str),
+            Some("v24.0.0")
+        );
+        assert_eq!(
+            built.plan.headers.get("x-app").map(String::as_str),
+            Some("codex")
+        );
+        assert_eq!(
+            built.plan.headers.get("accept").map(String::as_str),
+            Some("text/event-stream")
+        );
+    }
+
+    #[test]
+    fn build_openai_chat_stream_plan_fallback_restores_claude_headers_for_cross_format() {
+        let parts = http::Request::builder()
+            .uri("http://localhost/v1/chat/completions")
+            .header("anthropic-beta", "prompt-caching-2024-07-31")
+            .header("x-stainless-runtime-version", "v24.0.0")
+            .body(())
+            .expect("request should build")
+            .into_parts()
+            .0;
+        let payload = GatewayControlSyncDecisionResponse {
+            action: "stream".to_string(),
+            decision_kind: Some("openai_chat_stream".to_string()),
+            execution_strategy: None,
+            conversion_mode: Some("format_conversion".to_string()),
+            request_id: Some("req_stream_789".to_string()),
+            candidate_id: Some("cand_stream_789".to_string()),
+            provider_name: Some("Claude".to_string()),
+            provider_id: Some("prov_stream_789".to_string()),
+            endpoint_id: Some("ep_stream_789".to_string()),
+            key_id: Some("key_stream_789".to_string()),
+            upstream_base_url: Some("https://example.com".to_string()),
+            upstream_url: Some("https://example.com/v1/messages".to_string()),
+            provider_request_method: None,
+            auth_header: Some("x-api-key".to_string()),
+            auth_value: Some("sk-upstream-claude".to_string()),
+            provider_api_format: Some("claude:chat".to_string()),
+            client_api_format: Some("openai:chat".to_string()),
+            provider_contract: Some("claude:chat".to_string()),
+            client_contract: Some("openai:chat".to_string()),
+            model_name: Some("claude-sonnet-4-5".to_string()),
+            mapped_model: Some("claude-sonnet-4-5".to_string()),
+            prompt_cache_key: None,
+            extra_headers: BTreeMap::new(),
+            provider_request_headers: BTreeMap::new(),
+            provider_request_body: Some(
+                json!({"model":"claude-sonnet-4-5","messages":[],"stream":true}),
+            ),
+            provider_request_body_base64: None,
+            content_type: Some("application/json".to_string()),
+            proxy: None,
+            tls_profile: None,
+            timeouts: None,
+            upstream_is_stream: true,
+            report_kind: Some("openai_chat_stream_success".to_string()),
+            report_context: Some(json!({})),
+            auth_context: None,
+        };
+
+        let built = build_openai_chat_stream_plan_from_decision(&parts, &json!({}), payload)
+            .expect("plan build should succeed")
+            .expect("plan should be produced");
+
+        assert_eq!(
+            built.plan.headers.get("x-api-key").map(String::as_str),
+            Some("sk-upstream-claude")
+        );
+        assert_eq!(
+            built.plan.headers.get("anthropic-beta").map(String::as_str),
+            Some("prompt-caching-2024-07-31")
+        );
+        assert_eq!(
+            built
+                .plan
+                .headers
+                .get("anthropic-version")
+                .map(String::as_str),
+            Some("2023-06-01")
+        );
+        assert_eq!(
+            built.plan.headers.get("accept").map(String::as_str),
+            Some("text/event-stream")
+        );
+    }
 }

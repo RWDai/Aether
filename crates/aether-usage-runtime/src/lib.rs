@@ -41,5 +41,6 @@ pub use write::{
     build_pending_usage_record, build_stream_terminal_usage_event,
     build_stream_terminal_usage_outcome, build_streaming_usage_record,
     build_sync_terminal_usage_event, build_sync_terminal_usage_outcome,
-    build_terminal_usage_event_from_outcome, TerminalUsageOutcome, UsageTerminalState,
+    build_terminal_usage_event_from_outcome, build_usage_event_data_seed, TerminalUsageOutcome,
+    UsageTerminalState,
 };

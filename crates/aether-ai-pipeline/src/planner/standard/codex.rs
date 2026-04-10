@@ -184,6 +184,7 @@ pub fn apply_codex_openai_cli_special_headers(
     if let Some(account_id) = extract_codex_account_id(decrypted_auth_config_raw) {
         provider_request_headers.insert("chatgpt-account-id".to_string(), account_id);
     }
+
     if !provider_request_headers
         .get("x-client-request-id")
         .map(|value| !value.trim().is_empty())
@@ -200,6 +201,7 @@ pub fn apply_codex_openai_cli_special_headers(
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty());
+
     let Some(short_id) = prompt_cache_key.and_then(build_short_codex_header_id) else {
         return;
     };
@@ -213,6 +215,7 @@ pub fn apply_codex_openai_cli_special_headers(
         .eq_ignore_ascii_case("openai:compact")
         && !header_map_has_non_empty_value(original_headers, "conversation_id")
     {
-        provider_request_headers.insert("conversation_id".to_string(), short_id);
+        let session_id = provider_request_headers.get("session_id").unwrap();
+        provider_request_headers.insert("conversation_id".to_string(), session_id.clone());
     }
 }

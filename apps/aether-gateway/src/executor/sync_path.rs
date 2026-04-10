@@ -5,23 +5,22 @@ use std::collections::BTreeMap;
 use crate::ai_pipeline_api::{
     is_matching_stream_request, resolve_execution_runtime_stream_plan_kind,
     resolve_execution_runtime_sync_plan_kind, supports_sync_scheduler_decision_kind,
-    GEMINI_VIDEO_CANCEL_SYNC_PLAN_KIND, OPENAI_VIDEO_CANCEL_SYNC_PLAN_KIND,
+    LocalSyncPlanAndReport, GEMINI_VIDEO_CANCEL_SYNC_PLAN_KIND, OPENAI_VIDEO_CANCEL_SYNC_PLAN_KIND,
     OPENAI_VIDEO_DELETE_SYNC_PLAN_KIND, OPENAI_VIDEO_REMIX_SYNC_PLAN_KIND,
 };
 use crate::api::response::build_client_response_from_parts;
 use crate::control::resolve_execution_runtime_auth_context;
 use crate::control::GatewayControlDecision;
-use crate::execution_runtime::execute_execution_runtime_sync;
 use crate::{AppState, GatewayError, GatewayFallbackReason};
 
 use super::{
-    build_direct_plan_bypass_cache_key, maybe_execute_sync_via_local_decision,
-    maybe_execute_sync_via_local_gemini_files_decision,
+    build_direct_plan_bypass_cache_key, execute_sync_plan_and_reports,
+    maybe_execute_sync_via_local_decision, maybe_execute_sync_via_local_gemini_files_decision,
     maybe_execute_sync_via_local_openai_cli_decision,
     maybe_execute_sync_via_local_same_format_provider_decision,
     maybe_execute_sync_via_local_standard_decision, maybe_execute_sync_via_local_video_decision,
     maybe_execute_sync_via_plan_fallback, maybe_execute_sync_via_remote_decision,
-    parse_local_request_body, should_skip_direct_plan,
+    parse_local_request_body, should_skip_direct_plan, LocalExecutionRequestOutcome,
 };
 
 pub(crate) async fn maybe_execute_via_sync_decision_path(
@@ -30,83 +29,109 @@ pub(crate) async fn maybe_execute_via_sync_decision_path(
     body_bytes: &Bytes,
     trace_id: &str,
     decision: &GatewayControlDecision,
-) -> Result<Option<Response<Body>>, GatewayError> {
-    if let Some(response) =
+) -> Result<LocalExecutionRequestOutcome, GatewayError> {
+    if let LocalExecutionRequestOutcome::Responded(response) =
         maybe_build_local_video_task_read_response(state, parts, trace_id, decision).await?
     {
-        return Ok(Some(response));
+        return Ok(LocalExecutionRequestOutcome::Responded(response));
     }
 
     let Some(plan_kind) = resolve_execution_runtime_sync_plan_kind(parts, decision) else {
-        return Ok(None);
+        return Ok(LocalExecutionRequestOutcome::NoPath);
     };
 
     let Some((body_json, body_base64)) = parse_local_request_body(parts, body_bytes) else {
-        return Ok(None);
+        return Ok(LocalExecutionRequestOutcome::NoPath);
     };
 
     if let Some(stream_plan_kind) = resolve_execution_runtime_stream_plan_kind(parts, decision) {
         if is_matching_stream_request(stream_plan_kind, parts, &body_json) {
-            return Ok(None);
+            return Ok(LocalExecutionRequestOutcome::NoPath);
         }
     }
 
     let bypass_cache_key =
         build_direct_plan_bypass_cache_key(plan_kind, parts, body_bytes, decision);
     if should_skip_direct_plan(state, &bypass_cache_key) {
-        return Ok(None);
+        return Ok(LocalExecutionRequestOutcome::NoPath);
     }
 
-    if let Some(response) = maybe_execute_local_video_task_follow_up_sync(
+    let mut exhausted = None;
+
+    match maybe_execute_local_video_task_follow_up_sync(
         state, parts, &body_json, trace_id, decision, plan_kind,
     )
     .await?
     {
-        return Ok(Some(response));
+        LocalExecutionRequestOutcome::Responded(response) => {
+            return Ok(LocalExecutionRequestOutcome::Responded(response));
+        }
+        LocalExecutionRequestOutcome::Exhausted(outcome) => exhausted = Some(outcome),
+        LocalExecutionRequestOutcome::NoPath => {}
     }
 
     if supports_sync_scheduler_decision_kind(plan_kind) {
-        if let Some(response) = maybe_execute_sync_via_local_video_decision(
+        match maybe_execute_sync_via_local_video_decision(
             state, parts, &body_json, trace_id, decision, plan_kind,
         )
         .await?
         {
-            return Ok(Some(response));
+            LocalExecutionRequestOutcome::Responded(response) => {
+                return Ok(LocalExecutionRequestOutcome::Responded(response));
+            }
+            LocalExecutionRequestOutcome::Exhausted(outcome) => exhausted = Some(outcome),
+            LocalExecutionRequestOutcome::NoPath => {}
         }
 
-        if let Some(response) = maybe_execute_sync_via_local_decision(
+        match maybe_execute_sync_via_local_decision(
             state, parts, trace_id, decision, &body_json, plan_kind,
         )
         .await?
         {
-            return Ok(Some(response));
+            LocalExecutionRequestOutcome::Responded(response) => {
+                return Ok(LocalExecutionRequestOutcome::Responded(response));
+            }
+            LocalExecutionRequestOutcome::Exhausted(outcome) => exhausted = Some(outcome),
+            LocalExecutionRequestOutcome::NoPath => {}
         }
 
-        if let Some(response) = maybe_execute_sync_via_local_openai_cli_decision(
+        match maybe_execute_sync_via_local_openai_cli_decision(
             state, parts, trace_id, decision, &body_json, plan_kind,
         )
         .await?
         {
-            return Ok(Some(response));
+            LocalExecutionRequestOutcome::Responded(response) => {
+                return Ok(LocalExecutionRequestOutcome::Responded(response));
+            }
+            LocalExecutionRequestOutcome::Exhausted(outcome) => exhausted = Some(outcome),
+            LocalExecutionRequestOutcome::NoPath => {}
         }
 
-        if let Some(response) = maybe_execute_sync_via_local_standard_decision(
+        match maybe_execute_sync_via_local_standard_decision(
             state, parts, trace_id, decision, &body_json, plan_kind,
         )
         .await?
         {
-            return Ok(Some(response));
+            LocalExecutionRequestOutcome::Responded(response) => {
+                return Ok(LocalExecutionRequestOutcome::Responded(response));
+            }
+            LocalExecutionRequestOutcome::Exhausted(outcome) => exhausted = Some(outcome),
+            LocalExecutionRequestOutcome::NoPath => {}
         }
 
-        if let Some(response) = maybe_execute_sync_via_local_same_format_provider_decision(
+        match maybe_execute_sync_via_local_same_format_provider_decision(
             state, parts, trace_id, decision, &body_json, plan_kind,
         )
         .await?
         {
-            return Ok(Some(response));
+            LocalExecutionRequestOutcome::Responded(response) => {
+                return Ok(LocalExecutionRequestOutcome::Responded(response));
+            }
+            LocalExecutionRequestOutcome::Exhausted(outcome) => exhausted = Some(outcome),
+            LocalExecutionRequestOutcome::NoPath => {}
         }
 
-        if let Some(response) = maybe_execute_sync_via_local_gemini_files_decision(
+        match maybe_execute_sync_via_local_gemini_files_decision(
             state,
             parts,
             &body_json,
@@ -118,7 +143,11 @@ pub(crate) async fn maybe_execute_via_sync_decision_path(
         )
         .await?
         {
-            return Ok(Some(response));
+            LocalExecutionRequestOutcome::Responded(response) => {
+                return Ok(LocalExecutionRequestOutcome::Responded(response));
+            }
+            LocalExecutionRequestOutcome::Exhausted(outcome) => exhausted = Some(outcome),
+            LocalExecutionRequestOutcome::NoPath => {}
         }
 
         if let Some(response) = maybe_execute_sync_via_remote_decision(
@@ -126,11 +155,11 @@ pub(crate) async fn maybe_execute_via_sync_decision_path(
         )
         .await?
         {
-            return Ok(Some(response));
+            return Ok(LocalExecutionRequestOutcome::Responded(response));
         }
     }
 
-    maybe_execute_sync_via_plan_fallback(
+    match maybe_execute_sync_via_plan_fallback(
         state,
         parts,
         trace_id,
@@ -145,7 +174,18 @@ pub(crate) async fn maybe_execute_via_sync_decision_path(
             GatewayFallbackReason::SchedulerDecisionUnsupported
         },
     )
-    .await
+    .await?
+    {
+        LocalExecutionRequestOutcome::Responded(response) => {
+            Ok(LocalExecutionRequestOutcome::Responded(response))
+        }
+        LocalExecutionRequestOutcome::Exhausted(outcome) => {
+            Ok(LocalExecutionRequestOutcome::Exhausted(outcome))
+        }
+        LocalExecutionRequestOutcome::NoPath => Ok(exhausted
+            .map(LocalExecutionRequestOutcome::Exhausted)
+            .unwrap_or(LocalExecutionRequestOutcome::NoPath)),
+    }
 }
 
 async fn maybe_build_local_video_task_read_response(
@@ -153,9 +193,9 @@ async fn maybe_build_local_video_task_read_response(
     parts: &http::request::Parts,
     trace_id: &str,
     decision: &GatewayControlDecision,
-) -> Result<Option<Response<Body>>, GatewayError> {
+) -> Result<LocalExecutionRequestOutcome, GatewayError> {
     if parts.method != http::Method::GET || decision.route_kind.as_deref() != Some("video") {
-        return Ok(None);
+        return Ok(LocalExecutionRequestOutcome::NoPath);
     }
 
     let _ = state
@@ -187,7 +227,7 @@ async fn maybe_build_local_video_task_read_response(
         }
     };
     let Some(read_response) = read_response else {
-        return Ok(None);
+        return Ok(LocalExecutionRequestOutcome::NoPath);
     };
 
     let body_bytes = serde_json::to_vec(&read_response.body_json)
@@ -196,13 +236,15 @@ async fn maybe_build_local_video_task_read_response(
     headers.insert("content-type".to_string(), "application/json".to_string());
     headers.insert("content-length".to_string(), body_bytes.len().to_string());
 
-    Ok(Some(build_client_response_from_parts(
-        read_response.status_code,
-        &headers,
-        Body::from(body_bytes),
-        trace_id,
-        Some(decision),
-    )?))
+    Ok(LocalExecutionRequestOutcome::Responded(
+        build_client_response_from_parts(
+            read_response.status_code,
+            &headers,
+            Body::from(body_bytes),
+            trace_id,
+            Some(decision),
+        )?,
+    ))
 }
 
 async fn maybe_execute_local_video_task_follow_up_sync(
@@ -212,7 +254,7 @@ async fn maybe_execute_local_video_task_follow_up_sync(
     trace_id: &str,
     decision: &GatewayControlDecision,
     plan_kind: &str,
-) -> Result<Option<Response<Body>>, GatewayError> {
+) -> Result<LocalExecutionRequestOutcome, GatewayError> {
     if !matches!(
         plan_kind,
         OPENAI_VIDEO_REMIX_SYNC_PLAN_KIND
@@ -220,7 +262,7 @@ async fn maybe_execute_local_video_task_follow_up_sync(
             | OPENAI_VIDEO_DELETE_SYNC_PLAN_KIND
             | GEMINI_VIDEO_CANCEL_SYNC_PLAN_KIND
     ) {
-        return Ok(None);
+        return Ok(LocalExecutionRequestOutcome::NoPath);
     }
 
     let _ = state
@@ -242,18 +284,20 @@ async fn maybe_execute_local_video_task_follow_up_sync(
         auth_context.as_ref(),
         trace_id,
     ) else {
-        return Ok(None);
+        return Ok(LocalExecutionRequestOutcome::NoPath);
     };
 
-    execute_execution_runtime_sync(
+    execute_sync_plan_and_reports(
         state,
-        parts.uri.path(),
-        follow_up.plan,
+        parts,
         trace_id,
         decision,
         plan_kind,
-        follow_up.report_kind,
-        follow_up.report_context,
+        vec![LocalSyncPlanAndReport {
+            plan: follow_up.plan,
+            report_kind: follow_up.report_kind,
+            report_context: follow_up.report_context,
+        }],
     )
     .await
 }

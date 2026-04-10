@@ -128,6 +128,7 @@ export interface RequestDetail {
   }
   provider: string
   api_format?: string
+  endpoint_api_format?: string
   model: string
   target_model?: string | null  // 映射后的目标模型名
   tokens: {
@@ -142,6 +143,7 @@ export interface RequestDetail {
   }
   // Additional token fields
   input_tokens?: number
+  effective_input_tokens?: number
   output_tokens?: number
   total_tokens?: number
   cache_creation_input_tokens?: number

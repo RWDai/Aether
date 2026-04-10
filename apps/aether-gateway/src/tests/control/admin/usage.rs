@@ -151,7 +151,7 @@ fn sample_usage_row(
     actual_total_cost_usd: f64,
     created_at_unix_ms: i64,
 ) -> StoredRequestUsageAudit {
-    StoredRequestUsageAudit::new(
+    let mut usage = StoredRequestUsageAudit::new(
         id.to_string(),
         request_id.to_string(),
         user_id.map(str::to_string),
@@ -190,7 +190,10 @@ fn sample_usage_row(
         Some(created_at_unix_ms + 2),
     )
     .expect("usage row should build")
-    .with_cache_input_tokens(15, 5)
+    .with_cache_input_tokens(15, 5);
+    usage.cache_creation_ephemeral_5m_input_tokens = 6;
+    usage.cache_creation_ephemeral_1h_input_tokens = 9;
+    usage
 }
 
 fn sample_user_summary(id: &str, username: &str) -> StoredUserSummary {
@@ -272,6 +275,14 @@ async fn gateway_handles_admin_usage_stats_locally_with_trusted_admin_principal(
     assert_eq!(payload["total_tokens"], 240);
     assert_eq!(payload["error_count"], 1);
     assert_eq!(payload["cache_stats"]["cache_creation_tokens"], 30);
+    assert_eq!(
+        payload["cache_stats"]["cache_creation_ephemeral_5m_tokens"],
+        12
+    );
+    assert_eq!(
+        payload["cache_stats"]["cache_creation_ephemeral_1h_tokens"],
+        18
+    );
     assert_eq!(payload["cache_stats"]["cache_read_tokens"], 10);
     assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
 
@@ -296,52 +307,66 @@ async fn gateway_handles_admin_usage_aggregation_stats_locally_with_trusted_admi
     let (upstream_url, upstream_hits, upstream_handle) =
         start_usage_upstream("/api/admin/usage/aggregation/stats").await;
 
+    let mut usage_1 = sample_usage_row(
+        "usage-1",
+        "req-1",
+        Some("user-1"),
+        Some("key-1"),
+        Some("primary"),
+        "OpenAI",
+        "gpt-5",
+        "completed",
+        120,
+        30,
+        0.3,
+        0.36,
+        DAY_1_UNIX_SECS,
+    );
+    usage_1.provider_id = Some("provider-openai".to_string());
+    usage_1.total_tokens = usage_1.input_tokens;
+
+    let mut usage_2 = sample_usage_row(
+        "usage-2",
+        "req-2",
+        Some("user-2"),
+        Some("key-2"),
+        Some("secondary"),
+        "OpenAI",
+        "gpt-5",
+        "completed",
+        40,
+        10,
+        0.1,
+        0.12,
+        DAY_2_UNIX_SECS,
+    );
+    usage_2.provider_id = Some("provider-openai".to_string());
+    usage_2.total_tokens = usage_2.input_tokens;
+
+    let mut usage_3 = sample_usage_row(
+        "usage-3",
+        "req-3",
+        Some("user-2"),
+        Some("key-2"),
+        Some("secondary"),
+        "Anthropic",
+        "claude-3-7",
+        "completed",
+        60,
+        20,
+        0.2,
+        0.24,
+        DAY_2_UNIX_SECS,
+    );
+    usage_3.provider_id = Some("provider-anthropic".to_string());
+    usage_3.total_tokens = usage_3.input_tokens;
+    usage_3.api_format = Some("claude:cli".to_string());
+    usage_3.api_family = Some("claude".to_string());
+    usage_3.endpoint_api_format = Some("claude:cli".to_string());
+    usage_3.provider_api_family = Some("claude".to_string());
+
     let usage_repository = Arc::new(InMemoryUsageReadRepository::seed(vec![
-        sample_usage_row(
-            "usage-1",
-            "req-1",
-            Some("user-1"),
-            Some("key-1"),
-            Some("primary"),
-            "OpenAI",
-            "gpt-5",
-            "completed",
-            120,
-            30,
-            0.3,
-            0.36,
-            DAY_1_UNIX_SECS,
-        ),
-        sample_usage_row(
-            "usage-2",
-            "req-2",
-            Some("user-2"),
-            Some("key-2"),
-            Some("secondary"),
-            "OpenAI",
-            "gpt-5",
-            "completed",
-            40,
-            10,
-            0.1,
-            0.12,
-            DAY_2_UNIX_SECS,
-        ),
-        sample_usage_row(
-            "usage-3",
-            "req-3",
-            Some("user-2"),
-            Some("key-2"),
-            Some("secondary"),
-            "Anthropic",
-            "claude-3-7",
-            "completed",
-            60,
-            20,
-            0.2,
-            0.24,
-            DAY_2_UNIX_SECS,
-        ),
+        usage_1, usage_2, usage_3,
     ]));
 
     let gateway = build_router_with_state(
@@ -366,7 +391,53 @@ async fn gateway_handles_admin_usage_aggregation_stats_locally_with_trusted_admi
     assert_eq!(items.len(), 2);
     assert_eq!(items[0]["model"], "gpt-5");
     assert_eq!(items[0]["request_count"], 2);
+    assert_eq!(items[0]["output_tokens"], 40);
+    assert_eq!(items[0]["effective_input_tokens"], 150);
+    assert_eq!(items[0]["total_input_context"], 200);
+    assert_eq!(items[0]["cache_creation_tokens"], 30);
+    assert_eq!(items[0]["cache_creation_ephemeral_5m_tokens"], 12);
+    assert_eq!(items[0]["cache_creation_ephemeral_1h_tokens"], 18);
+    assert_eq!(items[0]["cache_hit_rate"], 5.0);
     assert_eq!(items[1]["model"], "claude-3-7");
+    assert_eq!(items[1]["output_tokens"], 20);
+
+    let provider_response = admin_request(reqwest::Client::new().get(format!(
+        "{gateway_url}/api/admin/usage/aggregation/stats?group_by=provider&limit=10"
+    )))
+    .send()
+    .await
+    .expect("request should succeed");
+
+    assert_eq!(provider_response.status(), StatusCode::OK);
+    let provider_payload: serde_json::Value = provider_response
+        .json()
+        .await
+        .expect("json body should parse");
+    let provider_items = provider_payload.as_array().expect("array response");
+    assert_eq!(provider_items.len(), 2);
+    assert_eq!(provider_items[0]["provider"], "OpenAI");
+    assert_eq!(provider_items[0]["output_tokens"], 40);
+    assert_eq!(provider_items[1]["provider"], "Anthropic");
+    assert_eq!(provider_items[1]["output_tokens"], 20);
+
+    let api_format_response = admin_request(reqwest::Client::new().get(format!(
+        "{gateway_url}/api/admin/usage/aggregation/stats?group_by=api_format&limit=10"
+    )))
+    .send()
+    .await
+    .expect("request should succeed");
+
+    assert_eq!(api_format_response.status(), StatusCode::OK);
+    let api_format_payload: serde_json::Value = api_format_response
+        .json()
+        .await
+        .expect("json body should parse");
+    let api_format_items = api_format_payload.as_array().expect("array response");
+    assert_eq!(api_format_items.len(), 2);
+    assert_eq!(api_format_items[0]["api_format"], "openai:chat");
+    assert_eq!(api_format_items[0]["output_tokens"], 40);
+    assert_eq!(api_format_items[1]["api_format"], "claude:cli");
+    assert_eq!(api_format_items[1]["output_tokens"], 20);
     assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
 
     gateway_handle.abort();
@@ -616,6 +687,7 @@ async fn gateway_handles_admin_usage_active_locally_with_trusted_admin_principal
     let payload: serde_json::Value = response.json().await.expect("json body should parse");
     assert_eq!(payload["requests"].as_array().expect("array").len(), 1);
     assert_eq!(payload["requests"][0]["id"], "usage-pending");
+    assert_eq!(payload["requests"][0]["effective_input_tokens"], 5);
     assert_eq!(payload["requests"][0]["provider"], "OpenAI");
     assert_eq!(
         payload["requests"][0]["provider_key_name"],
@@ -707,6 +779,7 @@ async fn gateway_handles_admin_usage_records_locally_with_trusted_admin_principa
         payload["records"][0]["provider_key_name"],
         "upstream-primary"
     );
+    assert_eq!(payload["records"][0]["effective_input_tokens"], 35);
     assert_eq!(payload["records"][0]["first_byte_time_ms"], 120);
     assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
 
@@ -870,6 +943,7 @@ async fn gateway_handles_admin_usage_detail_locally_with_trusted_admin_principal
     assert_eq!(payload["api_key"]["name"], "primary");
     assert_eq!(payload["provider"], "OpenAI");
     assert_eq!(payload["model"], "gpt-5");
+    assert_eq!(payload["effective_input_tokens"], 115);
     assert_eq!(payload["total_tokens"], 170);
     assert_eq!(payload["cache_creation_cost"], 0.0);
     assert_eq!(payload["cache_read_cost"], 0.0);

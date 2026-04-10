@@ -66,6 +66,8 @@ pub struct BillingUsageInput {
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub cache_creation_tokens: i64,
+    pub cache_creation_ephemeral_5m_tokens: i64,
+    pub cache_creation_ephemeral_1h_tokens: i64,
     pub cache_read_tokens: i64,
     pub cache_ttl_minutes: Option<i64>,
 }
@@ -79,6 +81,8 @@ impl BillingUsageInput {
             input_tokens: 0,
             output_tokens: 0,
             cache_creation_tokens: 0,
+            cache_creation_ephemeral_5m_tokens: 0,
+            cache_creation_ephemeral_1h_tokens: 0,
             cache_read_tokens: 0,
             cache_ttl_minutes: None,
         }

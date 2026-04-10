@@ -238,6 +238,25 @@ impl UsageRuntime {
         }
     }
 
+    pub async fn record_terminal_event<T>(&self, data: &T, mut event: UsageEvent)
+    where
+        T: UsageRuntimeAccess,
+    {
+        if !self.is_enabled() {
+            return;
+        }
+        if let Err(err) = data.enrich_usage_event(&mut event).await {
+            warn!(
+                event_name = "usage_terminal_billing_enrichment_failed",
+                log_type = "event",
+                request_id = %event.request_id,
+                error = %err,
+                "usage runtime failed to enrich terminal usage event with billing"
+            );
+        }
+        self.enqueue_or_write_terminal(data, event).await;
+    }
+
     async fn enqueue_or_write_terminal<T>(&self, data: &T, event: UsageEvent)
     where
         T: UsageRuntimeAccess,

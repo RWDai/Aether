@@ -22,6 +22,7 @@ export interface ModelStatsItem {
   model: string
   request_count: number
   total_tokens: number
+  effective_input_tokens?: number
   total_input_context?: number
   output_tokens?: number
   cache_read_tokens?: number
@@ -41,6 +42,7 @@ export interface ProviderStatsItem {
   provider: string
   requests: number
   totalTokens: number
+  effectiveInputTokens?: number
   totalInputContext?: number
   outputTokens?: number
   cacheReadTokens?: number
@@ -57,6 +59,7 @@ export interface ApiFormatStatsItem {
   api_format: string
   request_count: number
   total_tokens: number
+  effective_input_tokens?: number
   total_input_context?: number
   output_tokens?: number
   cache_read_tokens?: number
@@ -92,6 +95,7 @@ export interface UsageRecord {
   endpoint_api_format?: string  // 端点原生格式
   has_format_conversion?: boolean  // 是否发生了格式转换
   input_tokens: number
+  effective_input_tokens?: number
   output_tokens: number
   cache_creation_input_tokens?: number
   cache_read_input_tokens?: number

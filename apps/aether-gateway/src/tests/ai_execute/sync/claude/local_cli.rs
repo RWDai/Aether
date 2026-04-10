@@ -18,6 +18,8 @@ async fn gateway_executes_claude_cli_sync_via_local_decision_gate_with_local_syn
         url: String,
         model: String,
         authorization: String,
+        anthropic_version: String,
+        anthropic_beta: String,
         endpoint_tag: String,
         metadata_mode: String,
         metadata_source: String,
@@ -261,6 +263,18 @@ async fn gateway_executes_claude_cli_sync_via_local_decision_gate_with_local_syn
                         .and_then(|value| value.as_str())
                         .unwrap_or_default()
                         .to_string(),
+                    anthropic_version: payload
+                        .get("headers")
+                        .and_then(|value| value.get("anthropic-version"))
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    anthropic_beta: payload
+                        .get("headers")
+                        .and_then(|value| value.get("anthropic-beta"))
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
                     endpoint_tag: payload
                         .get("headers")
                         .and_then(|value| value.get("x-endpoint-tag"))
@@ -359,6 +373,8 @@ async fn gateway_executes_claude_cli_sync_via_local_decision_gate_with_local_syn
             http::header::AUTHORIZATION,
             "Bearer sk-client-claude-cli-local",
         )
+        .header("anthropic-version", "2023-06-01")
+        .header("anthropic-beta", "prompt-caching-2024-07-31")
         .header(TRACE_ID_HEADER, "trace-claude-cli-local-sync-123")
         .body(
             "{\"model\":\"claude-code\",\"messages\":[],\"metadata\":{\"client\":\"desktop-claude-cli\"}}",
@@ -397,6 +413,14 @@ async fn gateway_executes_claude_cli_sync_via_local_decision_gate_with_local_syn
     assert_eq!(
         seen_execution_runtime_request.authorization,
         "Bearer sk-upstream-claude-cli"
+    );
+    assert_eq!(
+        seen_execution_runtime_request.anthropic_version,
+        "2023-06-01"
+    );
+    assert_eq!(
+        seen_execution_runtime_request.anthropic_beta,
+        "prompt-caching-2024-07-31"
     );
     assert_eq!(
         seen_execution_runtime_request.endpoint_tag,

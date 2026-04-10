@@ -391,6 +391,7 @@ async function pollActiveRequests() {
       if (shouldApply) {
         // 进行中状态也需要持续更新（provider/key/TTFB 可能在 streaming 后才落库）
         record.input_tokens = update.input_tokens
+        record.effective_input_tokens = update.effective_input_tokens ?? record.effective_input_tokens
         record.output_tokens = update.output_tokens
         record.cache_creation_input_tokens = update.cache_creation_input_tokens ?? undefined
         record.cache_read_input_tokens = update.cache_read_input_tokens ?? undefined

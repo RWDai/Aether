@@ -36,6 +36,8 @@ pub fn build_upsert_usage_record_from_event(
         output_tokens: data.output_tokens,
         total_tokens: data.total_tokens,
         cache_creation_input_tokens: data.cache_creation_input_tokens,
+        cache_creation_ephemeral_5m_input_tokens: data.cache_creation_ephemeral_5m_input_tokens,
+        cache_creation_ephemeral_1h_input_tokens: data.cache_creation_ephemeral_1h_input_tokens,
         cache_read_input_tokens: data.cache_read_input_tokens,
         cache_creation_cost_usd: data.cache_creation_cost_usd,
         cache_read_cost_usd: data.cache_read_cost_usd,

@@ -129,6 +129,13 @@ fn build_dimensions(input: &BillingUsageInput) -> BTreeMap<String, Value> {
         input.input_tokens,
         input.cache_read_tokens,
     );
+    let classified_cache_creation_tokens = input
+        .cache_creation_ephemeral_5m_tokens
+        .saturating_add(input.cache_creation_ephemeral_1h_tokens);
+    let cache_creation_uncategorized_tokens = input
+        .cache_creation_tokens
+        .saturating_sub(classified_cache_creation_tokens)
+        .max(0);
     let total_input_context = input
         .input_tokens
         .saturating_add(input.cache_creation_tokens)
@@ -140,6 +147,18 @@ fn build_dimensions(input: &BillingUsageInput) -> BTreeMap<String, Value> {
         (
             "cache_creation_tokens".to_string(),
             json!(input.cache_creation_tokens),
+        ),
+        (
+            "cache_creation_ephemeral_5m_tokens".to_string(),
+            json!(input.cache_creation_ephemeral_5m_tokens),
+        ),
+        (
+            "cache_creation_ephemeral_1h_tokens".to_string(),
+            json!(input.cache_creation_ephemeral_1h_tokens),
+        ),
+        (
+            "cache_creation_uncategorized_tokens".to_string(),
+            json!(cache_creation_uncategorized_tokens),
         ),
         (
             "cache_read_tokens".to_string(),
@@ -158,6 +177,15 @@ fn build_dimensions(input: &BillingUsageInput) -> BTreeMap<String, Value> {
             json!(normalize_task_type(&input.task_type)),
         ),
     ]);
+
+    out.insert(
+        "cache_creation_ephemeral_5m_ttl_minutes".to_string(),
+        json!(5),
+    );
+    out.insert(
+        "cache_creation_ephemeral_1h_ttl_minutes".to_string(),
+        json!(60),
+    );
 
     if let Some(cache_ttl_minutes) = input.cache_ttl_minutes {
         out.insert(
@@ -223,6 +251,8 @@ mod tests {
                     input_tokens: 1_000,
                     output_tokens: 500,
                     cache_creation_tokens: 0,
+                    cache_creation_ephemeral_5m_tokens: 0,
+                    cache_creation_ephemeral_1h_tokens: 0,
                     cache_read_tokens: 100,
                     cache_ttl_minutes: Some(60),
                 },

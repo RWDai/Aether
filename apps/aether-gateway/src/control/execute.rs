@@ -3,7 +3,9 @@ use axum::http::{HeaderName, HeaderValue, Response};
 
 use crate::constants::CONTROL_EXECUTED_HEADER;
 use crate::control::GatewayControlDecision;
-use crate::executor::{maybe_execute_stream_request, maybe_execute_sync_request};
+use crate::executor::{
+    maybe_execute_stream_request, maybe_execute_sync_request, LocalExecutionRequestOutcome,
+};
 use crate::{AppState, GatewayError};
 
 use super::resolve_execution_runtime_auth_context;
@@ -19,9 +21,9 @@ pub(crate) async fn maybe_execute_via_control(
     trace_id: &str,
     decision: Option<&GatewayControlDecision>,
     require_stream: bool,
-) -> Result<Option<Response<Body>>, GatewayError> {
+) -> Result<LocalExecutionRequestOutcome, GatewayError> {
     let Some(decision) = decision else {
-        return Ok(None);
+        return Ok(LocalExecutionRequestOutcome::NoPath);
     };
 
     let mut local_decision = decision.clone();
@@ -46,7 +48,15 @@ pub(crate) async fn maybe_execute_via_control(
             .await?
     };
 
-    Ok(response.map(mark_control_executed))
+    Ok(match response {
+        LocalExecutionRequestOutcome::Responded(response) => {
+            LocalExecutionRequestOutcome::Responded(mark_control_executed(response))
+        }
+        LocalExecutionRequestOutcome::Exhausted(outcome) => {
+            LocalExecutionRequestOutcome::Exhausted(outcome)
+        }
+        LocalExecutionRequestOutcome::NoPath => LocalExecutionRequestOutcome::NoPath,
+    })
 }
 
 fn mark_control_executed(mut response: Response<Body>) -> Response<Body> {

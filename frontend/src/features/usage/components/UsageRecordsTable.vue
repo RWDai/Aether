@@ -273,7 +273,7 @@
             >-</span>
             <span class="text-muted-foreground/50">|</span>
             <!-- Tokens -->
-            <span>{{ formatTokens(record.input_tokens || 0) }}/{{ formatTokens(record.output_tokens || 0) }}</span>
+            <span>{{ formatTokens(getRecordEffectiveInputTokens(record)) }}/{{ formatTokens(record.output_tokens || 0) }}</span>
           </div>
         </div>
       </div>
@@ -552,7 +552,7 @@
           <TableCell class="text-right py-4 w-[140px]">
             <div class="flex flex-col items-end text-xs gap-0.5">
               <div class="flex items-center gap-1">
-                <span>{{ formatTokens(record.input_tokens || 0) }}</span>
+                <span>{{ formatTokens(getRecordEffectiveInputTokens(record)) }}</span>
                 <span class="text-muted-foreground">/</span>
                 <span>{{ formatTokens(record.output_tokens || 0) }}</span>
               </div>
@@ -677,6 +677,7 @@ import {
 import { RefreshCcw, Search } from 'lucide-vue-next'
 import { formatTokens, formatCurrency } from '@/utils/format'
 import { formatDateTime } from '../composables'
+import { getEffectiveInputTokens } from '../token-normalization'
 import { useRowClick } from '@/composables/useRowClick'
 import { formatApiFormat } from '@/api/endpoints/types/api-format'
 import type { DateRangeParams, UsageRecord } from '../types'
@@ -775,6 +776,10 @@ function handleRowClick(event: MouseEvent, id: string) {
   if (!props.isAdmin) return
   if (!shouldTriggerRowClick(event)) return
   emit('showDetail', id)
+}
+
+function getRecordEffectiveInputTokens(record: UsageRecord): number {
+  return getEffectiveInputTokens(record)
 }
 
 // useDebounceFn 自动处理清理，无需 onUnmounted

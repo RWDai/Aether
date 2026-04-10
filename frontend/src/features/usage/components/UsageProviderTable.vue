@@ -56,7 +56,7 @@
             </TableCell>
             <TableCell class="text-right py-2 px-2">
               <div class="flex flex-col items-end text-xs gap-0.5 whitespace-nowrap">
-                <span>{{ formatTokens(provider.totalInputContext || 0) }} / {{ formatTokens(provider.outputTokens || 0) }}</span>
+                <span>{{ formatTokens(provider.effectiveInputTokens ?? provider.totalInputContext ?? 0) }} / {{ formatTokens(provider.outputTokens || 0) }}</span>
                 <span class="text-muted-foreground">{{ formatTokens((provider.cacheReadTokens || 0) + (provider.cacheCreationTokens || 0)) }}</span>
               </div>
             </TableCell>

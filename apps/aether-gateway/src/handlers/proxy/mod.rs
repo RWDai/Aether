@@ -29,7 +29,10 @@ use crate::control::{
     should_buffer_request_for_local_auth, trusted_auth_local_rejection, GatewayControlDecision,
     GatewayPublicRequestContext,
 };
-use crate::executor::{maybe_execute_stream_request, maybe_execute_sync_request};
+use crate::executor::{
+    maybe_execute_stream_request, maybe_execute_sync_request,
+    record_failed_usage_for_exhausted_request, LocalExecutionRequestOutcome,
+};
 use crate::handlers::shared::{
     build_admin_proxy_auth_required_response, build_unhandled_admin_proxy_response,
     local_proxy_route_requires_buffered_body, request_enables_control_execute,
@@ -44,7 +47,6 @@ use crate::{
 use axum::body::{to_bytes, Body, Bytes};
 use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{self, header::HeaderName, header::HeaderValue, Response};
-use chrono::Utc;
 use std::time::Instant;
 use tracing::{info, warn};
 
@@ -645,8 +647,9 @@ pub(crate) async fn proxy_request(
             .as_ref()
             .expect("execution runtime/control auth gate should have buffered request body");
         let stream_request = request_wants_stream(&request_context, buffered_body);
+        let mut local_execution_exhaustion = None;
         if stream_request {
-            if let Some(execution_runtime_response) = maybe_execute_stream_request(
+            match maybe_execute_stream_request(
                 &state,
                 &parts,
                 buffered_body,
@@ -655,35 +658,46 @@ pub(crate) async fn proxy_request(
             )
             .await?
             {
+                LocalExecutionRequestOutcome::Responded(execution_runtime_response) => {
+                    state.clear_local_execution_runtime_miss_diagnostic(&trace_id);
+                    return Ok(finalize_gateway_response_with_context(
+                        &state,
+                        execution_runtime_response,
+                        &remote_addr,
+                        &request_context,
+                        EXECUTION_PATH_EXECUTION_RUNTIME_STREAM,
+                        &started_at,
+                        request_permit.take(),
+                    ));
+                }
+                LocalExecutionRequestOutcome::Exhausted(outcome) => {
+                    local_execution_exhaustion = Some(outcome);
+                }
+                LocalExecutionRequestOutcome::NoPath => {}
+            }
+        }
+        match maybe_execute_sync_request(&state, &parts, buffered_body, &trace_id, control_decision)
+            .await?
+        {
+            LocalExecutionRequestOutcome::Responded(execution_runtime_response) => {
                 state.clear_local_execution_runtime_miss_diagnostic(&trace_id);
                 return Ok(finalize_gateway_response_with_context(
                     &state,
                     execution_runtime_response,
                     &remote_addr,
                     &request_context,
-                    EXECUTION_PATH_EXECUTION_RUNTIME_STREAM,
+                    EXECUTION_PATH_EXECUTION_RUNTIME_SYNC,
                     &started_at,
                     request_permit.take(),
                 ));
             }
-        }
-        if let Some(execution_runtime_response) =
-            maybe_execute_sync_request(&state, &parts, buffered_body, &trace_id, control_decision)
-                .await?
-        {
-            state.clear_local_execution_runtime_miss_diagnostic(&trace_id);
-            return Ok(finalize_gateway_response_with_context(
-                &state,
-                execution_runtime_response,
-                &remote_addr,
-                &request_context,
-                EXECUTION_PATH_EXECUTION_RUNTIME_SYNC,
-                &started_at,
-                request_permit.take(),
-            ));
+            LocalExecutionRequestOutcome::Exhausted(outcome) => {
+                local_execution_exhaustion = Some(outcome);
+            }
+            LocalExecutionRequestOutcome::NoPath => {}
         }
         if parts.method != http::Method::POST {
-            if let Some(execution_runtime_response) = maybe_execute_stream_request(
+            match maybe_execute_stream_request(
                 &state,
                 &parts,
                 buffered_body,
@@ -692,20 +706,26 @@ pub(crate) async fn proxy_request(
             )
             .await?
             {
-                state.clear_local_execution_runtime_miss_diagnostic(&trace_id);
-                return Ok(finalize_gateway_response_with_context(
-                    &state,
-                    execution_runtime_response,
-                    &remote_addr,
-                    &request_context,
-                    EXECUTION_PATH_EXECUTION_RUNTIME_STREAM,
-                    &started_at,
-                    request_permit.take(),
-                ));
+                LocalExecutionRequestOutcome::Responded(execution_runtime_response) => {
+                    state.clear_local_execution_runtime_miss_diagnostic(&trace_id);
+                    return Ok(finalize_gateway_response_with_context(
+                        &state,
+                        execution_runtime_response,
+                        &remote_addr,
+                        &request_context,
+                        EXECUTION_PATH_EXECUTION_RUNTIME_STREAM,
+                        &started_at,
+                        request_permit.take(),
+                    ));
+                }
+                LocalExecutionRequestOutcome::Exhausted(outcome) => {
+                    local_execution_exhaustion = Some(outcome);
+                }
+                LocalExecutionRequestOutcome::NoPath => {}
             }
         }
         if allow_control_execute_fallback {
-            if let Some(control_response) = maybe_execute_via_control(
+            match maybe_execute_via_control(
                 &state,
                 &parts,
                 buffered_body.clone(),
@@ -715,41 +735,47 @@ pub(crate) async fn proxy_request(
             )
             .await?
             {
-                let reason = GatewayFallbackReason::ControlExecuteEmergency;
-                let control_execution_path = if stream_request {
-                    EXECUTION_PATH_CONTROL_EXECUTE_STREAM
-                } else {
-                    EXECUTION_PATH_CONTROL_EXECUTE_SYNC
-                };
-                state.record_fallback_metric(
-                    GatewayFallbackMetricKind::ControlExecuteFallback,
-                    control_decision,
-                    None,
-                    Some(control_execution_path),
-                    reason,
-                );
-                state.record_fallback_metric(
-                    GatewayFallbackMetricKind::RemoteExecuteEmergency,
-                    control_decision,
-                    None,
-                    Some(control_execution_path),
-                    reason,
-                );
-                let mut control_response = control_response;
-                state.clear_local_execution_runtime_miss_diagnostic(&trace_id);
-                control_response.headers_mut().insert(
-                    HeaderName::from_static(DEPENDENCY_REASON_HEADER),
-                    HeaderValue::from_static(reason.as_label_value()),
-                );
-                return Ok(finalize_gateway_response_with_context(
-                    &state,
-                    control_response,
-                    &remote_addr,
-                    &request_context,
-                    control_execution_path,
-                    &started_at,
-                    request_permit.take(),
-                ));
+                LocalExecutionRequestOutcome::Responded(control_response) => {
+                    let reason = GatewayFallbackReason::ControlExecuteEmergency;
+                    let control_execution_path = if stream_request {
+                        EXECUTION_PATH_CONTROL_EXECUTE_STREAM
+                    } else {
+                        EXECUTION_PATH_CONTROL_EXECUTE_SYNC
+                    };
+                    state.record_fallback_metric(
+                        GatewayFallbackMetricKind::ControlExecuteFallback,
+                        control_decision,
+                        None,
+                        Some(control_execution_path),
+                        reason,
+                    );
+                    state.record_fallback_metric(
+                        GatewayFallbackMetricKind::RemoteExecuteEmergency,
+                        control_decision,
+                        None,
+                        Some(control_execution_path),
+                        reason,
+                    );
+                    let mut control_response = control_response;
+                    state.clear_local_execution_runtime_miss_diagnostic(&trace_id);
+                    control_response.headers_mut().insert(
+                        HeaderName::from_static(DEPENDENCY_REASON_HEADER),
+                        HeaderValue::from_static(reason.as_label_value()),
+                    );
+                    return Ok(finalize_gateway_response_with_context(
+                        &state,
+                        control_response,
+                        &remote_addr,
+                        &request_context,
+                        control_execution_path,
+                        &started_at,
+                        request_permit.take(),
+                    ));
+                }
+                LocalExecutionRequestOutcome::Exhausted(outcome) => {
+                    local_execution_exhaustion = Some(outcome);
+                }
+                LocalExecutionRequestOutcome::NoPath => {}
             }
         }
         let local_execution_runtime_miss_detail =
@@ -778,6 +804,16 @@ pub(crate) async fn proxy_request(
                 skip_reasons = diagnostic.skip_reasons_summary().unwrap_or_default(),
                 "gateway local execution runtime miss"
             );
+        }
+        if let Some(exhaustion) = local_execution_exhaustion {
+            record_failed_usage_for_exhausted_request(
+                &state,
+                exhaustion,
+                &started_at,
+                local_execution_runtime_miss_detail,
+                local_execution_runtime_miss_diagnostic.as_ref(),
+            )
+            .await;
         }
         let mut response = build_local_http_error_response(
             &trace_id,

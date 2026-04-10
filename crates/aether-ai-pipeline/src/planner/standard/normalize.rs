@@ -124,8 +124,18 @@ pub fn build_cross_format_openai_cli_request_body(
 
 #[cfg(test)]
 mod tests {
+    use super::build_local_openai_cli_request_body;
     use super::{build_cross_format_openai_cli_request_body, build_local_openai_chat_request_body};
-    use serde_json::json;
+    use serde_json::{json, Value};
+
+    fn object_keys(value: &Value) -> Vec<&str> {
+        value
+            .as_object()
+            .expect("json object")
+            .keys()
+            .map(String::as_str)
+            .collect()
+    }
 
     #[test]
     fn builds_openai_chat_cross_format_request_body_from_openai_cli_source() {
@@ -146,6 +156,29 @@ mod tests {
         assert_eq!(provider_request_body["model"], "gpt-5-upstream");
         assert_eq!(provider_request_body["messages"][0]["role"], "user");
         assert_eq!(provider_request_body["messages"][0]["content"], "hello");
+    }
+
+    #[test]
+    fn local_openai_cli_request_body_preserves_original_field_order() {
+        let body_json: Value = serde_json::from_str(
+            r#"{
+                "model": "gpt-5",
+                "include": ["reasoning.encrypted_content"],
+                "input": [],
+                "instructions": "Keep order"
+            }"#,
+        )
+        .expect("request json should parse");
+
+        let provider_request_body =
+            build_local_openai_cli_request_body(&body_json, "gpt-5-upstream", false)
+                .expect("openai cli body should build");
+
+        assert_eq!(
+            object_keys(&provider_request_body),
+            vec!["model", "include", "input", "instructions"]
+        );
+        assert_eq!(provider_request_body["model"], "gpt-5-upstream");
     }
 
     #[test]

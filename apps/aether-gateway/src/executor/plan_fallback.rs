@@ -1,9 +1,11 @@
-use axum::body::Body;
-use axum::http::Response;
-
-use crate::ai_pipeline_api::{maybe_build_stream_plan_payload, maybe_build_sync_plan_payload};
+use crate::ai_pipeline_api::{
+    maybe_build_stream_plan_payload, maybe_build_sync_plan_payload, LocalStreamPlanAndReport,
+    LocalSyncPlanAndReport,
+};
 use crate::control::GatewayControlDecision;
-use crate::execution_runtime::{execute_execution_runtime_stream, execute_execution_runtime_sync};
+use crate::executor::{
+    execute_stream_plan_and_reports, execute_sync_plan_and_reports, LocalExecutionRequestOutcome,
+};
 use crate::{AppState, GatewayControlPlanResponse, GatewayError, GatewayFallbackReason};
 
 pub(crate) async fn maybe_execute_sync_via_plan_fallback(
@@ -16,7 +18,7 @@ pub(crate) async fn maybe_execute_sync_via_plan_fallback(
     _plan_kind: &str,
     _bypass_cache_key: String,
     _fallback_reason: GatewayFallbackReason,
-) -> Result<Option<Response<Body>>, GatewayError> {
+) -> Result<LocalExecutionRequestOutcome, GatewayError> {
     let body_is_empty =
         body_base64.is_none() && body_json.as_object().is_some_and(|value| value.is_empty());
     let Some(payload) = maybe_build_sync_plan_payload(
@@ -30,7 +32,7 @@ pub(crate) async fn maybe_execute_sync_via_plan_fallback(
     )
     .await?
     else {
-        return Ok(None);
+        return Ok(LocalExecutionRequestOutcome::NoPath);
     };
 
     let GatewayControlPlanResponse {
@@ -43,18 +45,20 @@ pub(crate) async fn maybe_execute_sync_via_plan_fallback(
     } = payload;
 
     let (Some(plan_kind), Some(plan)) = (plan_kind, plan) else {
-        return Ok(None);
+        return Ok(LocalExecutionRequestOutcome::NoPath);
     };
 
-    execute_execution_runtime_sync(
+    execute_sync_plan_and_reports(
         state,
-        parts.uri.path(),
-        plan,
+        parts,
         trace_id,
         decision,
         plan_kind.as_str(),
-        report_kind,
-        report_context,
+        vec![LocalSyncPlanAndReport {
+            plan,
+            report_kind,
+            report_context,
+        }],
     )
     .await
 }
@@ -69,11 +73,11 @@ pub(crate) async fn maybe_execute_stream_via_plan_fallback(
     _plan_kind: &str,
     _bypass_cache_key: String,
     _fallback_reason: GatewayFallbackReason,
-) -> Result<Option<Response<Body>>, GatewayError> {
+) -> Result<LocalExecutionRequestOutcome, GatewayError> {
     let Some(payload) =
         maybe_build_stream_plan_payload(state, parts, trace_id, decision, body_json).await?
     else {
-        return Ok(None);
+        return Ok(LocalExecutionRequestOutcome::NoPath);
     };
 
     let GatewayControlPlanResponse {
@@ -86,17 +90,19 @@ pub(crate) async fn maybe_execute_stream_via_plan_fallback(
     } = payload;
 
     let (Some(plan_kind), Some(plan)) = (plan_kind, plan) else {
-        return Ok(None);
+        return Ok(LocalExecutionRequestOutcome::NoPath);
     };
 
-    execute_execution_runtime_stream(
+    execute_stream_plan_and_reports(
         state,
-        plan,
         trace_id,
         decision,
         plan_kind.as_str(),
-        report_kind,
-        report_context,
+        vec![LocalStreamPlanAndReport {
+            plan,
+            report_kind,
+            report_context,
+        }],
     )
     .await
 }

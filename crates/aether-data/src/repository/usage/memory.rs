@@ -258,6 +258,20 @@ impl UsageWriteRepository for InMemoryUsageReadRepository {
                     .map(|existing| existing.cache_creation_input_tokens)
                     .unwrap_or_default()
             }),
+            cache_creation_ephemeral_5m_input_tokens: usage
+                .cache_creation_ephemeral_5m_input_tokens
+                .unwrap_or_else(|| {
+                    existing
+                        .map(|existing| existing.cache_creation_ephemeral_5m_input_tokens)
+                        .unwrap_or_default()
+                }),
+            cache_creation_ephemeral_1h_input_tokens: usage
+                .cache_creation_ephemeral_1h_input_tokens
+                .unwrap_or_else(|| {
+                    existing
+                        .map(|existing| existing.cache_creation_ephemeral_1h_input_tokens)
+                        .unwrap_or_default()
+                }),
             cache_read_input_tokens: usage.cache_read_input_tokens.unwrap_or_else(|| {
                 existing
                     .map(|existing| existing.cache_read_input_tokens)
@@ -427,6 +441,8 @@ mod tests {
                 output_tokens: Some(20),
                 total_tokens: None,
                 cache_creation_input_tokens: None,
+                cache_creation_ephemeral_5m_input_tokens: None,
+                cache_creation_ephemeral_1h_input_tokens: None,
                 cache_read_input_tokens: None,
                 cache_creation_cost_usd: None,
                 cache_read_cost_usd: None,

@@ -51,6 +51,7 @@ export interface UsageRecordDetail {
   provider: string
   model: string
   input_tokens: number
+  effective_input_tokens?: number
   output_tokens: number
   total_tokens: number
   cost: number  // 官方费率
@@ -80,9 +81,12 @@ export interface ModelSummary {
   model: string
   requests: number
   input_tokens: number
+  effective_input_tokens?: number
   output_tokens: number
   total_tokens: number
   cache_read_tokens?: number
+  cache_creation_tokens?: number
+  total_input_context?: number
   cache_hit_rate?: number
   total_cost_usd: number
   actual_total_cost_usd?: number  // 倍率消耗（仅管理员可见）
@@ -92,8 +96,12 @@ export interface ModelSummary {
 export interface ProviderSummary {
   provider: string
   requests: number
+  effective_input_tokens?: number
   total_tokens: number
+  output_tokens?: number
   cache_read_tokens?: number
+  cache_creation_tokens?: number
+  total_input_context?: number
   cache_hit_rate?: number
   total_cost_usd: number
   success_rate: number | null
@@ -104,8 +112,12 @@ export interface ProviderSummary {
 export interface ApiFormatSummary {
   api_format: string
   request_count: number
+  effective_input_tokens?: number
   total_tokens: number
+  output_tokens?: number
   cache_read_tokens: number
+  cache_creation_tokens?: number
+  total_input_context?: number
   cache_hit_rate: number
   total_cost_usd: number
   avg_response_time_ms: number

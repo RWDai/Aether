@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;
+use serde_json::Value;
 use sqlx::{PgPool, Postgres, QueryBuilder, Row};
 use uuid::Uuid;
 
@@ -37,6 +38,8 @@ SELECT
   output_tokens,
   total_tokens,
   COALESCE(cache_creation_input_tokens, 0) AS cache_creation_input_tokens,
+  COALESCE(cache_creation_input_tokens_5m, 0) AS cache_creation_ephemeral_5m_input_tokens,
+  COALESCE(cache_creation_input_tokens_1h, 0) AS cache_creation_ephemeral_1h_input_tokens,
   COALESCE(cache_read_input_tokens, 0) AS cache_read_input_tokens,
   COALESCE(CAST(cache_creation_cost_usd AS DOUBLE PRECISION), 0) AS cache_creation_cost_usd,
   COALESCE(CAST(cache_read_cost_usd AS DOUBLE PRECISION), 0) AS cache_read_cost_usd,
@@ -94,6 +97,8 @@ SELECT
   output_tokens,
   total_tokens,
   COALESCE(cache_creation_input_tokens, 0) AS cache_creation_input_tokens,
+  COALESCE(cache_creation_input_tokens_5m, 0) AS cache_creation_ephemeral_5m_input_tokens,
+  COALESCE(cache_creation_input_tokens_1h, 0) AS cache_creation_ephemeral_1h_input_tokens,
   COALESCE(cache_read_input_tokens, 0) AS cache_read_input_tokens,
   COALESCE(CAST(cache_creation_cost_usd AS DOUBLE PRECISION), 0) AS cache_creation_cost_usd,
   COALESCE(CAST(cache_read_cost_usd AS DOUBLE PRECISION), 0) AS cache_read_cost_usd,
@@ -181,6 +186,8 @@ SELECT
   output_tokens,
   total_tokens,
   COALESCE(cache_creation_input_tokens, 0) AS cache_creation_input_tokens,
+  COALESCE(cache_creation_input_tokens_5m, 0) AS cache_creation_ephemeral_5m_input_tokens,
+  COALESCE(cache_creation_input_tokens_1h, 0) AS cache_creation_ephemeral_1h_input_tokens,
   COALESCE(cache_read_input_tokens, 0) AS cache_read_input_tokens,
   COALESCE(CAST(cache_creation_cost_usd AS DOUBLE PRECISION), 0) AS cache_creation_cost_usd,
   COALESCE(CAST(cache_read_cost_usd AS DOUBLE PRECISION), 0) AS cache_read_cost_usd,
@@ -194,15 +201,15 @@ SELECT
   first_byte_time_ms,
   status,
   billing_status,
-  NULL::jsonb AS request_headers,
-  NULL::jsonb AS request_body,
-  NULL::jsonb AS provider_request_headers,
-  NULL::jsonb AS provider_request_body,
-  NULL::jsonb AS response_headers,
-  NULL::jsonb AS response_body,
-  NULL::jsonb AS client_response_headers,
-  NULL::jsonb AS client_response_body,
-  NULL::jsonb AS request_metadata,
+  NULL::json AS request_headers,
+  NULL::json AS request_body,
+  NULL::json AS provider_request_headers,
+  NULL::json AS provider_request_body,
+  NULL::json AS response_headers,
+  NULL::json AS response_body,
+  NULL::json AS client_response_headers,
+  NULL::json AS client_response_body,
+  NULL::json AS request_metadata,
   CAST(EXTRACT(EPOCH FROM created_at) AS BIGINT) AS created_at_unix_ms,
   CAST(EXTRACT(EPOCH FROM COALESCE(finalized_at, created_at)) AS BIGINT) AS updated_at_unix_secs,
   CAST(EXTRACT(EPOCH FROM finalized_at) AS BIGINT) AS finalized_at_unix_secs
@@ -236,6 +243,8 @@ SELECT
   output_tokens,
   total_tokens,
   COALESCE(cache_creation_input_tokens, 0) AS cache_creation_input_tokens,
+  COALESCE(cache_creation_input_tokens_5m, 0) AS cache_creation_ephemeral_5m_input_tokens,
+  COALESCE(cache_creation_input_tokens_1h, 0) AS cache_creation_ephemeral_1h_input_tokens,
   COALESCE(cache_read_input_tokens, 0) AS cache_read_input_tokens,
   COALESCE(CAST(cache_creation_cost_usd AS DOUBLE PRECISION), 0) AS cache_creation_cost_usd,
   COALESCE(CAST(cache_read_cost_usd AS DOUBLE PRECISION), 0) AS cache_read_cost_usd,
@@ -249,15 +258,15 @@ SELECT
   first_byte_time_ms,
   status,
   billing_status,
-  NULL::jsonb AS request_headers,
-  NULL::jsonb AS request_body,
-  NULL::jsonb AS provider_request_headers,
-  NULL::jsonb AS provider_request_body,
-  NULL::jsonb AS response_headers,
-  NULL::jsonb AS response_body,
-  NULL::jsonb AS client_response_headers,
-  NULL::jsonb AS client_response_body,
-  NULL::jsonb AS request_metadata,
+  NULL::json AS request_headers,
+  NULL::json AS request_body,
+  NULL::json AS provider_request_headers,
+  NULL::json AS provider_request_body,
+  NULL::json AS response_headers,
+  NULL::json AS response_body,
+  NULL::json AS client_response_headers,
+  NULL::json AS client_response_body,
+  NULL::json AS request_metadata,
   CAST(EXTRACT(EPOCH FROM created_at) AS BIGINT) AS created_at_unix_ms,
   CAST(EXTRACT(EPOCH FROM COALESCE(finalized_at, created_at)) AS BIGINT) AS updated_at_unix_secs,
   CAST(EXTRACT(EPOCH FROM finalized_at) AS BIGINT) AS finalized_at_unix_secs
@@ -291,6 +300,8 @@ INSERT INTO "usage" (
   output_tokens,
   total_tokens,
   cache_creation_input_tokens,
+  cache_creation_input_tokens_5m,
+  cache_creation_input_tokens_1h,
   cache_read_input_tokens,
   cache_creation_cost_usd,
   cache_read_cost_usd,
@@ -344,10 +355,10 @@ INSERT INTO "usage" (
   COALESCE($26, 0),
   COALESCE($27, 0),
   COALESCE($28, 0),
-  $29,
-  COALESCE($30, 0),
+  COALESCE($29, 0),
+  $30,
   COALESCE($31, 0),
-  $32,
+  COALESCE($32, 0),
   $33,
   $34,
   $35,
@@ -356,18 +367,20 @@ INSERT INTO "usage" (
   $38,
   $39,
   $40,
-  $41,
-  $42,
-  $43,
-  $44,
-  $45,
-  $46,
-  $47,
+  $41::json,
+  $42::json,
+  $43::json,
+  $44::json,
+  $45::json,
+  $46::json,
+  $47::json,
+  $48::json,
+  $49::json,
   CASE
-    WHEN $48 IS NULL THEN NULL
-    ELSE TO_TIMESTAMP($48::double precision)
+    WHEN $50 IS NULL THEN NULL
+    ELSE TO_TIMESTAMP($50::double precision)
   END,
-  COALESCE(TO_TIMESTAMP($49::double precision), NOW())
+  COALESCE(TO_TIMESTAMP($51::double precision), NOW())
 )
 ON CONFLICT (request_id)
 DO UPDATE SET
@@ -394,6 +407,8 @@ DO UPDATE SET
   output_tokens = CASE WHEN "usage".billing_status = 'pending' THEN COALESCE(EXCLUDED.output_tokens, "usage".output_tokens) ELSE "usage".output_tokens END,
   total_tokens = CASE WHEN "usage".billing_status = 'pending' THEN COALESCE(EXCLUDED.total_tokens, "usage".total_tokens) ELSE "usage".total_tokens END,
   cache_creation_input_tokens = CASE WHEN "usage".billing_status = 'pending' THEN COALESCE(EXCLUDED.cache_creation_input_tokens, "usage".cache_creation_input_tokens) ELSE "usage".cache_creation_input_tokens END,
+  cache_creation_input_tokens_5m = CASE WHEN "usage".billing_status = 'pending' THEN COALESCE(EXCLUDED.cache_creation_input_tokens_5m, "usage".cache_creation_input_tokens_5m) ELSE "usage".cache_creation_input_tokens_5m END,
+  cache_creation_input_tokens_1h = CASE WHEN "usage".billing_status = 'pending' THEN COALESCE(EXCLUDED.cache_creation_input_tokens_1h, "usage".cache_creation_input_tokens_1h) ELSE "usage".cache_creation_input_tokens_1h END,
   cache_read_input_tokens = CASE WHEN "usage".billing_status = 'pending' THEN COALESCE(EXCLUDED.cache_read_input_tokens, "usage".cache_read_input_tokens) ELSE "usage".cache_read_input_tokens END,
   cache_creation_cost_usd = CASE WHEN "usage".billing_status = 'pending' THEN COALESCE(EXCLUDED.cache_creation_cost_usd, "usage".cache_creation_cost_usd) ELSE "usage".cache_creation_cost_usd END,
   cache_read_cost_usd = CASE WHEN "usage".billing_status = 'pending' THEN COALESCE(EXCLUDED.cache_read_cost_usd, "usage".cache_read_cost_usd) ELSE "usage".cache_read_cost_usd END,
@@ -443,6 +458,8 @@ RETURNING
   output_tokens,
   total_tokens,
   COALESCE(cache_creation_input_tokens, 0) AS cache_creation_input_tokens,
+  COALESCE(cache_creation_input_tokens_5m, 0) AS cache_creation_ephemeral_5m_input_tokens,
+  COALESCE(cache_creation_input_tokens_1h, 0) AS cache_creation_ephemeral_1h_input_tokens,
   COALESCE(cache_read_input_tokens, 0) AS cache_read_input_tokens,
   COALESCE(CAST(cache_creation_cost_usd AS DOUBLE PRECISION), 0) AS cache_creation_cost_usd,
   COALESCE(CAST(cache_read_cost_usd AS DOUBLE PRECISION), 0) AS cache_read_cost_usd,
@@ -653,6 +670,19 @@ impl SqlxUsageReadRepository {
         self.tx_runner
             .run_read_write(|tx| {
                 Box::pin(async move {
+                    let request_headers_json = json_bind_text(usage.request_headers.as_ref())?;
+                    let request_body_json = json_bind_text(usage.request_body.as_ref())?;
+                    let provider_request_headers_json =
+                        json_bind_text(usage.provider_request_headers.as_ref())?;
+                    let provider_request_body_json =
+                        json_bind_text(usage.provider_request_body.as_ref())?;
+                    let response_headers_json = json_bind_text(usage.response_headers.as_ref())?;
+                    let response_body_json = json_bind_text(usage.response_body.as_ref())?;
+                    let client_response_headers_json =
+                        json_bind_text(usage.client_response_headers.as_ref())?;
+                    let client_response_body_json =
+                        json_bind_text(usage.client_response_body.as_ref())?;
+                    let request_metadata_json = json_bind_text(usage.request_metadata.as_ref())?;
                     let row = sqlx::query(UPSERT_SQL)
                         .bind(Uuid::new_v4().to_string())
                         .bind(&usage.request_id)
@@ -690,6 +720,18 @@ impl SqlxUsageReadRepository {
                                 .transpose()?,
                         )
                         .bind(usage.cache_creation_input_tokens.map(to_i32).transpose()?)
+                        .bind(
+                            usage
+                                .cache_creation_ephemeral_5m_input_tokens
+                                .map(to_i32)
+                                .transpose()?,
+                        )
+                        .bind(
+                            usage
+                                .cache_creation_ephemeral_1h_input_tokens
+                                .map(to_i32)
+                                .transpose()?,
+                        )
                         .bind(usage.cache_read_input_tokens.map(to_i32).transpose()?)
                         .bind(usage.cache_creation_cost_usd)
                         .bind(usage.cache_read_cost_usd)
@@ -703,15 +745,15 @@ impl SqlxUsageReadRepository {
                         .bind(usage.first_byte_time_ms.map(to_i32).transpose()?)
                         .bind(&usage.status)
                         .bind(&usage.billing_status)
-                        .bind(&usage.request_headers)
-                        .bind(&usage.request_body)
-                        .bind(&usage.provider_request_headers)
-                        .bind(&usage.provider_request_body)
-                        .bind(&usage.response_headers)
-                        .bind(&usage.response_body)
-                        .bind(&usage.client_response_headers)
-                        .bind(&usage.client_response_body)
-                        .bind(&usage.request_metadata)
+                        .bind(&request_headers_json)
+                        .bind(&request_body_json)
+                        .bind(&provider_request_headers_json)
+                        .bind(&provider_request_body_json)
+                        .bind(&response_headers_json)
+                        .bind(&response_body_json)
+                        .bind(&client_response_headers_json)
+                        .bind(&client_response_body_json)
+                        .bind(&request_metadata_json)
                         .bind(usage.finalized_at_unix_secs.map(|value| value as f64))
                         .bind(usage.created_at_unix_ms.map(|value| value as f64))
                         .fetch_one(&mut **tx)
@@ -826,6 +868,18 @@ fn map_usage_row(row: &sqlx::postgres::PgRow) -> Result<StoredRequestUsageAudit,
         .map(|value| to_u64(value, "usage.cache_creation_input_tokens"))
         .transpose()?
         .unwrap_or_default();
+    usage.cache_creation_ephemeral_5m_input_tokens = row
+        .try_get::<Option<i32>, _>("cache_creation_ephemeral_5m_input_tokens")
+        .map_postgres_err()?
+        .map(|value| to_u64(value, "usage.cache_creation_ephemeral_5m_input_tokens"))
+        .transpose()?
+        .unwrap_or_default();
+    usage.cache_creation_ephemeral_1h_input_tokens = row
+        .try_get::<Option<i32>, _>("cache_creation_ephemeral_1h_input_tokens")
+        .map_postgres_err()?
+        .map(|value| to_u64(value, "usage.cache_creation_ephemeral_1h_input_tokens"))
+        .transpose()?
+        .unwrap_or_default();
     usage.cache_read_input_tokens = row
         .try_get::<Option<i32>, _>("cache_read_input_tokens")
         .map_postgres_err()?
@@ -860,6 +914,16 @@ fn to_i32(value: u64) -> Result<i32, DataLayerError> {
 fn to_u64(value: i32, field_name: &str) -> Result<u64, DataLayerError> {
     u64::try_from(value)
         .map_err(|_| DataLayerError::UnexpectedValue(format!("invalid {field_name}: {value}")))
+}
+
+fn json_bind_text(value: Option<&Value>) -> Result<Option<String>, DataLayerError> {
+    value
+        .map(|value| {
+            serde_json::to_string(value).map_err(|err| {
+                DataLayerError::UnexpectedValue(format!("failed to serialize usage json: {err}"))
+            })
+        })
+        .transpose()
 }
 
 #[cfg(test)]
@@ -930,6 +994,8 @@ mod tests {
                 output_tokens: Some(20),
                 total_tokens: Some(30),
                 cache_creation_input_tokens: None,
+                cache_creation_ephemeral_5m_input_tokens: None,
+                cache_creation_ephemeral_1h_input_tokens: None,
                 cache_read_input_tokens: None,
                 cache_creation_cost_usd: None,
                 cache_read_cost_usd: None,
@@ -981,9 +1047,31 @@ mod tests {
     }
 
     #[test]
+    fn usage_sql_uses_json_null_placeholders_for_usage_payload_columns() {
+        assert!(super::LIST_USAGE_AUDITS_PREFIX.contains("NULL::json AS request_headers"));
+        assert!(super::LIST_USAGE_AUDITS_PREFIX.contains("NULL::json AS provider_request_body"));
+        assert!(super::LIST_RECENT_USAGE_AUDITS_PREFIX.contains("NULL::json AS request_headers"));
+        assert!(
+            super::LIST_RECENT_USAGE_AUDITS_PREFIX.contains("NULL::json AS provider_request_body")
+        );
+        assert!(!super::LIST_USAGE_AUDITS_PREFIX.contains("NULL::jsonb"));
+        assert!(!super::LIST_RECENT_USAGE_AUDITS_PREFIX.contains("NULL::jsonb"));
+    }
+
+    #[test]
+    fn usage_sql_casts_json_payload_bind_parameters_explicitly() {
+        for placeholder in 41..=49 {
+            assert!(
+                super::UPSERT_SQL.contains(format!("${placeholder}::json").as_str()),
+                "missing ::json cast for placeholder ${placeholder}"
+            );
+        }
+    }
+
+    #[test]
     fn usage_sql_insert_values_aligns_request_metadata_and_timestamps() {
-        assert!(super::UPSERT_SQL.contains("\n  $46,\n  $47,\n  CASE"));
-        assert!(super::UPSERT_SQL.contains("WHEN $48 IS NULL THEN NULL"));
-        assert!(super::UPSERT_SQL.contains("TO_TIMESTAMP($49::double precision)"));
+        assert!(super::UPSERT_SQL.contains("\n  $48::json,\n  $49::json,\n  CASE"));
+        assert!(super::UPSERT_SQL.contains("WHEN $50 IS NULL THEN NULL"));
+        assert!(super::UPSERT_SQL.contains("TO_TIMESTAMP($51::double precision)"));
     }
 }

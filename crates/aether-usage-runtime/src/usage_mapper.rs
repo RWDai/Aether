@@ -26,23 +26,13 @@ impl UsageMapper {
             }
         }
 
-        usage
+        usage.normalize_cache_creation_breakdown()
     }
 
     pub fn map_from_response(response: &serde_json::Value, api_format: &str) -> StandardizedUsage {
         let family = api_family(api_format);
-        let usage_value = if family == "gemini" {
-            response
-                .get("usageMetadata")
-                .or_else(|| {
-                    response
-                        .get("candidates")
-                        .and_then(|v| v.get(0))
-                        .and_then(|v| v.get("usageMetadata"))
-                })
-                .unwrap_or(&serde_json::Value::Null)
-        } else {
-            response.get("usage").unwrap_or(&serde_json::Value::Null)
+        let Some(usage_value) = resolve_usage_value(response, family.as_str()) else {
+            return StandardizedUsage::new();
         };
         Self::map(usage_value, api_format, None)
     }
@@ -74,12 +64,30 @@ fn base_mapping(api_format: &str) -> BTreeMap<String, String> {
         "openai" => {
             mapping.insert("prompt_tokens".to_string(), "input_tokens".to_string());
             mapping.insert("completion_tokens".to_string(), "output_tokens".to_string());
+            mapping.insert("input_tokens".to_string(), "input_tokens".to_string());
+            mapping.insert("output_tokens".to_string(), "output_tokens".to_string());
             mapping.insert(
                 "prompt_tokens_details.cached_tokens".to_string(),
                 "cache_read_tokens".to_string(),
             );
             mapping.insert(
+                "input_tokens_details.cached_tokens".to_string(),
+                "cache_read_tokens".to_string(),
+            );
+            mapping.insert(
+                "prompt_tokens_details.cached_creation_tokens".to_string(),
+                "cache_creation_tokens".to_string(),
+            );
+            mapping.insert(
+                "input_tokens_details.cached_creation_tokens".to_string(),
+                "cache_creation_tokens".to_string(),
+            );
+            mapping.insert(
                 "completion_tokens_details.reasoning_tokens".to_string(),
+                "reasoning_tokens".to_string(),
+            );
+            mapping.insert(
+                "output_tokens_details.reasoning_tokens".to_string(),
                 "reasoning_tokens".to_string(),
             );
         }
@@ -103,6 +111,26 @@ fn base_mapping(api_format: &str) -> BTreeMap<String, String> {
             );
             mapping.insert(
                 "usageMetadata.cachedContentTokenCount".to_string(),
+                "cache_read_tokens".to_string(),
+            );
+        }
+        "claude" | "anthropic" => {
+            mapping.insert("input_tokens".to_string(), "input_tokens".to_string());
+            mapping.insert("output_tokens".to_string(), "output_tokens".to_string());
+            mapping.insert(
+                "cache_creation_input_tokens".to_string(),
+                "cache_creation_tokens".to_string(),
+            );
+            mapping.insert(
+                "cache_creation.ephemeral_5m_input_tokens".to_string(),
+                "cache_creation_ephemeral_5m_tokens".to_string(),
+            );
+            mapping.insert(
+                "cache_creation.ephemeral_1h_input_tokens".to_string(),
+                "cache_creation_ephemeral_1h_tokens".to_string(),
+            );
+            mapping.insert(
+                "cache_read_input_tokens".to_string(),
                 "cache_read_tokens".to_string(),
             );
         }
@@ -130,6 +158,47 @@ fn get_nested_value<'a>(value: &'a serde_json::Value, path: &str) -> Option<&'a 
     Some(current)
 }
 
+fn resolve_usage_value<'a>(
+    response: &'a serde_json::Value,
+    family: &str,
+) -> Option<&'a serde_json::Value> {
+    match family {
+        "gemini" => {
+            if let Some(usage) = response.get("usageMetadata") {
+                return Some(usage);
+            }
+            if let Some(usage) = response
+                .get("candidates")
+                .and_then(|value| value.get(0))
+                .and_then(|value| value.get("usageMetadata"))
+            {
+                return Some(usage);
+            }
+        }
+        _ => {
+            if let Some(usage) = response.get("usage") {
+                return Some(usage);
+            }
+        }
+    }
+
+    if let Some(nested) = response.get("response") {
+        if let Some(usage) = resolve_usage_value(nested, family) {
+            return Some(usage);
+        }
+    }
+
+    if let Some(chunks) = response.get("chunks").and_then(serde_json::Value::as_array) {
+        for chunk in chunks.iter().rev() {
+            if let Some(usage) = resolve_usage_value(chunk, family) {
+                return Some(usage);
+            }
+        }
+    }
+
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::{map_usage, map_usage_from_response};
@@ -140,7 +209,10 @@ mod tests {
             &serde_json::json!({
                 "prompt_tokens": 12,
                 "completion_tokens": 8,
-                "prompt_tokens_details": { "cached_tokens": 2 },
+                "prompt_tokens_details": {
+                    "cached_tokens": 2,
+                    "cached_creation_tokens": 1
+                },
                 "completion_tokens_details": { "reasoning_tokens": 3 }
             }),
             "openai:chat",
@@ -148,8 +220,79 @@ mod tests {
 
         assert_eq!(usage.input_tokens, 12);
         assert_eq!(usage.output_tokens, 8);
+        assert_eq!(usage.cache_creation_tokens, 1);
         assert_eq!(usage.cache_read_tokens, 2);
         assert_eq!(usage.reasoning_tokens, 3);
+    }
+
+    #[test]
+    fn maps_openai_responses_usage_from_response() {
+        let usage = map_usage_from_response(
+            &serde_json::json!({
+                "usage": {
+                    "input_tokens": 14,
+                    "output_tokens": 6,
+                    "total_tokens": 20,
+                    "input_tokens_details": {
+                        "cached_tokens": 3,
+                        "cached_creation_tokens": 2
+                    },
+                    "output_tokens_details": {
+                        "reasoning_tokens": 1
+                    }
+                }
+            }),
+            "openai:cli",
+        );
+
+        assert_eq!(usage.input_tokens, 14);
+        assert_eq!(usage.output_tokens, 6);
+        assert_eq!(usage.cache_creation_tokens, 2);
+        assert_eq!(usage.cache_read_tokens, 3);
+        assert_eq!(usage.reasoning_tokens, 1);
+    }
+
+    #[test]
+    fn maps_openai_responses_usage_from_stream_chunks() {
+        let usage = map_usage_from_response(
+            &serde_json::json!({
+                "chunks": [
+                    {
+                        "type": "response.created",
+                        "response": {
+                            "id": "resp_123",
+                            "object": "response"
+                        }
+                    },
+                    {
+                        "type": "response.completed",
+                        "response": {
+                            "id": "resp_123",
+                            "object": "response",
+                            "usage": {
+                                "input_tokens": 9,
+                                "output_tokens": 4,
+                                "total_tokens": 13,
+                                "input_tokens_details": {
+                                    "cached_tokens": 5,
+                                    "cached_creation_tokens": 2
+                                },
+                                "output_tokens_details": {
+                                    "reasoning_tokens": 1
+                                }
+                            }
+                        }
+                    }
+                ]
+            }),
+            "openai:cli",
+        );
+
+        assert_eq!(usage.input_tokens, 9);
+        assert_eq!(usage.output_tokens, 4);
+        assert_eq!(usage.cache_creation_tokens, 2);
+        assert_eq!(usage.cache_read_tokens, 5);
+        assert_eq!(usage.reasoning_tokens, 1);
     }
 
     #[test]
@@ -168,6 +311,30 @@ mod tests {
         assert_eq!(usage.output_tokens, 5);
         assert_eq!(usage.cache_creation_tokens, 4);
         assert_eq!(usage.cache_read_tokens, 1);
+    }
+
+    #[test]
+    fn maps_claude_usage_with_ephemeral_cache_breakdown() {
+        let usage = map_usage(
+            &serde_json::json!({
+                "input_tokens": 1,
+                "output_tokens": 8,
+                "cache_creation": {
+                    "ephemeral_1h_input_tokens": 0,
+                    "ephemeral_5m_input_tokens": 5191
+                },
+                "cache_creation_input_tokens": 5191,
+                "cache_read_input_tokens": 97634
+            }),
+            "claude:chat",
+        );
+
+        assert_eq!(usage.input_tokens, 1);
+        assert_eq!(usage.output_tokens, 8);
+        assert_eq!(usage.cache_creation_tokens, 5191);
+        assert_eq!(usage.cache_creation_ephemeral_5m_tokens, 5191);
+        assert_eq!(usage.cache_creation_ephemeral_1h_tokens, 0);
+        assert_eq!(usage.cache_read_tokens, 97634);
     }
 
     #[test]

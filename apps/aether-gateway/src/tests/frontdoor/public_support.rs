@@ -2387,6 +2387,8 @@ fn sample_user_usage_audit(
     )
     .expect("usage should build");
     usage.cache_creation_input_tokens = 10;
+    usage.cache_creation_ephemeral_5m_input_tokens = 4;
+    usage.cache_creation_ephemeral_1h_input_tokens = 6;
     usage.cache_read_input_tokens = 15;
     usage.cache_creation_cost_usd = 0.05;
     usage.cache_read_cost_usd = 0.02;
@@ -4734,12 +4736,34 @@ async fn gateway_handles_users_me_usage_locally_without_proxying_upstream() {
         3
     );
     assert_eq!(
+        payload["records"][0]["cache_creation_ephemeral_5m_input_tokens"],
+        4
+    );
+    assert_eq!(payload["records"][0]["effective_input_tokens"], 105);
+    assert_eq!(
+        payload["records"][0]["cache_creation_ephemeral_1h_input_tokens"],
+        6
+    );
+    assert_eq!(
         payload["summary_by_model"]
             .as_array()
             .expect("summary array")
             .len(),
         2
     );
+    assert_eq!(
+        payload["summary_by_model"][0]["cache_creation_ephemeral_5m_tokens"],
+        4
+    );
+    assert_eq!(
+        payload["summary_by_model"][0]["cache_creation_ephemeral_1h_tokens"],
+        6
+    );
+    assert_eq!(
+        payload["summary_by_model"][0]["effective_input_tokens"],
+        105
+    );
+    assert_eq!(payload["summary_by_model"][0]["total_input_context"], 145);
     assert_eq!(payload["billing"]["id"], "wallet-auth-1");
     assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
 
@@ -4822,6 +4846,8 @@ async fn gateway_handles_users_me_usage_active_locally_without_proxying_upstream
     let requests = payload["requests"].as_array().expect("requests array");
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[0]["status"], "streaming");
+    assert_eq!(requests[0]["cache_creation_ephemeral_5m_input_tokens"], 4);
+    assert_eq!(requests[0]["cache_creation_ephemeral_1h_input_tokens"], 6);
     assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
 
     gateway_handle.abort();

@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use aether_billing::normalize_input_tokens_for_billing;
 use aether_data_contracts::repository::usage::{StoredRequestUsageAudit, UsageAuditListQuery};
 use axum::{
     body::Body,
@@ -88,9 +89,31 @@ fn parse_users_me_usage_ids(query: Option<&str>) -> Option<BTreeSet<String>> {
     (!values.is_empty()).then_some(values)
 }
 
+fn users_me_usage_cache_creation_tokens(item: &StoredRequestUsageAudit) -> u64 {
+    let classified = item
+        .cache_creation_ephemeral_5m_input_tokens
+        .saturating_add(item.cache_creation_ephemeral_1h_input_tokens);
+    if item.cache_creation_input_tokens == 0 && classified > 0 {
+        classified
+    } else {
+        item.cache_creation_input_tokens
+    }
+}
+
 fn users_me_usage_total_input_context(item: &StoredRequestUsageAudit) -> u64 {
     item.input_tokens
+        .saturating_add(users_me_usage_cache_creation_tokens(item))
         .saturating_add(item.cache_read_input_tokens)
+}
+
+fn users_me_usage_effective_input_tokens(item: &StoredRequestUsageAudit) -> u64 {
+    let api_format = item
+        .endpoint_api_format
+        .as_deref()
+        .or(item.api_format.as_deref());
+    let input_tokens = i64::try_from(item.input_tokens).unwrap_or(i64::MAX);
+    let cache_read_tokens = i64::try_from(item.cache_read_input_tokens).unwrap_or(i64::MAX);
+    normalize_input_tokens_for_billing(api_format, input_tokens, cache_read_tokens) as u64
 }
 
 fn users_me_usage_effective_unix_secs(item: &StoredRequestUsageAudit) -> u64 {
@@ -152,6 +175,7 @@ fn build_users_me_usage_record_payload(
         "endpoint_api_format": item.endpoint_api_format,
         "has_format_conversion": item.has_format_conversion,
         "input_tokens": item.input_tokens,
+        "effective_input_tokens": users_me_usage_effective_input_tokens(item),
         "output_tokens": item.output_tokens,
         "total_tokens": item.total_tokens,
         "cost": round_to(item.total_cost_usd, 6),
@@ -161,6 +185,8 @@ fn build_users_me_usage_record_payload(
         "status": item.status,
         "created_at": unix_secs_to_rfc3339(item.created_at_unix_ms),
         "cache_creation_input_tokens": item.cache_creation_input_tokens,
+        "cache_creation_ephemeral_5m_input_tokens": item.cache_creation_ephemeral_5m_input_tokens,
+        "cache_creation_ephemeral_1h_input_tokens": item.cache_creation_ephemeral_1h_input_tokens,
         "cache_read_input_tokens": item.cache_read_input_tokens,
         "status_code": item.status_code,
         "error_message": item.error_message,
@@ -186,8 +212,11 @@ fn build_users_me_usage_active_payload(item: &StoredRequestUsageAudit) -> serde_
         "id": item.id,
         "status": item.status,
         "input_tokens": item.input_tokens,
+        "effective_input_tokens": users_me_usage_effective_input_tokens(item),
         "output_tokens": item.output_tokens,
         "cache_creation_input_tokens": item.cache_creation_input_tokens,
+        "cache_creation_ephemeral_5m_input_tokens": item.cache_creation_ephemeral_5m_input_tokens,
+        "cache_creation_ephemeral_1h_input_tokens": item.cache_creation_ephemeral_1h_input_tokens,
         "cache_read_input_tokens": item.cache_read_input_tokens,
         "cost": round_to(item.total_cost_usd, 6),
         "actual_cost": round_to(item.actual_total_cost_usd, 6),
@@ -231,10 +260,13 @@ fn build_users_me_usage_summary_by_model(
                 "model": item.model,
                 "requests": 0_u64,
                 "input_tokens": 0_u64,
+                "effective_input_tokens": 0_u64,
                 "output_tokens": 0_u64,
                 "total_tokens": 0_u64,
                 "cache_read_tokens": 0_u64,
                 "cache_creation_tokens": 0_u64,
+                "cache_creation_ephemeral_5m_tokens": 0_u64,
+                "cache_creation_ephemeral_1h_tokens": 0_u64,
                 "total_input_context": 0_u64,
                 "cache_hit_rate": 0.0,
                 "total_cost_usd": 0.0,
@@ -245,6 +277,10 @@ fn build_users_me_usage_summary_by_model(
             .as_u64()
             .unwrap_or(0)
             .saturating_add(item.input_tokens));
+        entry["effective_input_tokens"] = json!(entry["effective_input_tokens"]
+            .as_u64()
+            .unwrap_or(0)
+            .saturating_add(users_me_usage_effective_input_tokens(item)));
         entry["output_tokens"] = json!(entry["output_tokens"]
             .as_u64()
             .unwrap_or(0)
@@ -260,7 +296,17 @@ fn build_users_me_usage_summary_by_model(
         entry["cache_creation_tokens"] = json!(entry["cache_creation_tokens"]
             .as_u64()
             .unwrap_or(0)
-            .saturating_add(item.cache_creation_input_tokens));
+            .saturating_add(users_me_usage_cache_creation_tokens(item)));
+        entry["cache_creation_ephemeral_5m_tokens"] = json!(entry
+            ["cache_creation_ephemeral_5m_tokens"]
+            .as_u64()
+            .unwrap_or(0)
+            .saturating_add(item.cache_creation_ephemeral_5m_input_tokens));
+        entry["cache_creation_ephemeral_1h_tokens"] = json!(entry
+            ["cache_creation_ephemeral_1h_tokens"]
+            .as_u64()
+            .unwrap_or(0)
+            .saturating_add(item.cache_creation_ephemeral_1h_input_tokens));
         entry["total_input_context"] = json!(entry["total_input_context"]
             .as_u64()
             .unwrap_or(0)
@@ -320,11 +366,14 @@ fn build_users_me_usage_summary_by_provider(
                 json!({
                     "provider": item.provider_name,
                     "requests": 0_u64,
+                    "effective_input_tokens": 0_u64,
                     "total_tokens": 0_u64,
                     "total_input_context": 0_u64,
                     "output_tokens": 0_u64,
                     "cache_read_tokens": 0_u64,
                     "cache_creation_tokens": 0_u64,
+                    "cache_creation_ephemeral_5m_tokens": 0_u64,
+                    "cache_creation_ephemeral_1h_tokens": 0_u64,
                     "cache_hit_rate": 0.0,
                     "total_cost_usd": 0.0,
                     "success_rate": 0.0,
@@ -343,6 +392,10 @@ fn build_users_me_usage_summary_by_provider(
             .as_u64()
             .unwrap_or(0)
             .saturating_add(users_me_usage_total_input_context(item)));
+        entry["effective_input_tokens"] = json!(entry["effective_input_tokens"]
+            .as_u64()
+            .unwrap_or(0)
+            .saturating_add(users_me_usage_effective_input_tokens(item)));
         entry["output_tokens"] = json!(entry["output_tokens"]
             .as_u64()
             .unwrap_or(0)
@@ -354,7 +407,17 @@ fn build_users_me_usage_summary_by_provider(
         entry["cache_creation_tokens"] = json!(entry["cache_creation_tokens"]
             .as_u64()
             .unwrap_or(0)
-            .saturating_add(item.cache_creation_input_tokens));
+            .saturating_add(users_me_usage_cache_creation_tokens(item)));
+        entry["cache_creation_ephemeral_5m_tokens"] = json!(entry
+            ["cache_creation_ephemeral_5m_tokens"]
+            .as_u64()
+            .unwrap_or(0)
+            .saturating_add(item.cache_creation_ephemeral_5m_input_tokens));
+        entry["cache_creation_ephemeral_1h_tokens"] = json!(entry
+            ["cache_creation_ephemeral_1h_tokens"]
+            .as_u64()
+            .unwrap_or(0)
+            .saturating_add(item.cache_creation_ephemeral_1h_input_tokens));
         entry["total_cost_usd"] =
             json!(entry["total_cost_usd"].as_f64().unwrap_or(0.0) + item.total_cost_usd);
 
@@ -445,10 +508,13 @@ fn build_users_me_usage_summary_by_api_format(
                 "api_format": api_format,
                 "request_count": 0_u64,
                 "total_tokens": 0_u64,
+                "effective_input_tokens": 0_u64,
                 "total_input_context": 0_u64,
                 "output_tokens": 0_u64,
                 "cache_read_tokens": 0_u64,
                 "cache_creation_tokens": 0_u64,
+                "cache_creation_ephemeral_5m_tokens": 0_u64,
+                "cache_creation_ephemeral_1h_tokens": 0_u64,
                 "cache_hit_rate": 0.0,
                 "total_cost_usd": 0.0,
                 "avg_response_time_ms": 0.0,
@@ -468,6 +534,10 @@ fn build_users_me_usage_summary_by_api_format(
             .as_u64()
             .unwrap_or(0)
             .saturating_add(users_me_usage_total_input_context(item)));
+        entry["effective_input_tokens"] = json!(entry["effective_input_tokens"]
+            .as_u64()
+            .unwrap_or(0)
+            .saturating_add(users_me_usage_effective_input_tokens(item)));
         entry["output_tokens"] = json!(entry["output_tokens"]
             .as_u64()
             .unwrap_or(0)
@@ -479,7 +549,17 @@ fn build_users_me_usage_summary_by_api_format(
         entry["cache_creation_tokens"] = json!(entry["cache_creation_tokens"]
             .as_u64()
             .unwrap_or(0)
-            .saturating_add(item.cache_creation_input_tokens));
+            .saturating_add(users_me_usage_cache_creation_tokens(item)));
+        entry["cache_creation_ephemeral_5m_tokens"] = json!(entry
+            ["cache_creation_ephemeral_5m_tokens"]
+            .as_u64()
+            .unwrap_or(0)
+            .saturating_add(item.cache_creation_ephemeral_5m_input_tokens));
+        entry["cache_creation_ephemeral_1h_tokens"] = json!(entry
+            ["cache_creation_ephemeral_1h_tokens"]
+            .as_u64()
+            .unwrap_or(0)
+            .saturating_add(item.cache_creation_ephemeral_1h_input_tokens));
         entry["total_cost_usd"] =
             json!(entry["total_cost_usd"].as_f64().unwrap_or(0.0) + item.total_cost_usd);
         if let Some(response_time_ms) = item.response_time_ms {

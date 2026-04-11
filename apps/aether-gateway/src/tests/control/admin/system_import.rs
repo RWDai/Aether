@@ -172,6 +172,37 @@ fn sample_system_import_payload() -> Value {
     })
 }
 
+fn sample_oauth_system_import_payload(access_token: &str, refresh_token: &str) -> Value {
+    json!({
+        "version": "2.2",
+        "merge_mode": "overwrite",
+        "global_models": [],
+        "providers": [{
+            "name": "oauth-import-provider",
+            "provider_type": "codex",
+            "website": "https://example.com",
+            "is_active": true,
+            "endpoints": [{
+                "api_format": "openai:cli",
+                "base_url": "https://chatgpt.com",
+                "is_active": true
+            }],
+            "api_keys": [{
+                "name": "oauth-primary",
+                "auth_type": "oauth",
+                "api_key": access_token,
+                "auth_config": format!(
+                    "{{\"provider_type\":\"codex\",\"refresh_token\":\"{}\",\"email\":\"alice@example.com\",\"account_id\":\"acct-codex-123\",\"plan_type\":\"plus\"}}",
+                    refresh_token
+                ),
+                "api_formats": ["openai:cli"],
+                "is_active": true
+            }],
+            "models": []
+        }]
+    })
+}
+
 fn fixture_system_import_payload(name: &str) -> Value {
     let raw = match name {
         "v20" => include_str!("../../fixtures/admin_system/config_export_v20.json"),
@@ -507,6 +538,255 @@ async fn gateway_imports_admin_system_config_fixtures_from_legacy_exports() {
 }
 
 #[tokio::test]
+async fn gateway_reports_field_path_for_invalid_admin_system_config_import_shape() {
+    let gateway = build_router_with_state(
+        AppState::new()
+            .expect("gateway should build")
+            .with_data_state_for_tests(build_empty_admin_system_data_state()),
+    );
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+
+    let response = reqwest::Client::new()
+        .post(format!("{gateway_url}/api/admin/system/config/import"))
+        .header(GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .json(&json!({
+            "version": "2.2",
+            "providers": [{
+                "name": "import-openai",
+                "endpoints": [{
+                    "api_format": "openai:chat",
+                    "base_url": "https://api.example.com",
+                    "is_active": "yes"
+                }]
+            }]
+        }))
+        .send()
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let payload: Value = response.json().await.expect("json body should parse");
+    let detail = payload["detail"]
+        .as_str()
+        .expect("detail should be a string");
+    assert!(detail.contains("配置文件格式无效"));
+    assert!(detail.contains("providers[0].endpoints[0].is_active"));
+
+    gateway_handle.abort();
+}
+
+#[tokio::test]
+async fn gateway_imports_admin_system_config_with_numeric_string_prices() {
+    let gateway = build_router_with_state(
+        AppState::new()
+            .expect("gateway should build")
+            .with_data_state_for_tests(build_empty_admin_system_data_state()),
+    );
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+
+    let mut payload = sample_system_import_payload();
+    payload["global_models"][0]["default_price_per_request"] = json!("1.80000000");
+    payload["providers"][0]["request_timeout"] = json!("30");
+    payload["providers"][0]["stream_first_byte_timeout"] = json!("15");
+    payload["providers"][0]["models"][0]["price_per_request"] = json!("0.70000000");
+
+    let response = reqwest::Client::new()
+        .post(format!("{gateway_url}/api/admin/system/config/import"))
+        .header(GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .json(&payload)
+        .send()
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response.json().await.expect("json body should parse");
+    assert_eq!(body["message"], "配置导入成功");
+    assert_eq!(body["stats"]["global_models"]["created"], json!(1));
+    assert_eq!(body["stats"]["providers"]["created"], json!(1));
+    assert_eq!(body["stats"]["models"]["created"], json!(1));
+
+    gateway_handle.abort();
+}
+
+#[tokio::test]
+async fn gateway_imports_oauth_provider_key_credentials_from_admin_system_config() {
+    let provider_catalog_repository = Arc::new(InMemoryProviderCatalogReadRepository::seed(
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    ));
+    let global_model_repository = Arc::new(InMemoryGlobalModelReadRepository::seed(Vec::<
+        StoredPublicGlobalModel,
+    >::new()));
+    let auth_module_repository = Arc::new(InMemoryAuthModuleReadRepository::seed(
+        Vec::<StoredOAuthProviderModuleConfig>::new(),
+        None,
+    ));
+    let oauth_provider_repository = Arc::new(InMemoryOAuthProviderRepository::seed(Vec::<
+        StoredOAuthProviderConfig,
+    >::new()));
+
+    let data_state = GatewayDataState::with_provider_catalog_repository_for_tests(Arc::clone(
+        &provider_catalog_repository,
+    ))
+    .with_global_model_repository_for_tests(Arc::clone(&global_model_repository))
+    .attach_auth_module_repository_for_tests(Arc::clone(&auth_module_repository))
+    .attach_oauth_provider_repository_for_tests(Arc::clone(&oauth_provider_repository))
+    .with_system_config_values_for_tests(Vec::<(String, Value)>::new())
+    .with_encryption_key_for_tests(DEVELOPMENT_ENCRYPTION_KEY);
+
+    let gateway = build_router_with_state(
+        AppState::new()
+            .expect("gateway should build")
+            .with_data_state_for_tests(data_state),
+    );
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+
+    let response = reqwest::Client::new()
+        .post(format!("{gateway_url}/api/admin/system/config/import"))
+        .header(GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .json(&sample_oauth_system_import_payload(
+            "oauth-access-token-1",
+            "oauth-refresh-token-1",
+        ))
+        .send()
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let providers = provider_catalog_repository
+        .list_providers(false)
+        .await
+        .expect("providers should load");
+    assert_eq!(providers.len(), 1);
+
+    let keys = provider_catalog_repository
+        .list_keys_by_provider_ids(std::slice::from_ref(&providers[0].id))
+        .await
+        .expect("keys should load");
+    assert_eq!(keys.len(), 1);
+    assert_eq!(keys[0].auth_type, "oauth");
+    assert_eq!(
+        decrypt_python_fernet_ciphertext(DEVELOPMENT_ENCRYPTION_KEY, &keys[0].encrypted_api_key)
+            .expect("oauth access token should decrypt"),
+        "oauth-access-token-1"
+    );
+    let auth_config = decrypt_python_fernet_ciphertext(
+        DEVELOPMENT_ENCRYPTION_KEY,
+        keys[0]
+            .encrypted_auth_config
+            .as_deref()
+            .expect("oauth auth config should exist"),
+    )
+    .expect("oauth auth config should decrypt");
+    let auth_config: Value =
+        serde_json::from_str(&auth_config).expect("oauth auth config json should parse");
+    assert_eq!(auth_config["provider_type"], "codex");
+    assert_eq!(auth_config["refresh_token"], "oauth-refresh-token-1");
+    assert_eq!(auth_config["email"], "alice@example.com");
+
+    gateway_handle.abort();
+}
+
+#[tokio::test]
+async fn gateway_overwrites_oauth_provider_key_credentials_from_admin_system_import() {
+    let provider_catalog_repository = Arc::new(InMemoryProviderCatalogReadRepository::seed(
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    ));
+    let global_model_repository = Arc::new(InMemoryGlobalModelReadRepository::seed(Vec::<
+        StoredPublicGlobalModel,
+    >::new()));
+    let auth_module_repository = Arc::new(InMemoryAuthModuleReadRepository::seed(
+        Vec::<StoredOAuthProviderModuleConfig>::new(),
+        None,
+    ));
+    let oauth_provider_repository = Arc::new(InMemoryOAuthProviderRepository::seed(Vec::<
+        StoredOAuthProviderConfig,
+    >::new()));
+
+    let data_state = GatewayDataState::with_provider_catalog_repository_for_tests(Arc::clone(
+        &provider_catalog_repository,
+    ))
+    .with_global_model_repository_for_tests(Arc::clone(&global_model_repository))
+    .attach_auth_module_repository_for_tests(Arc::clone(&auth_module_repository))
+    .attach_oauth_provider_repository_for_tests(Arc::clone(&oauth_provider_repository))
+    .with_system_config_values_for_tests(Vec::<(String, Value)>::new())
+    .with_encryption_key_for_tests(DEVELOPMENT_ENCRYPTION_KEY);
+
+    let gateway = build_router_with_state(
+        AppState::new()
+            .expect("gateway should build")
+            .with_data_state_for_tests(data_state),
+    );
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+    let client = reqwest::Client::new();
+
+    for (access_token, refresh_token) in [
+        ("oauth-access-token-old", "oauth-refresh-token-old"),
+        ("oauth-access-token-new", "oauth-refresh-token-new"),
+    ] {
+        let response = client
+            .post(format!("{gateway_url}/api/admin/system/config/import"))
+            .header(GATEWAY_HEADER, "rust-phase3b")
+            .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+            .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+            .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+            .json(&sample_oauth_system_import_payload(
+                access_token,
+                refresh_token,
+            ))
+            .send()
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    let providers = provider_catalog_repository
+        .list_providers(false)
+        .await
+        .expect("providers should load");
+    assert_eq!(providers.len(), 1);
+
+    let keys = provider_catalog_repository
+        .list_keys_by_provider_ids(std::slice::from_ref(&providers[0].id))
+        .await
+        .expect("keys should load");
+    assert_eq!(keys.len(), 1);
+    assert_eq!(keys[0].name, "oauth-primary");
+    assert_eq!(
+        decrypt_python_fernet_ciphertext(DEVELOPMENT_ENCRYPTION_KEY, &keys[0].encrypted_api_key)
+            .expect("oauth access token should decrypt"),
+        "oauth-access-token-new"
+    );
+    let auth_config = decrypt_python_fernet_ciphertext(
+        DEVELOPMENT_ENCRYPTION_KEY,
+        keys[0]
+            .encrypted_auth_config
+            .as_deref()
+            .expect("oauth auth config should exist"),
+    )
+    .expect("oauth auth config should decrypt");
+    let auth_config: Value =
+        serde_json::from_str(&auth_config).expect("oauth auth config json should parse");
+    assert_eq!(auth_config["refresh_token"], "oauth-refresh-token-new");
+
+    gateway_handle.abort();
+}
+
+#[tokio::test]
 async fn gateway_skips_proxy_nodes_during_admin_system_config_import() {
     let gateway = build_router_with_state(
         AppState::new()
@@ -547,6 +827,103 @@ async fn gateway_skips_proxy_nodes_during_admin_system_config_import() {
         .any(|item| item
             .as_str()
             .is_some_and(|value| value.contains("暂不支持导入代理节点"))));
+
+    gateway_handle.abort();
+}
+
+#[tokio::test]
+async fn gateway_preserves_manual_proxy_configs_while_skipping_proxy_nodes_during_import() {
+    let provider_catalog_repository = Arc::new(InMemoryProviderCatalogReadRepository::seed(
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    ));
+    let global_model_repository = Arc::new(InMemoryGlobalModelReadRepository::seed(Vec::<
+        StoredPublicGlobalModel,
+    >::new()));
+    let auth_module_repository = Arc::new(InMemoryAuthModuleReadRepository::seed(
+        Vec::<StoredOAuthProviderModuleConfig>::new(),
+        None,
+    ));
+    let oauth_provider_repository = Arc::new(InMemoryOAuthProviderRepository::seed(Vec::<
+        StoredOAuthProviderConfig,
+    >::new()));
+
+    let data_state = GatewayDataState::with_provider_catalog_repository_for_tests(Arc::clone(
+        &provider_catalog_repository,
+    ))
+    .with_global_model_repository_for_tests(Arc::clone(&global_model_repository))
+    .attach_auth_module_repository_for_tests(Arc::clone(&auth_module_repository))
+    .attach_oauth_provider_repository_for_tests(Arc::clone(&oauth_provider_repository))
+    .with_system_config_values_for_tests(Vec::<(String, Value)>::new())
+    .with_encryption_key_for_tests(DEVELOPMENT_ENCRYPTION_KEY);
+
+    let gateway = build_router_with_state(
+        AppState::new()
+            .expect("gateway should build")
+            .with_data_state_for_tests(data_state),
+    );
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+
+    let response = reqwest::Client::new()
+        .post(format!("{gateway_url}/api/admin/system/config/import"))
+        .header(GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .json(&json!({
+            "version": "2.2",
+            "merge_mode": "overwrite",
+            "global_models": [],
+            "providers": [{
+                "name": "manual-proxy-provider",
+                "provider_type": "custom",
+                "is_active": true,
+                "proxy": {
+                    "enabled": true,
+                    "url": "https://proxy.example"
+                },
+                "endpoints": [{
+                    "api_format": "openai:chat",
+                    "base_url": "https://api.example.com",
+                    "is_active": true
+                }],
+                "api_keys": [],
+                "models": []
+            }],
+            "proxy_nodes": [{
+                "id": "legacy-node-1",
+                "name": "Legacy Node",
+                "ip": "127.0.0.1",
+                "port": 8080
+            }]
+        }))
+        .send()
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: Value = response.json().await.expect("json body should parse");
+    assert!(payload["stats"]["errors"]
+        .as_array()
+        .expect("errors should be an array")
+        .iter()
+        .any(|item| item
+            .as_str()
+            .is_some_and(|value| value.contains("手动 URL 代理配置会保留"))));
+
+    let providers = provider_catalog_repository
+        .list_providers(false)
+        .await
+        .expect("providers should load");
+    assert_eq!(providers.len(), 1);
+    assert_eq!(
+        providers[0].proxy,
+        Some(json!({
+            "enabled": true,
+            "url": "https://proxy.example"
+        }))
+    );
 
     gateway_handle.abort();
 }

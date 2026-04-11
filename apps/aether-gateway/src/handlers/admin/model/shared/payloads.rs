@@ -1,11 +1,16 @@
-use crate::handlers::admin::shared::AdminTypedObjectPatch;
+use crate::handlers::admin::shared::{
+    deserialize_optional_f64_from_number_or_string, AdminTypedObjectPatch,
+};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct AdminGlobalModelCreateRequest {
     pub(crate) name: String,
     pub(crate) display_name: String,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_f64_from_number_or_string"
+    )]
     pub(crate) default_price_per_request: Option<f64>,
     #[serde(default)]
     pub(crate) default_tiered_pricing: Option<serde_json::Value>,
@@ -23,7 +28,10 @@ pub(crate) struct AdminGlobalModelUpdateRequest {
     pub(crate) display_name: Option<String>,
     #[serde(default)]
     pub(crate) is_active: Option<bool>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_f64_from_number_or_string"
+    )]
     pub(crate) default_price_per_request: Option<f64>,
     #[serde(default)]
     pub(crate) default_tiered_pricing: Option<serde_json::Value>,

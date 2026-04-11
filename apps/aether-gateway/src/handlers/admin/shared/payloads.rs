@@ -1,6 +1,33 @@
-use serde::de::DeserializeOwned;
+use serde::{de, de::DeserializeOwned, Deserialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
+
+pub(crate) fn deserialize_optional_f64_from_number_or_string<'de, D>(
+    deserializer: D,
+) -> Result<Option<f64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(number)) => number
+            .as_f64()
+            .filter(|value| value.is_finite())
+            .map(Some)
+            .ok_or_else(|| de::Error::custom("expected a finite number")),
+        Some(Value::String(raw)) => raw
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .filter(|value| value.is_finite())
+            .map(Some)
+            .ok_or_else(|| de::Error::custom("expected a finite number or numeric string")),
+        Some(_) => Err(de::Error::custom(
+            "expected a finite number or numeric string",
+        )),
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AdminJsonFieldState {

@@ -221,10 +221,14 @@ fn build_import_key_match_name(item: &ImportedProviderKey) -> Option<String> {
 
 fn normalize_import_key_raw_payload(
     raw_key: &Map<String, Value>,
+    auth_type: &str,
     normalized_api_formats: &[String],
     normalized_auth_config: Option<Value>,
 ) -> Map<String, Value> {
     let mut payload = raw_key.clone();
+    if auth_type == "oauth" {
+        payload.remove("api_key");
+    }
     payload.insert("api_formats".to_string(), json!(normalized_api_formats));
     if let Some(auth_config) = normalized_auth_config {
         payload.insert("auth_config".to_string(), auth_config);
@@ -232,6 +236,47 @@ fn normalize_import_key_raw_payload(
         payload.insert("auth_config".to_string(), Value::Null);
     }
     payload
+}
+
+fn apply_imported_oauth_key_credentials(
+    state: &AdminAppState<'_>,
+    raw_key: &Map<String, Value>,
+    normalized_auth_config: Option<&Value>,
+    record: &mut aether_data_contracts::repository::provider_catalog::StoredProviderCatalogKey,
+) -> Result<(), String> {
+    if let Some(api_key_value) = raw_key.get("api_key") {
+        let plaintext = match api_key_value {
+            Value::String(raw) => {
+                let trimmed = raw.trim();
+                if trimmed.is_empty() {
+                    "__placeholder__"
+                } else {
+                    trimmed
+                }
+            }
+            _ => "__placeholder__",
+        };
+        record.encrypted_api_key = state
+            .encrypt_catalog_secret_with_fallbacks(plaintext)
+            .ok_or_else(|| "gateway 未配置 provider key 加密密钥".to_string())?;
+    }
+
+    if raw_key.contains_key("auth_config") {
+        record.encrypted_auth_config = match normalized_auth_config {
+            Some(auth_config) => {
+                let plaintext =
+                    serde_json::to_string(auth_config).map_err(|err| err.to_string())?;
+                Some(
+                    state
+                        .encrypt_catalog_secret_with_fallbacks(&plaintext)
+                        .ok_or_else(|| "gateway 未配置 provider key 加密密钥".to_string())?,
+                )
+            }
+            None => None,
+        };
+    }
+
+    Ok(())
 }
 
 fn build_import_provider_model_record(
@@ -365,7 +410,7 @@ impl<'a> AdminAppState<'a> {
                 ));
             } else {
                 stats.errors.push(
-                    "当前 Rust 管理后端暂不支持导入代理节点；引用这些节点的代理配置将被清除"
+                    "当前 Rust 管理后端暂不支持导入代理节点；仅引用这些节点(node_id)的自动连接代理配置会被清除，手动 URL 代理配置会保留"
                         .to_string(),
                 );
             }
@@ -703,12 +748,13 @@ impl<'a> AdminAppState<'a> {
                 let normalized_auth_config = invalid!(normalize_import_auth_config(
                     imported_key.auth_config.clone()
                 ));
+                let auth_type = imported_key_auth_type(&imported_key);
                 let normalized_raw_key = normalize_import_key_raw_payload(
                     &raw_key,
+                    &auth_type,
                     &normalized_api_formats,
                     normalized_auth_config.clone(),
                 );
-                let auth_type = imported_key_auth_type(&imported_key);
                 let existing_key_index = if auth_type == "api_key" {
                     let target_key = imported_key
                         .api_key
@@ -785,6 +831,14 @@ impl<'a> AdminAppState<'a> {
                                 )
                                 .await
                             );
+                            if auth_type == "oauth" {
+                                invalid!(apply_imported_oauth_key_credentials(
+                                    self,
+                                    &raw_key,
+                                    normalized_auth_config.as_ref(),
+                                    &mut updated,
+                                ));
+                            }
                             updated.proxy =
                                 remap_import_proxy(imported_key.proxy.clone(), &node_id_map);
                             updated.fingerprint = invalid!(normalize_json_object(
@@ -815,6 +869,14 @@ impl<'a> AdminAppState<'a> {
                     self.build_admin_create_provider_key_record(&provider, payload)
                         .await
                 );
+                if auth_type == "oauth" {
+                    invalid!(apply_imported_oauth_key_credentials(
+                        self,
+                        &raw_key,
+                        normalized_auth_config.as_ref(),
+                        &mut record,
+                    ));
+                }
                 record.is_active = imported_key.is_active;
                 record.global_priority_by_format = invalid!(normalize_json_object(
                     imported_key.global_priority_by_format.clone(),

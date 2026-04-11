@@ -63,6 +63,33 @@ fn invalid_request(detail: impl Into<String>) -> (http::StatusCode, serde_json::
     )
 }
 
+fn deserialize_optional_f64_from_number_or_string<'de, D>(
+    deserializer: D,
+) -> Result<Option<f64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    match value {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(number)) => number
+            .as_f64()
+            .filter(|value| value.is_finite())
+            .map(Some)
+            .ok_or_else(|| de::Error::custom("expected a finite number")),
+        Some(Value::String(raw)) => raw
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .filter(|value| value.is_finite())
+            .map(Some)
+            .ok_or_else(|| de::Error::custom("expected a finite number or numeric string")),
+        Some(_) => Err(de::Error::custom(
+            "expected a finite number or numeric string",
+        )),
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AdminImportMergeMode {
@@ -139,7 +166,10 @@ pub struct AdminSystemConfigImportStats {
 pub struct AdminSystemConfigGlobalModel {
     pub name: String,
     pub display_name: String,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_f64_from_number_or_string"
+    )]
     pub default_price_per_request: Option<f64>,
     #[serde(default)]
     pub default_tiered_pricing: Option<Value>,
@@ -228,7 +258,10 @@ pub struct AdminSystemConfigProviderModel {
     pub provider_model_name: String,
     #[serde(default)]
     pub provider_model_mappings: Option<Value>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_f64_from_number_or_string"
+    )]
     pub price_per_request: Option<f64>,
     #[serde(default)]
     pub tiered_pricing: Option<Value>,
@@ -259,7 +292,10 @@ pub struct AdminSystemConfigProvider {
     pub provider_type: Option<String>,
     #[serde(default)]
     pub billing_type: Option<String>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_f64_from_number_or_string"
+    )]
     pub monthly_quota_usd: Option<f64>,
     #[serde(default)]
     pub quota_reset_day: Option<u64>,
@@ -275,9 +311,15 @@ pub struct AdminSystemConfigProvider {
     pub concurrent_limit: Option<i32>,
     #[serde(default)]
     pub max_retries: Option<i32>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_f64_from_number_or_string"
+    )]
     pub stream_first_byte_timeout: Option<f64>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_f64_from_number_or_string"
+    )]
     pub request_timeout: Option<f64>,
     #[serde(default)]
     pub proxy: Option<Value>,
@@ -1129,10 +1171,19 @@ pub fn parse_admin_system_config_import_request(
     }
 
     let merge_mode = AdminImportMergeMode::parse_json_value(root.get("merge_mode"))?;
-    let document = serde_json::from_value::<AdminSystemConfigDocument>(serde_json::Value::Object(
-        root.clone(),
-    ))
-    .map_err(|_| invalid_request("请求数据验证失败"))?;
+    let document = serde_path_to_error::deserialize::<_, AdminSystemConfigDocument>(
+        serde_json::Value::Object(root.clone()),
+    )
+    .map_err(|err| {
+        let path = err.path().to_string();
+        let inner = err.into_inner();
+        let detail = if path.is_empty() {
+            format!("配置文件格式无效: {inner}")
+        } else {
+            format!("配置文件格式无效: {path}: {inner}")
+        };
+        invalid_request(detail)
+    })?;
 
     Ok(ParsedAdminSystemConfigImportRequest {
         request: AdminSystemConfigImportRequest {
@@ -1872,6 +1923,80 @@ mod tests {
             err.1["detail"],
             "merge_mode 仅支持 skip / overwrite / error"
         );
+    }
+
+    #[test]
+    fn parse_admin_system_config_import_request_reports_field_path_for_shape_errors() {
+        let err = parse_admin_system_config_import_request(
+            json!({
+                "version": "2.2",
+                "global_models": [],
+                "providers": [{
+                    "name": "import-openai",
+                    "endpoints": [{
+                        "api_format": "openai:chat",
+                        "base_url": "https://api.example.com",
+                        "is_active": "yes"
+                    }]
+                }],
+            })
+            .to_string()
+            .as_bytes(),
+        )
+        .expect_err("invalid endpoint shape should fail");
+
+        assert_eq!(err.0, http::StatusCode::BAD_REQUEST);
+        let detail = err.1["detail"].as_str().expect("detail should be a string");
+        assert!(detail.contains("配置文件格式无效"));
+        assert!(detail.contains("providers[0].endpoints[0].is_active"));
+    }
+
+    #[test]
+    fn parse_admin_system_config_import_request_accepts_numeric_string_fields() {
+        let parsed = parse_admin_system_config_import_request(
+            json!({
+                "version": "2.2",
+                "global_models": [{
+                    "name": "veo3.1",
+                    "display_name": "Veo 3.1",
+                    "default_price_per_request": "1.80000000",
+                }],
+                "providers": [{
+                    "name": "undyapi",
+                    "monthly_quota_usd": "12.50",
+                    "stream_first_byte_timeout": "60",
+                    "request_timeout": "120",
+                    "models": [{
+                        "global_model_name": "veo3.1",
+                        "provider_model_name": "veo3.1",
+                        "price_per_request": "0.70000000",
+                    }]
+                }],
+            })
+            .to_string()
+            .as_bytes(),
+        )
+        .expect("numeric string fields should parse");
+
+        let global_model = parsed
+            .request
+            .document
+            .global_models
+            .first()
+            .expect("global model should exist");
+        assert_eq!(global_model.default_price_per_request, Some(1.8));
+
+        let provider = parsed
+            .request
+            .document
+            .providers
+            .first()
+            .expect("provider should exist");
+        assert_eq!(provider.monthly_quota_usd, Some(12.5));
+        assert_eq!(provider.stream_first_byte_timeout, Some(60.0));
+        assert_eq!(provider.request_timeout, Some(120.0));
+        assert_eq!(provider.models.len(), 1);
+        assert_eq!(provider.models[0].price_per_request, Some(0.7));
     }
 
     #[test]

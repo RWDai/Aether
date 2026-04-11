@@ -1,3 +1,4 @@
+use crate::handlers::admin::shared::AdminTypedObjectPatch;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -31,6 +32,8 @@ pub(crate) struct AdminGlobalModelUpdateRequest {
     #[serde(default)]
     pub(crate) config: Option<serde_json::Value>,
 }
+
+pub(crate) type AdminGlobalModelUpdatePatch = AdminTypedObjectPatch<AdminGlobalModelUpdateRequest>;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct AdminBatchDeleteIdsRequest {

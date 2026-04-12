@@ -365,7 +365,9 @@ mod tests {
     use aether_data_contracts::repository::provider_catalog::{
         StoredProviderCatalogEndpoint, StoredProviderCatalogKey, StoredProviderCatalogProvider,
     };
-    use aether_model_fetch::{ModelFetchAssociationStore, ModelFetchTransportRuntime};
+    use aether_model_fetch::{
+        build_models_fetch_execution_plan, ModelFetchAssociationStore, ModelFetchTransportRuntime,
+    };
     use async_trait::async_trait;
     use serde_json::{json, Value};
     use std::collections::{HashMap, VecDeque};
@@ -744,6 +746,30 @@ mod tests {
             telemetry: None,
             error: None,
         }
+    }
+
+    #[tokio::test]
+    async fn gateway_runtime_state_supports_shared_models_fetch_plan_builder() {
+        let state = TestState::default();
+        let transport = sample_transport(
+            "openai",
+            "provider-openai",
+            "endpoint-openai-chat",
+            "key-openai-chat",
+            "openai:chat",
+            "api_key",
+            None,
+        );
+
+        let plan = build_models_fetch_execution_plan(&state, &transport)
+            .await
+            .expect("shared models fetch plan should build");
+
+        assert_eq!(plan.method, "GET");
+        assert_eq!(plan.provider_id, "provider-openai");
+        assert_eq!(plan.endpoint_id, "endpoint-openai-chat");
+        assert_eq!(plan.key_id, "key-openai-chat");
+        assert_eq!(plan.model_name.as_deref(), Some("models"));
     }
 
     #[tokio::test]

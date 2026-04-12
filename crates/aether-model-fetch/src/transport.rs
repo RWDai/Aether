@@ -67,6 +67,17 @@ pub async fn build_models_fetch_execution_plan(
     build_standard_models_fetch_execution_plan(runtime, transport, None).await
 }
 
+struct ModelFetchExecutionPlanRequest {
+    method: String,
+    url: String,
+    headers: BTreeMap<String, String>,
+    content_type: Option<String>,
+    body: RequestBody,
+    client_api_format: String,
+    provider_api_format: String,
+    model_name: Option<String>,
+}
+
 pub async fn build_standard_models_fetch_execution_plan(
     runtime: &(impl ModelFetchTransportRuntime + ?Sized),
     transport: &GatewayProviderTransportSnapshot,
@@ -96,18 +107,20 @@ pub async fn build_standard_models_fetch_execution_plan(
     build_execution_plan(
         runtime,
         transport,
-        "GET",
-        upstream_url,
-        headers,
-        None,
-        RequestBody {
-            json_body: None,
-            body_bytes_b64: None,
-            body_ref: None,
+        ModelFetchExecutionPlanRequest {
+            method: "GET".to_string(),
+            url: upstream_url,
+            headers,
+            content_type: None,
+            body: RequestBody {
+                json_body: None,
+                body_bytes_b64: None,
+                body_ref: None,
+            },
+            client_api_format: provider_api_format.clone(),
+            provider_api_format,
+            model_name: Some("models".to_string()),
         },
-        provider_api_format.clone(),
-        provider_api_format,
-        Some("models".to_string()),
     )
     .await
 }
@@ -148,14 +161,16 @@ pub async fn build_antigravity_fetch_available_models_plan(
     build_execution_plan(
         runtime,
         transport,
-        "POST",
-        url,
-        headers,
-        Some("application/json".to_string()),
-        RequestBody::from_json(json!({ "project": project_id })),
-        "gemini:chat".to_string(),
-        ANTIGRAVITY_FETCH_PROVIDER_API_FORMAT.to_string(),
-        Some("fetchAvailableModels".to_string()),
+        ModelFetchExecutionPlanRequest {
+            method: "POST".to_string(),
+            url,
+            headers,
+            content_type: Some("application/json".to_string()),
+            body: RequestBody::from_json(json!({ "project": project_id })),
+            client_api_format: "gemini:chat".to_string(),
+            provider_api_format: ANTIGRAVITY_FETCH_PROVIDER_API_FORMAT.to_string(),
+            model_name: Some("fetchAvailableModels".to_string()),
+        },
     )
     .await
 }
@@ -180,20 +195,22 @@ pub async fn build_gemini_cli_load_code_assist_plan(
     build_execution_plan(
         runtime,
         transport,
-        "POST",
-        "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist".to_string(),
-        headers,
-        Some("application/json".to_string()),
-        RequestBody::from_json(json!({
-            "metadata": {
-                "ideType": "ANTIGRAVITY",
-                "platform": "PLATFORM_UNSPECIFIED",
-                "pluginType": "GEMINI",
-            }
-        })),
-        "gemini:cli".to_string(),
-        GEMINI_CLI_LOAD_CODE_ASSIST_PROVIDER_API_FORMAT.to_string(),
-        Some("loadCodeAssist".to_string()),
+        ModelFetchExecutionPlanRequest {
+            method: "POST".to_string(),
+            url: "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist".to_string(),
+            headers,
+            content_type: Some("application/json".to_string()),
+            body: RequestBody::from_json(json!({
+                "metadata": {
+                    "ideType": "ANTIGRAVITY",
+                    "platform": "PLATFORM_UNSPECIFIED",
+                    "pluginType": "GEMINI",
+                }
+            })),
+            client_api_format: "gemini:cli".to_string(),
+            provider_api_format: GEMINI_CLI_LOAD_CODE_ASSIST_PROVIDER_API_FORMAT.to_string(),
+            model_name: Some("loadCodeAssist".to_string()),
+        },
     )
     .await
 }
@@ -219,18 +236,20 @@ pub async fn build_vertex_models_fetch_execution_plan(
     build_execution_plan(
         runtime,
         transport,
-        "GET",
-        url.trim().to_string(),
-        headers,
-        None,
-        RequestBody {
-            json_body: None,
-            body_bytes_b64: None,
-            body_ref: None,
+        ModelFetchExecutionPlanRequest {
+            method: "GET".to_string(),
+            url: url.trim().to_string(),
+            headers,
+            content_type: None,
+            body: RequestBody {
+                json_body: None,
+                body_bytes_b64: None,
+                body_ref: None,
+            },
+            client_api_format: api_format.to_string(),
+            provider_api_format: api_format.to_string(),
+            model_name: Some("models".to_string()),
         },
-        api_format.to_string(),
-        api_format.to_string(),
-        Some("models".to_string()),
     )
     .await
 }
@@ -238,15 +257,19 @@ pub async fn build_vertex_models_fetch_execution_plan(
 async fn build_execution_plan(
     runtime: &(impl ModelFetchTransportRuntime + ?Sized),
     transport: &GatewayProviderTransportSnapshot,
-    method: &str,
-    url: String,
-    headers: BTreeMap<String, String>,
-    content_type: Option<String>,
-    body: RequestBody,
-    client_api_format: String,
-    provider_api_format: String,
-    model_name: Option<String>,
+    request: ModelFetchExecutionPlanRequest,
 ) -> Result<ExecutionPlan, String> {
+    let ModelFetchExecutionPlanRequest {
+        method,
+        url,
+        headers,
+        content_type,
+        body,
+        client_api_format,
+        provider_api_format,
+        model_name,
+    } = request;
+
     Ok(ExecutionPlan {
         request_id: format!(
             "req-model-fetch-{}-{}",
@@ -258,7 +281,7 @@ async fn build_execution_plan(
         provider_id: transport.provider.id.clone(),
         endpoint_id: transport.endpoint.id.clone(),
         key_id: transport.key.id.clone(),
-        method: method.to_string(),
+        method,
         url,
         headers,
         content_type,

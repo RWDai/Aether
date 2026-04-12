@@ -904,6 +904,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if state.run_postgres_migrations().await? {
         info!("database migrations complete");
     }
+    let reset_stale_proxy_nodes = state.reset_stale_proxy_node_tunnel_statuses().await?;
+    if reset_stale_proxy_nodes > 0 {
+        info!(
+            reset_stale_proxy_nodes,
+            "reset stale tunnel-connected proxy nodes on startup"
+        );
+    }
     state.bootstrap_admin_from_env().await?;
 
     let background_tasks = if args.node_role.spawns_background_tasks() {

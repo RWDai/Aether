@@ -1,12 +1,13 @@
 use super::{
     AuthApiKeyLookupKey, CreateManagementTokenRecord, DataLayerError, GatewayAuthApiKeySnapshot,
     GatewayDataState, ManagementTokenListQuery, ProxyNodeHeartbeatMutation,
-    ProxyNodeTunnelStatusMutation, RegenerateManagementTokenSecret, StoredAuthApiKeyExportRecord,
-    StoredAuthApiKeySnapshot, StoredLdapModuleConfig, StoredManagementToken,
-    StoredManagementTokenListPage, StoredManagementTokenWithUser, StoredOAuthProviderConfig,
-    StoredOAuthProviderModuleConfig, StoredProxyNode, StoredProxyNodeEvent, StoredUserAuthRecord,
-    StoredUserPreferenceRecord, StoredUserSessionRecord, StoredWalletSnapshot,
-    UpdateManagementTokenRecord, UpsertOAuthProviderConfigRecord,
+    ProxyNodeRegistrationMutation, ProxyNodeRemoteConfigMutation, ProxyNodeTunnelStatusMutation,
+    RegenerateManagementTokenSecret, StoredAuthApiKeyExportRecord, StoredAuthApiKeySnapshot,
+    StoredLdapModuleConfig, StoredManagementToken, StoredManagementTokenListPage,
+    StoredManagementTokenWithUser, StoredOAuthProviderConfig, StoredOAuthProviderModuleConfig,
+    StoredProxyNode, StoredProxyNodeEvent, StoredUserAuthRecord, StoredUserPreferenceRecord,
+    StoredUserSessionRecord, StoredWalletSnapshot, UpdateManagementTokenRecord,
+    UpsertOAuthProviderConfigRecord,
 };
 use crate::LocalMutationOutcome;
 use aether_data::repository::auth::{
@@ -1858,6 +1859,20 @@ impl GatewayDataState {
         }
     }
 
+    pub(crate) async fn get_management_token_with_user_by_hash(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<StoredManagementTokenWithUser>, DataLayerError> {
+        match &self.management_token_reader {
+            Some(repository) => {
+                repository
+                    .get_management_token_with_user_by_hash(token_hash)
+                    .await
+            }
+            None => Ok(None),
+        }
+    }
+
     pub(crate) async fn create_management_token(
         &self,
         record: &CreateManagementTokenRecord,
@@ -1901,6 +1916,21 @@ impl GatewayDataState {
         }
     }
 
+    pub(crate) async fn record_management_token_usage(
+        &self,
+        token_id: &str,
+        last_used_ip: Option<&str>,
+    ) -> Result<Option<StoredManagementToken>, DataLayerError> {
+        match &self.management_token_writer {
+            Some(repository) => {
+                repository
+                    .record_management_token_usage(token_id, last_used_ip)
+                    .await
+            }
+            None => Ok(None),
+        }
+    }
+
     pub(crate) async fn find_proxy_node(
         &self,
         node_id: &str,
@@ -1929,6 +1959,25 @@ impl GatewayDataState {
         }
     }
 
+    pub(crate) async fn register_proxy_node(
+        &self,
+        mutation: &ProxyNodeRegistrationMutation,
+    ) -> Result<Option<StoredProxyNode>, DataLayerError> {
+        match &self.proxy_node_writer {
+            Some(repository) => repository.register_node(mutation).await.map(Some),
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn reset_stale_proxy_node_tunnel_statuses(
+        &self,
+    ) -> Result<usize, DataLayerError> {
+        match &self.proxy_node_writer {
+            Some(repository) => repository.reset_stale_tunnel_statuses().await,
+            None => Ok(0),
+        }
+    }
+
     pub(crate) async fn apply_proxy_node_heartbeat(
         &self,
         mutation: &ProxyNodeHeartbeatMutation,
@@ -1945,6 +1994,26 @@ impl GatewayDataState {
     ) -> Result<Option<StoredProxyNode>, DataLayerError> {
         match &self.proxy_node_writer {
             Some(repository) => repository.update_tunnel_status(mutation).await,
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn unregister_proxy_node(
+        &self,
+        node_id: &str,
+    ) -> Result<Option<StoredProxyNode>, DataLayerError> {
+        match &self.proxy_node_writer {
+            Some(repository) => repository.unregister_node(node_id).await,
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn update_proxy_node_remote_config(
+        &self,
+        mutation: &ProxyNodeRemoteConfigMutation,
+    ) -> Result<Option<StoredProxyNode>, DataLayerError> {
+        match &self.proxy_node_writer {
+            Some(repository) => repository.update_remote_config(mutation).await,
             None => Ok(None),
         }
     }

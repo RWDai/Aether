@@ -69,6 +69,31 @@ WHERE mt.id = $1
 LIMIT 1
 "#;
 
+const GET_MANAGEMENT_TOKEN_WITH_USER_BY_HASH_SQL: &str = r#"
+SELECT
+  mt.id,
+  mt.user_id,
+  mt.name,
+  mt.description,
+  mt.token_prefix,
+  mt.allowed_ips,
+  EXTRACT(EPOCH FROM mt.expires_at)::bigint AS expires_at_unix_secs,
+  EXTRACT(EPOCH FROM mt.last_used_at)::bigint AS last_used_at_unix_secs,
+  mt.last_used_ip,
+  COALESCE(mt.usage_count, 0) AS usage_count,
+  mt.is_active,
+  EXTRACT(EPOCH FROM mt.created_at)::bigint AS created_at_unix_ms,
+  EXTRACT(EPOCH FROM mt.updated_at)::bigint AS updated_at_unix_secs,
+  u.id AS user_row_id,
+  u.email AS user_email,
+  u.username AS user_username,
+  u.role::text AS user_role
+FROM management_tokens mt
+JOIN users u ON u.id = mt.user_id
+WHERE mt.token_hash = $1
+LIMIT 1
+"#;
+
 const DELETE_MANAGEMENT_TOKEN_SQL: &str = r#"
 DELETE FROM management_tokens
 WHERE id = $1
@@ -196,6 +221,29 @@ RETURNING
   EXTRACT(EPOCH FROM updated_at)::bigint AS updated_at_unix_secs
 "#;
 
+const RECORD_MANAGEMENT_TOKEN_USAGE_SQL: &str = r#"
+UPDATE management_tokens
+SET last_used_at = NOW(),
+    last_used_ip = $2,
+    usage_count = COALESCE(usage_count, 0) + 1,
+    updated_at = NOW()
+WHERE id = $1
+RETURNING
+  id,
+  user_id,
+  name,
+  description,
+  token_prefix,
+  allowed_ips,
+  EXTRACT(EPOCH FROM expires_at)::bigint AS expires_at_unix_secs,
+  EXTRACT(EPOCH FROM last_used_at)::bigint AS last_used_at_unix_secs,
+  last_used_ip,
+  COALESCE(usage_count, 0) AS usage_count,
+  is_active,
+  EXTRACT(EPOCH FROM created_at)::bigint AS created_at_unix_ms,
+  EXTRACT(EPOCH FROM updated_at)::bigint AS updated_at_unix_secs
+"#;
+
 #[derive(Debug, Clone)]
 pub struct SqlxManagementTokenRepository {
     pool: PgPool,
@@ -245,6 +293,18 @@ impl ManagementTokenReadRepository for SqlxManagementTokenRepository {
     ) -> Result<Option<StoredManagementTokenWithUser>, DataLayerError> {
         let row = sqlx::query(GET_MANAGEMENT_TOKEN_WITH_USER_SQL)
             .bind(token_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_postgres_err()?;
+        row.as_ref().map(map_token_with_user_row).transpose()
+    }
+
+    async fn get_management_token_with_user_by_hash(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<StoredManagementTokenWithUser>, DataLayerError> {
+        let row = sqlx::query(GET_MANAGEMENT_TOKEN_WITH_USER_BY_HASH_SQL)
+            .bind(token_hash)
             .fetch_optional(&self.pool)
             .await
             .map_postgres_err()?;
@@ -336,6 +396,20 @@ impl ManagementTokenWriteRepository for SqlxManagementTokenRepository {
             .bind(&mutation.token_id)
             .bind(&mutation.token_hash)
             .bind(mutation.token_prefix.as_deref())
+            .fetch_optional(&self.pool)
+            .await
+            .map_postgres_err()?;
+        row.as_ref().map(map_token_row).transpose()
+    }
+
+    async fn record_management_token_usage(
+        &self,
+        token_id: &str,
+        last_used_ip: Option<&str>,
+    ) -> Result<Option<StoredManagementToken>, DataLayerError> {
+        let row = sqlx::query(RECORD_MANAGEMENT_TOKEN_USAGE_SQL)
+            .bind(token_id)
+            .bind(last_used_ip)
             .fetch_optional(&self.pool)
             .await
             .map_postgres_err()?;

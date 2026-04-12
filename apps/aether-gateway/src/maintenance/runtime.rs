@@ -29,6 +29,10 @@ mod db_maintenance;
 mod pending_cleanup;
 #[path = "runtime/provider_checkin.rs"]
 mod provider_checkin;
+#[path = "runtime/proxy_node_staleness.rs"]
+mod proxy_node_staleness;
+#[path = "runtime/proxy_upgrade_rollout.rs"]
+mod proxy_upgrade_rollout;
 #[path = "runtime/request_candidate_cleanup.rs"]
 mod request_candidate_cleanup;
 #[path = "runtime/runners.rs"]
@@ -53,6 +57,18 @@ use config::*;
 use db_maintenance::*;
 use pending_cleanup::*;
 pub(crate) use provider_checkin::{perform_provider_checkin_once, ProviderCheckinRunSummary};
+use proxy_node_staleness::*;
+use proxy_upgrade_rollout::*;
+pub(crate) use proxy_upgrade_rollout::{
+    cancel_proxy_upgrade_rollout, clear_proxy_upgrade_rollout_conflicts,
+    collect_proxy_upgrade_rollout_probes, inspect_proxy_upgrade_rollout,
+    record_proxy_upgrade_traffic_success, restore_proxy_upgrade_rollout_skipped_nodes,
+    retry_proxy_upgrade_rollout_node, skip_proxy_upgrade_rollout_node, start_proxy_upgrade_rollout,
+    ProxyUpgradeRolloutCancelSummary, ProxyUpgradeRolloutConflictClearSummary,
+    ProxyUpgradeRolloutNodeActionSummary, ProxyUpgradeRolloutPendingProbe,
+    ProxyUpgradeRolloutProbeConfig, ProxyUpgradeRolloutSkippedRestoreSummary,
+    ProxyUpgradeRolloutStatus, ProxyUpgradeRolloutSummary, ProxyUpgradeRolloutTrackedNodeState,
+};
 use request_candidate_cleanup::*;
 use runners::*;
 use schedule::*;
@@ -71,6 +87,10 @@ pub(super) fn postgres_error(
 const AUDIT_LOG_CLEANUP_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 const GEMINI_FILE_MAPPING_CLEANUP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const PENDING_CLEANUP_INTERVAL: Duration = Duration::from_secs(5 * 60);
+const PROXY_NODE_STALE_SWEEP_INTERVAL: Duration = Duration::from_secs(30);
+const PROXY_UPGRADE_ROLLOUT_INTERVAL: Duration = Duration::from_secs(15);
+const PROXY_NODE_STALE_MIN_GRACE_SECS: u64 = 90;
+const PROXY_NODE_STALE_MISSED_HEARTBEATS: u64 = 3;
 const POOL_MONITOR_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const PROVIDER_CHECKIN_CONCURRENCY: usize = 3;
 const PROVIDER_CHECKIN_DEFAULT_TIME: &str = "01:05";

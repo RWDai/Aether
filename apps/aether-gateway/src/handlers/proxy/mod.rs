@@ -51,6 +51,7 @@ use crate::{
 use axum::body::{to_bytes, Body, Bytes};
 use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{self, header::HeaderName, header::HeaderValue, Response};
+use sha2::{Digest, Sha256};
 use std::time::Instant;
 use tracing::{debug, info, warn};
 
@@ -94,6 +95,141 @@ fn execution_runtime_candidate_header_value(decision: &GatewayControlDecision) -
     } else {
         "false"
     }
+}
+
+fn extract_management_token_bearer(headers: &http::HeaderMap) -> Option<String> {
+    let header = crate::headers::header_value_str(headers, http::header::AUTHORIZATION.as_str())?;
+    let token = header
+        .strip_prefix("Bearer ")
+        .or_else(|| header.strip_prefix("bearer "))?
+        .trim()
+        .to_string();
+    (!token.is_empty() && token.starts_with("ae_")).then_some(token)
+}
+
+fn hash_management_token(value: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(value.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+fn remote_ip_allowed(allowed_ips: Option<&serde_json::Value>, remote_ip: std::net::IpAddr) -> bool {
+    let Some(allowed_ips) = allowed_ips else {
+        return true;
+    };
+    let Some(items) = allowed_ips.as_array() else {
+        return false;
+    };
+    if items.is_empty() {
+        return false;
+    }
+    items
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .any(|value| ip_or_cidr_matches(value, remote_ip))
+}
+
+fn ip_or_cidr_matches(pattern: &str, remote_ip: std::net::IpAddr) -> bool {
+    let pattern = pattern.trim();
+    if pattern.is_empty() {
+        return false;
+    }
+    if let Ok(ip) = pattern.parse::<std::net::IpAddr>() {
+        return ip == remote_ip;
+    }
+    let Some((network, prefix)) = pattern.split_once('/') else {
+        return false;
+    };
+    let Ok(prefix) = prefix.trim().parse::<u8>() else {
+        return false;
+    };
+    match (network.trim().parse::<std::net::IpAddr>(), remote_ip) {
+        (Ok(std::net::IpAddr::V4(network)), std::net::IpAddr::V4(remote)) if prefix <= 32 => {
+            let mask = if prefix == 0 {
+                0
+            } else {
+                u32::MAX << (32 - prefix)
+            };
+            (u32::from(network) & mask) == (u32::from(remote) & mask)
+        }
+        (Ok(std::net::IpAddr::V6(network)), std::net::IpAddr::V6(remote)) if prefix <= 128 => {
+            let mask = if prefix == 0 {
+                0
+            } else {
+                u128::MAX << (128 - prefix)
+            };
+            (u128::from(network) & mask) == (u128::from(remote) & mask)
+        }
+        _ => false,
+    }
+}
+
+async fn maybe_promote_management_token_admin_principal(
+    state: &AppState,
+    remote_addr: &std::net::SocketAddr,
+    headers: &http::HeaderMap,
+    trace_id: &str,
+    request_context: &mut GatewayPublicRequestContext,
+) -> Result<(), GatewayError> {
+    let Some(decision) = request_context.control_decision.as_mut() else {
+        return Ok(());
+    };
+    if decision.route_class.as_deref() != Some("admin_proxy") || decision.admin_principal.is_some()
+    {
+        return Ok(());
+    }
+
+    let Some(token) = extract_management_token_bearer(headers) else {
+        return Ok(());
+    };
+    let token_hash = hash_management_token(&token);
+    let Some(token_with_user) = state
+        .get_management_token_with_user_by_hash(&token_hash)
+        .await?
+    else {
+        return Ok(());
+    };
+
+    if !token_with_user.token.is_active {
+        return Ok(());
+    }
+    if token_with_user
+        .token
+        .expires_at_unix_secs
+        .is_some_and(|value| value <= chrono::Utc::now().timestamp().max(0) as u64)
+    {
+        return Ok(());
+    }
+    if !remote_ip_allowed(token_with_user.token.allowed_ips.as_ref(), remote_addr.ip()) {
+        return Ok(());
+    }
+    let Some(user) = state.find_user_auth_by_id(&token_with_user.user.id).await? else {
+        return Ok(());
+    };
+    if !user.is_active || user.is_deleted || !user.role.eq_ignore_ascii_case("admin") {
+        return Ok(());
+    }
+
+    decision.admin_principal = Some(crate::control::GatewayAdminPrincipalContext {
+        user_id: user.id.clone(),
+        user_role: user.role.clone(),
+        session_id: None,
+        management_token_id: Some(token_with_user.token.id.clone()),
+    });
+
+    let remote_ip = remote_addr.ip().to_string();
+    if let Err(err) = state
+        .record_management_token_usage(&token_with_user.token.id, Some(remote_ip.as_str()))
+        .await
+    {
+        warn!(
+            trace_id = %trace_id,
+            token_id = %token_with_user.token.id,
+            error = ?err,
+            "gateway failed to record management token usage"
+        );
+    }
+    Ok(())
 }
 
 async fn maybe_forward_public_request_to_tunnel_owner(
@@ -379,12 +515,20 @@ pub(crate) async fn proxy_request(
         ));
     }
     let request_context_started_at = Instant::now();
-    let request_context = crate::control::resolve_public_request_context(
+    let mut request_context = crate::control::resolve_public_request_context(
         &state,
         &parts.method,
         &parts.uri,
         &parts.headers,
         &trace_id,
+    )
+    .await?;
+    maybe_promote_management_token_admin_principal(
+        &state,
+        &remote_addr,
+        &parts.headers,
+        &trace_id,
+        &mut request_context,
     )
     .await?;
     let request_context_ms = request_context_started_at.elapsed().as_millis() as u64;

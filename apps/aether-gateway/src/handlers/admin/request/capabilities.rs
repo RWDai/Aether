@@ -88,6 +88,10 @@ impl<'a> AdminAppState<'a> {
         self.app.has_proxy_node_reader()
     }
 
+    pub(crate) fn has_proxy_node_writer(&self) -> bool {
+        self.app.has_proxy_node_writer()
+    }
+
     pub(crate) fn has_auth_api_key_writer(&self) -> bool {
         self.app.data.has_auth_api_key_writer()
     }

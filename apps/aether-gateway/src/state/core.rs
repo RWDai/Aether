@@ -40,6 +40,8 @@ use crate::maintenance::spawn_gemini_file_mapping_cleanup_worker;
 use crate::maintenance::spawn_pending_cleanup_worker;
 use crate::maintenance::spawn_pool_monitor_worker;
 use crate::maintenance::spawn_provider_checkin_worker;
+use crate::maintenance::spawn_proxy_node_stale_cleanup_worker;
+use crate::maintenance::spawn_proxy_upgrade_rollout_worker;
 use crate::maintenance::spawn_request_candidate_cleanup_worker;
 use crate::maintenance::spawn_stats_aggregation_worker;
 use crate::maintenance::spawn_stats_hourly_aggregation_worker;
@@ -296,6 +298,10 @@ impl AppState {
         self.data.has_proxy_node_reader()
     }
 
+    pub(crate) fn has_proxy_node_writer(&self) -> bool {
+        self.data.has_proxy_node_writer()
+    }
+
     pub(crate) fn frontdoor_cors(&self) -> Option<Arc<FrontdoorCorsConfig>> {
         self.frontdoor_cors.clone()
     }
@@ -430,12 +436,49 @@ impl AppState {
             .map_err(|err| GatewayError::Internal(err.to_string()))
     }
 
+    pub(crate) async fn register_proxy_node(
+        &self,
+        mutation: &aether_data::repository::proxy_nodes::ProxyNodeRegistrationMutation,
+    ) -> Result<Option<StoredProxyNode>, GatewayError> {
+        self.data
+            .register_proxy_node(mutation)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))
+    }
+
+    pub async fn reset_stale_proxy_node_tunnel_statuses(&self) -> std::io::Result<usize> {
+        self.data
+            .reset_stale_proxy_node_tunnel_statuses()
+            .await
+            .map_err(|err| std::io::Error::other(err.to_string()))
+    }
+
     pub(crate) async fn apply_proxy_node_heartbeat(
         &self,
         mutation: &ProxyNodeHeartbeatMutation,
     ) -> Result<Option<StoredProxyNode>, GatewayError> {
         self.data
             .apply_proxy_node_heartbeat(mutation)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))
+    }
+
+    pub(crate) async fn unregister_proxy_node(
+        &self,
+        node_id: &str,
+    ) -> Result<Option<StoredProxyNode>, GatewayError> {
+        self.data
+            .unregister_proxy_node(node_id)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))
+    }
+
+    pub(crate) async fn update_proxy_node_remote_config(
+        &self,
+        mutation: &aether_data::repository::proxy_nodes::ProxyNodeRemoteConfigMutation,
+    ) -> Result<Option<StoredProxyNode>, GatewayError> {
+        self.data
+            .update_proxy_node_remote_config(mutation)
             .await
             .map_err(|err| GatewayError::Internal(err.to_string()))
     }
@@ -666,6 +709,12 @@ impl AppState {
             tasks.push(handle);
         }
         if let Some(handle) = spawn_pending_cleanup_worker(self.data.clone()) {
+            tasks.push(handle);
+        }
+        if let Some(handle) = spawn_proxy_node_stale_cleanup_worker(self.data.clone()) {
+            tasks.push(handle);
+        }
+        if let Some(handle) = spawn_proxy_upgrade_rollout_worker(self.clone()) {
             tasks.push(handle);
         }
         if let Some(handle) = spawn_provider_checkin_worker(self.clone()) {

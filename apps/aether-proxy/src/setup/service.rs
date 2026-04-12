@@ -63,8 +63,6 @@ pub fn install_service(config_path: &Path) -> anyhow::Result<()> {
          Type=simple\n\
          WorkingDirectory={working_dir}\n\
          Environment=AETHER_PROXY_CONFIG={config_str}\n\
-         Environment=AETHER_PROXY_LOG_DESTINATION=both\n\
-         Environment=AETHER_PROXY_LOG_DIR=/var/log/aether-proxy\n\
          ExecStart={exe_str}\n\
          Restart=on-failure\n\
          RestartSec=5\n\

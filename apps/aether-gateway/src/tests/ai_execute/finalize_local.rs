@@ -1764,7 +1764,7 @@ async fn gateway_skips_openai_chat_antigravity_cross_format_sync_candidate_as_tr
     assert_eq!(stored_candidates[0].status, RequestCandidateStatus::Skipped);
     assert_eq!(
         stored_candidates[0].skip_reason.as_deref(),
-        Some("transport_unsupported")
+        Some("transport_provider_type_unsupported")
     );
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     assert_eq!(*report_hits.lock().expect("mutex should lock"), 0);

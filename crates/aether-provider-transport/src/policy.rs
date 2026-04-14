@@ -10,8 +10,48 @@ use super::{
 };
 
 pub fn supports_local_openai_chat_transport(transport: &GatewayProviderTransportSnapshot) -> bool {
-    if !transport.provider.is_active || !transport.endpoint.is_active || !transport.key.is_active {
-        return false;
+    local_openai_chat_transport_unsupported_reason(transport).is_none()
+}
+
+pub fn supports_local_standard_transport(
+    transport: &GatewayProviderTransportSnapshot,
+    api_format: &str,
+) -> bool {
+    local_standard_transport_unsupported_reason(transport, api_format).is_none()
+}
+
+pub fn supports_local_gemini_transport(
+    transport: &GatewayProviderTransportSnapshot,
+    api_format: &str,
+) -> bool {
+    local_gemini_transport_unsupported_reason(transport, api_format).is_none()
+}
+
+pub fn supports_local_standard_transport_with_network(
+    transport: &GatewayProviderTransportSnapshot,
+    api_format: &str,
+) -> bool {
+    local_standard_transport_unsupported_reason_with_network(transport, api_format).is_none()
+}
+
+pub fn supports_local_gemini_transport_with_network(
+    transport: &GatewayProviderTransportSnapshot,
+    api_format: &str,
+) -> bool {
+    local_gemini_transport_unsupported_reason_with_network(transport, api_format).is_none()
+}
+
+pub fn local_openai_chat_transport_unsupported_reason(
+    transport: &GatewayProviderTransportSnapshot,
+) -> Option<&'static str> {
+    if !transport.provider.is_active {
+        return Some("provider_inactive");
+    }
+    if !transport.endpoint.is_active {
+        return Some("endpoint_inactive");
+    }
+    if !transport.key.is_active {
+        return Some("key_inactive");
     }
     if !transport
         .endpoint
@@ -19,67 +59,94 @@ pub fn supports_local_openai_chat_transport(transport: &GatewayProviderTransport
         .trim()
         .eq_ignore_ascii_case("openai:chat")
     {
-        return false;
+        return Some("transport_api_format_mismatch");
     }
-    if !header_rules_are_locally_supported(transport.endpoint.header_rules.as_ref())
-        || !body_rules_are_locally_supported(transport.endpoint.body_rules.as_ref())
-    {
-        return false;
+    if !header_rules_are_locally_supported(transport.endpoint.header_rules.as_ref()) {
+        return Some("transport_header_rules_unsupported");
+    }
+    if !body_rules_are_locally_supported(transport.endpoint.body_rules.as_ref()) {
+        return Some("transport_body_rules_unsupported");
     }
     if transport.key.decrypted_auth_config.is_some()
         && !supports_local_oauth_request_auth_resolution(transport)
     {
-        return false;
+        return Some("transport_oauth_resolution_unsupported");
     }
     if !transport_proxy_is_locally_supported(transport) {
-        return false;
+        return Some("transport_proxy_unsupported");
     }
     if transport.key.fingerprint.is_some() && resolve_transport_tls_profile(transport).is_none() {
-        return false;
+        return Some("transport_tls_profile_unsupported");
     }
-
     if !provider_type_supports_local_openai_chat_transport(&transport.provider.provider_type) {
-        return false;
+        return Some("transport_provider_type_unsupported");
     }
 
-    true
+    None
 }
 
-pub fn supports_local_standard_transport(
+pub fn local_standard_transport_unsupported_reason(
     transport: &GatewayProviderTransportSnapshot,
     api_format: &str,
-) -> bool {
-    supports_local_same_format_transport(transport, api_format, false)
+) -> Option<&'static str> {
+    local_same_format_transport_unsupported_reason(
+        transport,
+        api_format,
+        false,
+        provider_type_supports_local_same_format_transport,
+    )
 }
 
-pub fn supports_local_gemini_transport(
+pub fn local_gemini_transport_unsupported_reason(
     transport: &GatewayProviderTransportSnapshot,
     api_format: &str,
-) -> bool {
-    supports_local_same_format_transport(transport, api_format, false)
+) -> Option<&'static str> {
+    local_same_format_transport_unsupported_reason(
+        transport,
+        api_format,
+        false,
+        provider_type_supports_local_same_format_transport,
+    )
 }
 
-pub fn supports_local_standard_transport_with_network(
+pub fn local_standard_transport_unsupported_reason_with_network(
     transport: &GatewayProviderTransportSnapshot,
     api_format: &str,
-) -> bool {
-    supports_local_same_format_transport(transport, api_format, true)
+) -> Option<&'static str> {
+    local_same_format_transport_unsupported_reason(
+        transport,
+        api_format,
+        true,
+        provider_type_supports_local_same_format_transport,
+    )
 }
 
-pub fn supports_local_gemini_transport_with_network(
+pub fn local_gemini_transport_unsupported_reason_with_network(
     transport: &GatewayProviderTransportSnapshot,
     api_format: &str,
-) -> bool {
-    supports_local_same_format_transport(transport, api_format, true)
+) -> Option<&'static str> {
+    local_same_format_transport_unsupported_reason(
+        transport,
+        api_format,
+        true,
+        provider_type_supports_local_same_format_transport,
+    )
 }
 
-fn supports_local_same_format_transport(
+fn local_same_format_transport_unsupported_reason(
     transport: &GatewayProviderTransportSnapshot,
     api_format: &str,
     allow_network_passthrough: bool,
-) -> bool {
+    provider_type_supported: fn(&str) -> bool,
+) -> Option<&'static str> {
     if !transport.provider.is_active || !transport.endpoint.is_active || !transport.key.is_active {
-        return false;
+        return if !transport.provider.is_active {
+            Some("provider_inactive")
+        } else if !transport.endpoint.is_active {
+            Some("endpoint_inactive")
+        } else {
+            Some("key_inactive")
+        };
     }
     if !transport
         .endpoint
@@ -87,17 +154,18 @@ fn supports_local_same_format_transport(
         .trim()
         .eq_ignore_ascii_case(api_format.trim())
     {
-        return false;
+        return Some("transport_api_format_mismatch");
     }
-    if !header_rules_are_locally_supported(transport.endpoint.header_rules.as_ref())
-        || !body_rules_are_locally_supported(transport.endpoint.body_rules.as_ref())
-    {
-        return false;
+    if !header_rules_are_locally_supported(transport.endpoint.header_rules.as_ref()) {
+        return Some("transport_header_rules_unsupported");
+    }
+    if !body_rules_are_locally_supported(transport.endpoint.body_rules.as_ref()) {
+        return Some("transport_body_rules_unsupported");
     }
     if transport.key.decrypted_auth_config.is_some()
         && !supports_local_oauth_request_auth_resolution(transport)
     {
-        return false;
+        return Some("transport_oauth_resolution_unsupported");
     }
     let has_custom_path = transport
         .endpoint
@@ -105,15 +173,15 @@ fn supports_local_same_format_transport(
         .as_deref()
         .is_some_and(|value| !value.trim().is_empty());
     if has_custom_path && !allow_network_passthrough {
-        return false;
+        return Some("transport_custom_path_unsupported");
     }
     if allow_network_passthrough {
         if !transport_proxy_is_locally_supported(transport) {
-            return false;
+            return Some("transport_proxy_unsupported");
         }
         if transport.key.fingerprint.is_some() && resolve_transport_tls_profile(transport).is_none()
         {
-            return false;
+            return Some("transport_tls_profile_unsupported");
         }
     } else if transport.provider.proxy.is_some()
         || transport.endpoint.proxy.is_some()
@@ -126,12 +194,12 @@ fn supports_local_same_format_transport(
             .and_then(|value| value.as_str())
             .is_some_and(|value| !value.trim().is_empty())
     {
-        return false;
+        return Some("transport_proxy_or_tls_unsupported");
     }
 
-    if !provider_type_supports_local_same_format_transport(&transport.provider.provider_type) {
-        return false;
+    if !provider_type_supported(&transport.provider.provider_type) {
+        return Some("transport_provider_type_unsupported");
     }
 
-    true
+    None
 }

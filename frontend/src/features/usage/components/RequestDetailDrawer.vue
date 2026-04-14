@@ -651,7 +651,7 @@
 
                       <TabsContent value="metadata">
                         <JsonContent
-                          :data="detail.metadata"
+                          :data="metadataPanelData"
                           :view-mode="viewMode"
                           :expand-depth="currentExpandDepth"
                           :is-dark="isDark"
@@ -853,6 +853,29 @@ const traceRequestMetadata = computed<Record<string, unknown> | null>(() => {
   const meta = detail.value?.metadata
   if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return null
   return meta as Record<string, unknown>
+})
+
+const metadataPanelData = computed<Record<string, unknown> | null>(() => {
+  if (!detail.value) return null
+
+  const merged: Record<string, unknown> = {}
+  if (hasContent(detail.value.metadata)) {
+    Object.assign(merged, detail.value.metadata || {})
+  }
+  if (hasContent(detail.value.routing)) {
+    merged.routing = detail.value.routing
+  }
+  if (hasContent(detail.value.body_capture)) {
+    merged.body_capture = detail.value.body_capture
+  }
+  if (hasContent(detail.value.trace)) {
+    merged.trace = detail.value.trace
+  }
+  if (hasContent(detail.value.settlement)) {
+    merged.settlement = detail.value.settlement
+  }
+
+  return Object.keys(merged).length > 0 ? merged : null
 })
 
 const settlementInfo = computed<JsonRecord | null>(() =>
@@ -1566,7 +1589,7 @@ const visibleTabs = computed(() => {
       case 'response-body':
         return hasResponseBodyAvailable.value
       case 'metadata':
-        return hasContent(detail.value?.metadata)
+        return hasContent(metadataPanelData.value)
       default:
         return false
     }
@@ -1970,7 +1993,7 @@ function copyContent(tabName: string) {
         data = currentResponseBody.value
         break
       case 'metadata':
-        data = detail.value.metadata
+        data = metadataPanelData.value
         break
     }
     if (data) {

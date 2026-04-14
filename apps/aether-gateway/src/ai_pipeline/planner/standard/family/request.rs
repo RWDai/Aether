@@ -51,10 +51,12 @@ pub(crate) async fn resolve_local_standard_candidate_payload_parts(
         return None;
     };
 
-    if !crate::ai_pipeline::conversion::request_conversion_transport_supported(
-        transport,
-        conversion_kind,
-    ) {
+    if let Some(skip_reason) =
+        crate::ai_pipeline::conversion::request_conversion_transport_unsupported_reason(
+            transport,
+            conversion_kind,
+        )
+    {
         mark_skipped_local_standard_candidate(
             state,
             input,
@@ -62,7 +64,7 @@ pub(crate) async fn resolve_local_standard_candidate_payload_parts(
             candidate,
             attempt.candidate_index,
             &attempt.candidate_id,
-            "transport_unsupported",
+            skip_reason,
         )
         .await;
         return None;

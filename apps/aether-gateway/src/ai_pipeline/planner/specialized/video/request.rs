@@ -7,13 +7,14 @@ use crate::ai_pipeline::planner::spec_metadata::local_video_create_spec_metadata
 use crate::ai_pipeline::transport::auth::{
     build_passthrough_headers_with_auth, resolve_local_gemini_auth, resolve_local_openai_chat_auth,
 };
-use crate::ai_pipeline::transport::policy::{
-    supports_local_gemini_transport_with_network, supports_local_standard_transport_with_network,
-};
 use crate::ai_pipeline::transport::url::{
     build_gemini_video_predict_long_running_url, build_passthrough_path_url,
 };
-use crate::ai_pipeline::transport::{apply_local_body_rules, apply_local_header_rules};
+use crate::ai_pipeline::transport::{
+    apply_local_body_rules, apply_local_header_rules,
+    local_gemini_transport_unsupported_reason_with_network,
+    local_standard_transport_unsupported_reason_with_network,
+};
 use crate::ai_pipeline::GatewayProviderTransportSnapshot;
 use crate::AppState;
 
@@ -46,15 +47,17 @@ pub(super) async fn resolve_local_video_create_candidate_payload_parts(
     let candidate = &attempt.eligible.candidate;
     let transport = &attempt.eligible.transport;
 
-    let transport_supported = match spec.family {
-        LocalVideoCreateFamily::OpenAi => {
-            supports_local_standard_transport_with_network(transport, spec_metadata.api_format)
-        }
-        LocalVideoCreateFamily::Gemini => {
-            supports_local_gemini_transport_with_network(transport, spec_metadata.api_format)
-        }
+    let transport_unsupported_reason = match spec.family {
+        LocalVideoCreateFamily::OpenAi => local_standard_transport_unsupported_reason_with_network(
+            transport,
+            spec_metadata.api_format,
+        ),
+        LocalVideoCreateFamily::Gemini => local_gemini_transport_unsupported_reason_with_network(
+            transport,
+            spec_metadata.api_format,
+        ),
     };
-    if !transport_supported {
+    if let Some(skip_reason) = transport_unsupported_reason {
         mark_skipped_local_video_candidate(
             state,
             input,
@@ -62,7 +65,7 @@ pub(super) async fn resolve_local_video_create_candidate_payload_parts(
             candidate,
             attempt.candidate_index,
             &attempt.candidate_id,
-            "transport_unsupported",
+            skip_reason,
         )
         .await;
         return None;

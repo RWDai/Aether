@@ -4,11 +4,11 @@ use aether_provider_transport::auth::{
     resolve_local_gemini_auth, resolve_local_openai_chat_auth, resolve_local_standard_auth,
 };
 use aether_provider_transport::policy::{
-    supports_local_openai_chat_transport, supports_local_standard_transport_with_network,
+    local_gemini_transport_unsupported_reason_with_network,
+    local_openai_chat_transport_unsupported_reason,
+    local_standard_transport_unsupported_reason_with_network,
 };
-use aether_provider_transport::{
-    supports_local_gemini_transport_with_network, GatewayProviderTransportSnapshot,
-};
+use aether_provider_transport::GatewayProviderTransportSnapshot;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequestConversionKind {
@@ -142,7 +142,7 @@ pub fn request_conversion_requires_enable_flag(
     }
 }
 
-pub fn request_pair_allowed_for_transport(
+pub fn request_conversion_enabled_for_transport(
     transport: &GatewayProviderTransportSnapshot,
     client_api_format: &str,
     provider_api_format: &str,
@@ -162,12 +162,40 @@ pub fn request_pair_allowed_for_transport(
         return true;
     }
     transport.provider.enable_format_conversion
+        || endpoint_accepts_client_api_format(transport, client_api_format.as_str())
+}
+
+pub fn request_pair_allowed_for_transport(
+    transport: &GatewayProviderTransportSnapshot,
+    client_api_format: &str,
+    provider_api_format: &str,
+) -> bool {
+    let client_api_format = client_api_format.trim().to_ascii_lowercase();
+    let provider_api_format = provider_api_format.trim().to_ascii_lowercase();
+    if client_api_format == provider_api_format {
+        return true;
+    }
+    if request_conversion_kind(client_api_format.as_str(), provider_api_format.as_str()).is_none() {
+        return false;
+    }
+    request_conversion_enabled_for_transport(
+        transport,
+        client_api_format.as_str(),
+        provider_api_format.as_str(),
+    )
 }
 
 pub fn request_conversion_transport_supported(
     transport: &GatewayProviderTransportSnapshot,
-    _kind: RequestConversionKind,
+    kind: RequestConversionKind,
 ) -> bool {
+    request_conversion_transport_unsupported_reason(transport, kind).is_none()
+}
+
+pub fn request_conversion_transport_unsupported_reason(
+    transport: &GatewayProviderTransportSnapshot,
+    _kind: RequestConversionKind,
+) -> Option<&'static str> {
     match transport
         .endpoint
         .api_format
@@ -175,16 +203,26 @@ pub fn request_conversion_transport_supported(
         .to_ascii_lowercase()
         .as_str()
     {
-        "openai:chat" => supports_local_openai_chat_transport(transport),
-        "openai:cli" => supports_local_standard_transport_with_network(transport, "openai:cli"),
-        "openai:compact" => {
-            supports_local_standard_transport_with_network(transport, "openai:compact")
+        "openai:chat" => local_openai_chat_transport_unsupported_reason(transport),
+        "openai:cli" => {
+            local_standard_transport_unsupported_reason_with_network(transport, "openai:cli")
         }
-        "claude:chat" => supports_local_standard_transport_with_network(transport, "claude:chat"),
-        "claude:cli" => supports_local_standard_transport_with_network(transport, "claude:cli"),
-        "gemini:chat" => supports_local_gemini_transport_with_network(transport, "gemini:chat"),
-        "gemini:cli" => supports_local_gemini_transport_with_network(transport, "gemini:cli"),
-        _ => false,
+        "openai:compact" => {
+            local_standard_transport_unsupported_reason_with_network(transport, "openai:compact")
+        }
+        "claude:chat" => {
+            local_standard_transport_unsupported_reason_with_network(transport, "claude:chat")
+        }
+        "claude:cli" => {
+            local_standard_transport_unsupported_reason_with_network(transport, "claude:cli")
+        }
+        "gemini:chat" => {
+            local_gemini_transport_unsupported_reason_with_network(transport, "gemini:chat")
+        }
+        "gemini:cli" => {
+            local_gemini_transport_unsupported_reason_with_network(transport, "gemini:cli")
+        }
+        _ => Some("transport_api_format_unsupported"),
     }
 }
 
@@ -231,13 +269,58 @@ fn api_data_format_id(api_format: &str) -> Option<&'static str> {
     }
 }
 
+fn endpoint_accepts_client_api_format(
+    transport: &GatewayProviderTransportSnapshot,
+    client_api_format: &str,
+) -> bool {
+    let Some(config) = transport
+        .endpoint
+        .format_acceptance_config
+        .as_ref()
+        .and_then(serde_json::Value::as_object)
+    else {
+        return false;
+    };
+    if !config
+        .get("enabled")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+    {
+        return false;
+    }
+
+    if config
+        .get("reject_formats")
+        .is_some_and(|value| json_format_list_contains(value, client_api_format))
+    {
+        return false;
+    }
+
+    match config.get("accept_formats") {
+        Some(value) => json_format_list_contains(value, client_api_format),
+        None => true,
+    }
+}
+
+fn json_format_list_contains(value: &serde_json::Value, api_format: &str) -> bool {
+    let Some(items) = value.as_array() else {
+        return false;
+    };
+    items.iter().any(|item| {
+        item.as_str()
+            .is_some_and(|candidate| candidate.trim().eq_ignore_ascii_case(api_format))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        request_candidate_api_formats, request_conversion_direct_auth, request_conversion_kind,
+        request_candidate_api_formats, request_conversion_direct_auth,
+        request_conversion_enabled_for_transport, request_conversion_kind,
         request_conversion_requires_enable_flag, request_conversion_transport_supported,
-        sync_chat_response_conversion_kind, sync_cli_response_conversion_kind,
-        RequestConversionKind, SyncChatResponseConversionKind, SyncCliResponseConversionKind,
+        request_pair_allowed_for_transport, sync_chat_response_conversion_kind,
+        sync_cli_response_conversion_kind, RequestConversionKind, SyncChatResponseConversionKind,
+        SyncCliResponseConversionKind,
     };
     use aether_provider_transport::snapshot::{
         GatewayProviderTransportEndpoint, GatewayProviderTransportKey,
@@ -439,5 +522,141 @@ mod tests {
             request_conversion_direct_auth(&transport, RequestConversionKind::ToOpenAIChat),
             Some(("authorization".to_string(), "Bearer secret".to_string()))
         );
+    }
+
+    #[test]
+    fn endpoint_level_format_acceptance_enables_cross_format_pair_without_provider_flag() {
+        let transport = GatewayProviderTransportSnapshot {
+            provider: GatewayProviderTransportProvider {
+                id: "provider-1".to_string(),
+                name: "provider".to_string(),
+                provider_type: "custom".to_string(),
+                website: None,
+                is_active: true,
+                keep_priority_on_conversion: false,
+                enable_format_conversion: false,
+                concurrent_limit: None,
+                max_retries: None,
+                proxy: None,
+                request_timeout_secs: None,
+                stream_first_byte_timeout_secs: None,
+                config: None,
+            },
+            endpoint: GatewayProviderTransportEndpoint {
+                id: "endpoint-1".to_string(),
+                provider_id: "provider-1".to_string(),
+                api_format: "openai:cli".to_string(),
+                api_family: Some("openai".to_string()),
+                endpoint_kind: Some("cli".to_string()),
+                is_active: true,
+                base_url: "https://right.codes/codex".to_string(),
+                header_rules: None,
+                body_rules: None,
+                max_retries: None,
+                custom_path: Some("/v1/messages".to_string()),
+                config: None,
+                format_acceptance_config: Some(serde_json::json!({
+                    "enabled": true,
+                    "accept_formats": ["claude:cli"],
+                })),
+                proxy: None,
+            },
+            key: GatewayProviderTransportKey {
+                id: "key-1".to_string(),
+                provider_id: "provider-1".to_string(),
+                name: "key".to_string(),
+                auth_type: "bearer".to_string(),
+                is_active: true,
+                api_formats: Some(vec!["openai:cli".to_string()]),
+                allowed_models: None,
+                capabilities: None,
+                rate_multipliers: None,
+                global_priority_by_format: None,
+                expires_at_unix_secs: None,
+                proxy: None,
+                fingerprint: None,
+                decrypted_api_key: "secret".to_string(),
+                decrypted_auth_config: None,
+            },
+        };
+
+        assert!(request_conversion_enabled_for_transport(
+            &transport,
+            "claude:cli",
+            "openai:cli"
+        ));
+        assert!(request_pair_allowed_for_transport(
+            &transport,
+            "claude:cli",
+            "openai:cli"
+        ));
+        assert!(!request_pair_allowed_for_transport(
+            &transport,
+            "gemini:cli",
+            "openai:cli"
+        ));
+    }
+
+    #[test]
+    fn endpoint_reject_formats_override_endpoint_cross_format_enablement() {
+        let transport = GatewayProviderTransportSnapshot {
+            provider: GatewayProviderTransportProvider {
+                id: "provider-1".to_string(),
+                name: "provider".to_string(),
+                provider_type: "custom".to_string(),
+                website: None,
+                is_active: true,
+                keep_priority_on_conversion: false,
+                enable_format_conversion: false,
+                concurrent_limit: None,
+                max_retries: None,
+                proxy: None,
+                request_timeout_secs: None,
+                stream_first_byte_timeout_secs: None,
+                config: None,
+            },
+            endpoint: GatewayProviderTransportEndpoint {
+                id: "endpoint-1".to_string(),
+                provider_id: "provider-1".to_string(),
+                api_format: "openai:cli".to_string(),
+                api_family: Some("openai".to_string()),
+                endpoint_kind: Some("cli".to_string()),
+                is_active: true,
+                base_url: "https://right.codes/codex".to_string(),
+                header_rules: None,
+                body_rules: None,
+                max_retries: None,
+                custom_path: Some("/v1/messages".to_string()),
+                config: None,
+                format_acceptance_config: Some(serde_json::json!({
+                    "enabled": true,
+                    "reject_formats": ["claude:cli"],
+                })),
+                proxy: None,
+            },
+            key: GatewayProviderTransportKey {
+                id: "key-1".to_string(),
+                provider_id: "provider-1".to_string(),
+                name: "key".to_string(),
+                auth_type: "bearer".to_string(),
+                is_active: true,
+                api_formats: Some(vec!["openai:cli".to_string()]),
+                allowed_models: None,
+                capabilities: None,
+                rate_multipliers: None,
+                global_priority_by_format: None,
+                expires_at_unix_secs: None,
+                proxy: None,
+                fingerprint: None,
+                decrypted_api_key: "secret".to_string(),
+                decrypted_auth_config: None,
+            },
+        };
+
+        assert!(!request_conversion_enabled_for_transport(
+            &transport,
+            "claude:cli",
+            "openai:cli"
+        ));
     }
 }

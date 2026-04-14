@@ -7,7 +7,7 @@ use crate::ai_pipeline::planner::spec_metadata::local_gemini_files_spec_metadata
 use crate::ai_pipeline::transport::auth::{
     build_passthrough_headers_with_auth, resolve_local_gemini_auth,
 };
-use crate::ai_pipeline::transport::policy::supports_local_gemini_transport_with_network;
+use crate::ai_pipeline::transport::local_gemini_transport_unsupported_reason_with_network;
 use crate::ai_pipeline::transport::url::build_gemini_files_passthrough_url;
 use crate::ai_pipeline::transport::{apply_local_body_rules, apply_local_header_rules};
 use crate::ai_pipeline::GatewayProviderTransportSnapshot;
@@ -47,7 +47,10 @@ pub(super) async fn resolve_local_gemini_files_candidate_payload_parts(
     let candidate = &attempt.eligible.candidate;
     let transport = &attempt.eligible.transport;
 
-    if !supports_local_gemini_transport_with_network(transport, GEMINI_FILES_CANDIDATE_API_FORMAT) {
+    if let Some(skip_reason) = local_gemini_transport_unsupported_reason_with_network(
+        transport,
+        GEMINI_FILES_CANDIDATE_API_FORMAT,
+    ) {
         mark_skipped_local_gemini_files_candidate(
             state,
             input,
@@ -55,7 +58,7 @@ pub(super) async fn resolve_local_gemini_files_candidate_payload_parts(
             candidate,
             attempt.candidate_index,
             &attempt.candidate_id,
-            "transport_unsupported",
+            skip_reason,
         )
         .await;
         return None;

@@ -3,7 +3,9 @@ use tracing::warn;
 
 use super::{LocalVideoCreateFamily, LocalVideoCreateSpec};
 use crate::ai_pipeline::contracts::ExecutionRuntimeAuthContext;
-use crate::ai_pipeline::planner::candidate_eligibility::filter_and_rank_local_execution_candidates;
+use crate::ai_pipeline::planner::candidate_eligibility::{
+    filter_and_rank_local_execution_candidates, SkippedLocalExecutionCandidate,
+};
 use crate::ai_pipeline::planner::candidate_materialization::{
     mark_skipped_local_execution_candidate,
     persist_available_local_execution_candidates_with_context,
@@ -11,7 +13,8 @@ use crate::ai_pipeline::planner::candidate_materialization::{
     remember_first_local_candidate_affinity,
 };
 use crate::ai_pipeline::planner::candidate_metadata::{
-    build_local_execution_candidate_metadata, LocalExecutionCandidateMetadataParts,
+    build_local_execution_candidate_metadata,
+    build_local_execution_candidate_metadata_for_candidate, LocalExecutionCandidateMetadataParts,
 };
 use crate::ai_pipeline::planner::common::extract_requested_model_from_request;
 use crate::ai_pipeline::planner::decision_input::{
@@ -97,8 +100,8 @@ pub(super) async fn list_local_video_create_candidate_attempts(
     decision_kind: &str,
 ) -> Option<Vec<LocalVideoCreateCandidateAttempt>> {
     let planner_state = PlannerAppState::new(state);
-    let candidates = match planner_state
-        .list_selectable_candidates(
+    let (candidates, preselection_skipped) = match planner_state
+        .list_selectable_candidates_with_skip_reasons(
             api_format,
             &input.requested_model,
             false,
@@ -126,6 +129,15 @@ pub(super) async fn list_local_video_create_candidate_attempts(
             trace_id,
             input,
             candidates,
+            preselection_skipped
+                .into_iter()
+                .map(|item| SkippedLocalExecutionCandidate {
+                    candidate: item.candidate,
+                    skip_reason: item.skip_reason,
+                    transport: None,
+                    extra_data: None,
+                })
+                .collect(),
             api_format,
         )
         .await,
@@ -137,6 +149,7 @@ async fn materialize_local_video_create_candidate_attempts(
     trace_id: &str,
     input: &LocalVideoCreateDecisionInput,
     candidates: Vec<SchedulerMinimalCandidateSelectionCandidate>,
+    preselection_skipped: Vec<SkippedLocalExecutionCandidate>,
     api_format: &str,
 ) -> Vec<LocalVideoCreateCandidateAttempt> {
     let persistence_policy = build_local_candidate_persistence_policy(
@@ -152,6 +165,10 @@ async fn materialize_local_video_create_candidate_attempts(
         input.required_capabilities.as_ref(),
     )
     .await;
+    let skipped_candidates = preselection_skipped
+        .into_iter()
+        .chain(skipped_candidates)
+        .collect::<Vec<_>>();
     remember_first_local_candidate_affinity(
         state,
         Some(&input.auth_snapshot),
@@ -182,7 +199,20 @@ async fn materialize_local_video_create_candidate_attempts(
         trace_id,
         persistence_policy.skipped,
         attempts.len() as u32,
-        skipped_candidates,
+        skipped_candidates
+            .into_iter()
+            .map(|mut skipped_candidate| {
+                skipped_candidate.extra_data =
+                    Some(build_local_execution_candidate_metadata_for_candidate(
+                        &skipped_candidate.candidate,
+                        skipped_candidate.transport.as_ref(),
+                        api_format,
+                        api_format,
+                        serde_json::Map::new(),
+                    ));
+                skipped_candidate
+            })
+            .collect(),
     )
     .await;
 

@@ -3,9 +3,7 @@ use std::collections::BTreeMap;
 use serde_json::Value;
 use tracing::debug;
 
-use crate::ai_pipeline::conversion::{
-    request_conversion_direct_auth, request_conversion_kind, request_conversion_transport_supported,
-};
+use crate::ai_pipeline::conversion::{request_conversion_direct_auth, request_conversion_kind};
 use crate::ai_pipeline::planner::candidate_eligibility::EligibleLocalExecutionCandidate;
 use crate::ai_pipeline::planner::candidate_preparation::{
     prepare_header_authenticated_candidate, OauthPreparationContext,
@@ -28,7 +26,7 @@ use crate::ai_pipeline::transport::auth::{
     build_openai_passthrough_headers, ensure_upstream_auth_header, resolve_local_gemini_auth,
     resolve_local_standard_auth,
 };
-use crate::ai_pipeline::transport::policy::supports_local_standard_transport_with_network;
+use crate::ai_pipeline::transport::local_standard_transport_unsupported_reason_with_network;
 use crate::ai_pipeline::{ConversionMode, ExecutionStrategy};
 use crate::ai_pipeline::{GatewayProviderTransportSnapshot, PlannerAppState};
 use crate::AppState;
@@ -79,16 +77,20 @@ pub(crate) async fn resolve_local_openai_cli_candidate_payload_parts(
 
     let same_format = provider_api_format == client_api_format;
     let conversion_kind = request_conversion_kind(spec_metadata.api_format, provider_api_format);
-    let transport_supported = if same_format {
-        supports_local_standard_transport_with_network(transport, provider_api_format)
+    let transport_unsupported_reason = if same_format {
+        local_standard_transport_unsupported_reason_with_network(transport, provider_api_format)
     } else {
         match conversion_kind {
-            Some(_) if is_antigravity && provider_api_format == "gemini:cli" => true,
-            Some(kind) => request_conversion_transport_supported(transport, kind),
-            None => false,
+            Some(_) if is_antigravity && provider_api_format == "gemini:cli" => None,
+            Some(kind) => {
+                crate::ai_pipeline::conversion::request_conversion_transport_unsupported_reason(
+                    transport, kind,
+                )
+            }
+            None => Some("transport_api_format_unsupported"),
         }
     };
-    if !transport_supported {
+    if let Some(skip_reason) = transport_unsupported_reason {
         mark_skipped_local_openai_cli_candidate(
             state,
             input,
@@ -96,7 +98,7 @@ pub(crate) async fn resolve_local_openai_cli_candidate_payload_parts(
             candidate,
             candidate_index,
             candidate_id,
-            "transport_unsupported",
+            skip_reason,
         )
         .await;
         return None;

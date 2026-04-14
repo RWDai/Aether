@@ -33,8 +33,11 @@ pub use oauth_refresh::{
     LocalOAuthRefreshError, LocalResolvedOAuthRequestAuth,
 };
 pub use policy::{
-    supports_local_gemini_transport, supports_local_gemini_transport_with_network,
-    supports_local_standard_transport,
+    local_gemini_transport_unsupported_reason,
+    local_gemini_transport_unsupported_reason_with_network,
+    local_openai_chat_transport_unsupported_reason, local_standard_transport_unsupported_reason,
+    local_standard_transport_unsupported_reason_with_network, supports_local_gemini_transport,
+    supports_local_gemini_transport_with_network, supports_local_standard_transport,
 };
 pub use rules::{
     apply_local_body_rules, apply_local_header_rules, body_rules_are_locally_supported,

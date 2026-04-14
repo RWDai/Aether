@@ -183,6 +183,9 @@ export interface RequestDetail {
   has_response_body?: boolean
   has_client_response_body?: boolean
   metadata?: Record<string, unknown>
+  routing?: Record<string, unknown>
+  body_capture?: Record<string, unknown>
+  trace?: Record<string, unknown>
   settlement?: {
     billing_snapshot?: Record<string, unknown>
     billing_snapshot_schema_version?: string

@@ -77,6 +77,13 @@ pub(crate) async fn build_admin_global_model_routing_payload(
         .flatten()
         .and_then(|value| value.as_str().map(ToOwned::to_owned))
         .unwrap_or_else(|| "provider".to_string());
+    let keep_priority_on_conversion = state
+        .read_system_config_json_value("keep_priority_on_conversion")
+        .await
+        .ok()
+        .flatten()
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
 
     let global_model_mappings = global_model
         .config
@@ -179,6 +186,7 @@ pub(crate) async fn build_admin_global_model_routing_payload(
                 "api_format": endpoint.api_format,
                 "base_url": endpoint.base_url,
                 "custom_path": endpoint.custom_path,
+                "format_acceptance_config": endpoint.format_acceptance_config,
                 "is_active": endpoint.is_active,
                 "keys": key_payloads,
                 "total_keys": key_payloads.len(),
@@ -196,6 +204,8 @@ pub(crate) async fn build_admin_global_model_routing_payload(
             "name": &provider.name,
             "model_id": &model.id,
             "provider_priority": provider.provider_priority,
+            "enable_format_conversion": provider.enable_format_conversion,
+            "keep_priority_on_conversion": provider.keep_priority_on_conversion,
             "billing_type": provider.billing_type.clone(),
             "monthly_quota_usd": provider.monthly_quota_usd,
             "monthly_used_usd": provider.monthly_used_usd,
@@ -242,6 +252,7 @@ pub(crate) async fn build_admin_global_model_routing_payload(
         "active_providers": active_providers,
         "scheduling_mode": scheduling_mode,
         "priority_mode": priority_mode,
+        "keep_priority_on_conversion": keep_priority_on_conversion,
         "all_keys_whitelist": all_keys_whitelist,
     }))
 }

@@ -1,5 +1,7 @@
 use self::affinity::candidate_affinity_hash;
-use self::selection::collect_selectable_candidates;
+use self::selection::{
+    collect_selectable_candidates, collect_selectable_candidates_with_skip_reasons,
+};
 use super::state::SchedulerRuntimeState;
 
 mod affinity;
@@ -25,6 +27,8 @@ use aether_wallet::{ProviderBillingType, ProviderQuotaSnapshot};
 use regex::Regex;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+
+pub(crate) use self::selection::SchedulerSkippedCandidate;
 
 use crate::data::auth::GatewayAuthApiKeySnapshot;
 use crate::data::candidate_selection::{
@@ -53,6 +57,35 @@ pub(crate) async fn list_selectable_candidates(
     now_unix_secs: u64,
 ) -> Result<Vec<SchedulerMinimalCandidateSelectionCandidate>, GatewayError> {
     collect_selectable_candidates(
+        selection_row_source,
+        runtime_state,
+        api_format,
+        global_model_name,
+        require_streaming,
+        required_capabilities,
+        auth_snapshot,
+        now_unix_secs,
+    )
+    .await
+}
+
+pub(crate) async fn list_selectable_candidates_with_skip_reasons(
+    selection_row_source: &(impl MinimalCandidateSelectionRowSource + Sync),
+    runtime_state: &impl SchedulerRuntimeState,
+    api_format: &str,
+    global_model_name: &str,
+    require_streaming: bool,
+    required_capabilities: Option<&serde_json::Value>,
+    auth_snapshot: Option<&GatewayAuthApiKeySnapshot>,
+    now_unix_secs: u64,
+) -> Result<
+    (
+        Vec<SchedulerMinimalCandidateSelectionCandidate>,
+        Vec<SchedulerSkippedCandidate>,
+    ),
+    GatewayError,
+> {
+    collect_selectable_candidates_with_skip_reasons(
         selection_row_source,
         runtime_state,
         api_format,

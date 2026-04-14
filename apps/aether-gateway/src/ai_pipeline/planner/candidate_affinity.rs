@@ -1093,6 +1093,83 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn realtime_gate_allows_cross_format_candidates_when_endpoint_acceptance_is_enabled() {
+        let mut endpoint_cross =
+            sample_endpoint_for_provider("provider-cross", "endpoint-cross", "claude:chat");
+        endpoint_cross.format_acceptance_config = Some(json!({
+            "enabled": true,
+            "accept_formats": ["openai:chat"],
+        }));
+
+        let provider_catalog = InMemoryProviderCatalogReadRepository::seed(
+            vec![
+                sample_provider_with_options("provider-cross", false, 0),
+                sample_provider_with_options("provider-same", false, 10),
+            ],
+            vec![
+                endpoint_cross,
+                sample_endpoint_for_provider("provider-same", "endpoint-same", "openai:chat"),
+            ],
+            vec![
+                sample_key_for_provider_with_options(
+                    "provider-cross",
+                    "key-cross",
+                    "",
+                    true,
+                    Some(json!(["claude:chat"])),
+                    None,
+                ),
+                sample_key_for_provider_with_options(
+                    "provider-same",
+                    "key-same",
+                    "",
+                    true,
+                    Some(json!(["openai:chat"])),
+                    None,
+                ),
+            ],
+        );
+        let data_state = GatewayDataState::with_provider_transport_reader_for_tests(
+            std::sync::Arc::new(provider_catalog),
+            "development-key",
+        );
+        let state = AppState::new()
+            .expect("state should build")
+            .with_data_state_for_tests(data_state);
+
+        let (ranked, skipped) = filter_and_rank_local_execution_candidates(
+            PlannerAppState::new(&state),
+            vec![
+                sample_priority_candidate(
+                    "provider-cross",
+                    "endpoint-cross",
+                    "key-cross",
+                    "claude:chat",
+                    Some(0),
+                    0,
+                ),
+                sample_priority_candidate(
+                    "provider-same",
+                    "endpoint-same",
+                    "key-same",
+                    "openai:chat",
+                    Some(10),
+                    10,
+                ),
+            ],
+            "openai:chat",
+            "gpt-4.1",
+            None,
+        )
+        .await;
+
+        assert_eq!(ranked.len(), 2);
+        assert_eq!(ranked[0].candidate.endpoint_id, "endpoint-same");
+        assert_eq!(ranked[1].candidate.endpoint_id, "endpoint-cross");
+        assert!(skipped.is_empty());
+    }
+
+    #[tokio::test]
     async fn remembers_scheduler_affinity_for_candidate_using_requested_model_key() {
         let state = AppState::new().expect("state should build");
         let auth_snapshot = GatewayAuthApiKeySnapshot::from_stored(

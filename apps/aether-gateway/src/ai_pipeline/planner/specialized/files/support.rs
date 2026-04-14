@@ -11,7 +11,8 @@ use crate::ai_pipeline::planner::candidate_materialization::{
     remember_first_local_candidate_affinity,
 };
 use crate::ai_pipeline::planner::candidate_metadata::{
-    build_local_execution_candidate_metadata, LocalExecutionCandidateMetadataParts,
+    build_local_execution_candidate_metadata,
+    build_local_execution_candidate_metadata_for_candidate, LocalExecutionCandidateMetadataParts,
 };
 use crate::ai_pipeline::planner::decision_input::{
     build_local_authenticated_decision_input, resolve_local_authenticated_decision_input,
@@ -131,7 +132,25 @@ pub(super) async fn materialize_local_gemini_files_candidate_attempts(
         trace_id,
         persistence_policy.skipped,
         attempts.len() as u32,
-        skipped_candidates,
+        skipped_candidates
+            .into_iter()
+            .map(|mut skipped_candidate| {
+                let mut extra_fields = serde_json::Map::new();
+                extra_fields.insert(
+                    "candidate_api_format".to_string(),
+                    json!(GEMINI_FILES_CANDIDATE_API_FORMAT),
+                );
+                skipped_candidate.extra_data =
+                    Some(build_local_execution_candidate_metadata_for_candidate(
+                        &skipped_candidate.candidate,
+                        skipped_candidate.transport.as_ref(),
+                        GEMINI_FILES_CLIENT_API_FORMAT,
+                        GEMINI_FILES_CLIENT_API_FORMAT,
+                        extra_fields,
+                    ));
+                skipped_candidate
+            })
+            .collect(),
     )
     .await;
 

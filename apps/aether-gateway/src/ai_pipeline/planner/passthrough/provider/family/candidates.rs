@@ -1,13 +1,17 @@
 use tracing::warn;
 
-use crate::ai_pipeline::planner::candidate_eligibility::filter_and_rank_local_execution_candidates;
+use crate::ai_pipeline::planner::candidate_eligibility::{
+    filter_and_rank_local_execution_candidates, SkippedLocalExecutionCandidate,
+};
 use crate::ai_pipeline::planner::candidate_materialization::{
     persist_available_local_execution_candidates_with_context,
     persist_skipped_local_execution_candidates_with_context,
     remember_first_local_candidate_affinity,
 };
 use crate::ai_pipeline::planner::candidate_metadata::{
-    build_local_execution_candidate_contract_metadata, LocalExecutionCandidateMetadataParts,
+    build_local_execution_candidate_contract_metadata,
+    build_local_execution_candidate_contract_metadata_for_candidate,
+    LocalExecutionCandidateMetadataParts,
 };
 use crate::ai_pipeline::planner::common::extract_requested_model_from_request;
 use crate::ai_pipeline::planner::decision_input::{
@@ -90,8 +94,8 @@ pub(crate) async fn materialize_local_same_format_provider_candidate_attempts(
         input.required_capabilities.as_ref(),
         LocalCandidatePersistencePolicyKind::SameFormatProviderDecision,
     );
-    let candidates = planner_state
-        .list_selectable_candidates(
+    let (candidates, preselection_skipped) = planner_state
+        .list_selectable_candidates_with_skip_reasons(
             spec_metadata.api_format,
             &input.requested_model,
             spec_metadata.require_streaming,
@@ -108,6 +112,36 @@ pub(crate) async fn materialize_local_same_format_provider_candidate_attempts(
         input.required_capabilities.as_ref(),
     )
     .await;
+    let skipped_candidates = preselection_skipped
+        .into_iter()
+        .map(|item| SkippedLocalExecutionCandidate {
+            candidate: item.candidate,
+            skip_reason: item.skip_reason,
+            transport: None,
+            extra_data: None,
+        })
+        .chain(skipped_candidates)
+        .map(|mut skipped_candidate| {
+            let provider_api_format = skipped_candidate
+                .transport
+                .as_ref()
+                .map(|transport| transport.endpoint.api_format.trim().to_ascii_lowercase())
+                .unwrap_or_else(|| spec_metadata.api_format.to_string());
+            skipped_candidate.extra_data = Some(
+                build_local_execution_candidate_contract_metadata_for_candidate(
+                    &skipped_candidate.candidate,
+                    skipped_candidate.transport.as_ref(),
+                    provider_api_format.as_str(),
+                    spec_metadata.api_format,
+                    serde_json::Map::new(),
+                    ExecutionStrategy::LocalSameFormat,
+                    ConversionMode::None,
+                    provider_api_format.as_str(),
+                ),
+            );
+            skipped_candidate
+        })
+        .collect::<Vec<_>>();
     let candidate_count = candidates.len() + skipped_candidates.len();
 
     remember_first_local_candidate_affinity(

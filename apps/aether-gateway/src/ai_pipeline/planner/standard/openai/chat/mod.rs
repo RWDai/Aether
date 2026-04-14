@@ -99,22 +99,29 @@ pub(crate) async fn maybe_build_sync_local_decision_payload(
         return Ok(None);
     };
 
-    let candidates = match list_local_openai_chat_candidates(state, &input, false).await {
-        Ok(candidates) => candidates,
-        Err(err) => {
-            warn!(
-                event_name = "local_openai_chat_scheduler_selection_failed",
-                log_type = "event",
-                trace_id = %trace_id,
-                error = ?err,
-                "gateway local openai chat sync decision scheduler selection failed"
-            );
-            return Ok(None);
-        }
-    };
+    let (candidates, skipped_candidates) =
+        match list_local_openai_chat_candidates(state, &input, false).await {
+            Ok(value) => value,
+            Err(err) => {
+                warn!(
+                    event_name = "local_openai_chat_scheduler_selection_failed",
+                    log_type = "event",
+                    trace_id = %trace_id,
+                    error = ?err,
+                    "gateway local openai chat sync decision scheduler selection failed"
+                );
+                return Ok(None);
+            }
+        };
 
-    let attempts =
-        materialize_local_openai_chat_candidate_attempts(state, trace_id, &input, candidates).await;
+    let attempts = materialize_local_openai_chat_candidate_attempts(
+        state,
+        trace_id,
+        &input,
+        candidates,
+        skipped_candidates,
+    )
+    .await;
 
     for attempt in attempts {
         if let Some(payload) = maybe_build_local_openai_chat_decision_payload_for_candidate(
@@ -157,22 +164,29 @@ pub(crate) async fn maybe_build_stream_local_decision_payload(
         return Ok(None);
     };
 
-    let candidates = match list_local_openai_chat_candidates(state, &input, true).await {
-        Ok(candidates) => candidates,
-        Err(err) => {
-            warn!(
-                event_name = "local_openai_chat_scheduler_selection_failed",
-                log_type = "event",
-                trace_id = %trace_id,
-                error = ?err,
-                "gateway local openai chat stream decision scheduler selection failed"
-            );
-            return Ok(None);
-        }
-    };
+    let (candidates, skipped_candidates) =
+        match list_local_openai_chat_candidates(state, &input, true).await {
+            Ok(value) => value,
+            Err(err) => {
+                warn!(
+                    event_name = "local_openai_chat_scheduler_selection_failed",
+                    log_type = "event",
+                    trace_id = %trace_id,
+                    error = ?err,
+                    "gateway local openai chat stream decision scheduler selection failed"
+                );
+                return Ok(None);
+            }
+        };
 
-    let attempts =
-        materialize_local_openai_chat_candidate_attempts(state, trace_id, &input, candidates).await;
+    let attempts = materialize_local_openai_chat_candidate_attempts(
+        state,
+        trace_id,
+        &input,
+        candidates,
+        skipped_candidates,
+    )
+    .await;
 
     for attempt in attempts {
         if let Some(payload) = maybe_build_local_openai_chat_decision_payload_for_candidate(

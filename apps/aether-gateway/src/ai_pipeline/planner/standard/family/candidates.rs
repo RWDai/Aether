@@ -3,14 +3,18 @@ use std::collections::BTreeSet;
 use tracing::warn;
 
 use crate::ai_pipeline::conversion::{request_candidate_api_formats, request_conversion_kind};
-use crate::ai_pipeline::planner::candidate_eligibility::filter_and_rank_local_execution_candidates;
+use crate::ai_pipeline::planner::candidate_eligibility::{
+    filter_and_rank_local_execution_candidates, SkippedLocalExecutionCandidate,
+};
 use crate::ai_pipeline::planner::candidate_materialization::{
     persist_available_local_execution_candidates_with_context,
     persist_skipped_local_execution_candidates_with_context,
     remember_first_local_candidate_affinity,
 };
 use crate::ai_pipeline::planner::candidate_metadata::{
-    build_local_execution_candidate_contract_metadata, LocalExecutionCandidateMetadataParts,
+    build_local_execution_candidate_contract_metadata,
+    build_local_execution_candidate_contract_metadata_for_candidate,
+    LocalExecutionCandidateMetadataParts,
 };
 use crate::ai_pipeline::planner::candidate_source::auth_snapshot_allows_cross_format_candidate;
 use crate::ai_pipeline::planner::common::extract_requested_model_from_request;
@@ -93,7 +97,9 @@ pub(super) async fn materialize_local_standard_candidate_attempts(
         LocalCandidatePersistencePolicyKind::StandardDecision,
     );
     let mut seen_candidates = BTreeSet::new();
+    let mut seen_skipped_candidates = BTreeSet::new();
     let mut candidates = Vec::new();
+    let mut preselection_skipped = Vec::new();
     for candidate_api_format in
         request_candidate_api_formats(spec_metadata.api_format, spec_metadata.require_streaming)
     {
@@ -102,8 +108,8 @@ pub(super) async fn materialize_local_standard_candidate_attempts(
         } else {
             None
         };
-        let mut selected_candidates = planner_state
-            .list_selectable_candidates(
+        let (mut selected_candidates, skipped_candidates) = planner_state
+            .list_selectable_candidates_with_skip_reasons(
                 candidate_api_format,
                 &input.requested_model,
                 spec_metadata.require_streaming,
@@ -120,6 +126,34 @@ pub(super) async fn materialize_local_standard_candidate_attempts(
                     candidate,
                 )
             });
+        }
+        for skipped_candidate in skipped_candidates {
+            if auth_snapshot.is_none()
+                && !auth_snapshot_allows_cross_format_candidate(
+                    &input.auth_snapshot,
+                    &input.requested_model,
+                    &skipped_candidate.candidate,
+                )
+            {
+                continue;
+            }
+            let candidate_key = format!(
+                "{}:{}:{}:{}:{}:{}",
+                skipped_candidate.candidate.provider_id,
+                skipped_candidate.candidate.endpoint_id,
+                skipped_candidate.candidate.key_id,
+                skipped_candidate.candidate.model_id,
+                skipped_candidate.candidate.selected_provider_model_name,
+                skipped_candidate.candidate.endpoint_api_format,
+            );
+            if seen_skipped_candidates.insert(candidate_key) {
+                preselection_skipped.push(SkippedLocalExecutionCandidate {
+                    candidate: skipped_candidate.candidate,
+                    skip_reason: skipped_candidate.skip_reason,
+                    transport: None,
+                    extra_data: None,
+                });
+            }
         }
         for candidate in selected_candidates {
             let candidate_key = format!(
@@ -144,6 +178,49 @@ pub(super) async fn materialize_local_standard_candidate_attempts(
         input.required_capabilities.as_ref(),
     )
     .await;
+    let skipped_candidates = preselection_skipped
+        .into_iter()
+        .chain(skipped_candidates)
+        .map(|mut skipped_candidate| {
+            let provider_api_format = skipped_candidate
+                .transport
+                .as_ref()
+                .map(|transport| transport.endpoint.api_format.trim().to_ascii_lowercase())
+                .unwrap_or_else(|| {
+                    skipped_candidate
+                        .candidate
+                        .endpoint_api_format
+                        .trim()
+                        .to_ascii_lowercase()
+                });
+            let execution_strategy = if provider_api_format == spec_metadata.api_format {
+                ExecutionStrategy::LocalSameFormat
+            } else {
+                ExecutionStrategy::LocalCrossFormat
+            };
+            let conversion_mode =
+                if request_conversion_kind(spec_metadata.api_format, provider_api_format.as_str())
+                    .is_some()
+                {
+                    ConversionMode::Bidirectional
+                } else {
+                    ConversionMode::None
+                };
+            skipped_candidate.extra_data = Some(
+                build_local_execution_candidate_contract_metadata_for_candidate(
+                    &skipped_candidate.candidate,
+                    skipped_candidate.transport.as_ref(),
+                    provider_api_format.as_str(),
+                    spec_metadata.api_format,
+                    serde_json::Map::new(),
+                    execution_strategy,
+                    conversion_mode,
+                    provider_api_format.as_str(),
+                ),
+            );
+            skipped_candidate
+        })
+        .collect::<Vec<_>>();
     let candidate_count = candidates.len() + skipped_candidates.len();
 
     remember_first_local_candidate_affinity(

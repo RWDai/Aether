@@ -62,6 +62,7 @@ impl<'a> PlannerAppState<'a> {
         candidate_id: &str,
         required_capabilities: Option<&Value>,
         skip_reason: &str,
+        extra_data: Option<Value>,
         finished_at_unix_ms: u64,
         error_context: &'static str,
     ) {
@@ -75,6 +76,7 @@ impl<'a> PlannerAppState<'a> {
             candidate_id,
             required_capabilities,
             skip_reason,
+            extra_data,
             finished_at_unix_ms,
             error_context,
         )

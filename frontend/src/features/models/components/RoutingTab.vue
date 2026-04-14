@@ -229,7 +229,7 @@
                                 size="icon"
                                 class="h-6 w-6 text-green-600"
                                 title="刷新健康状态"
-                                @click.stop="handleRecoverKey(keyEntry.key.id, formatGroup.api_format)"
+                                @click.stop="handleRecoverKey(keyEntry.key.id, keyEntry.endpoint?.api_format || formatGroup.api_format)"
                               >
                                 <RefreshCw class="w-3 h-3" />
                               </Button>
@@ -502,7 +502,7 @@
                                           v-if="key.circuit_breaker_open || (key.health_score ?? 1) < 0.5"
                                           class="p-0.5 rounded hover:bg-muted/50 text-green-600 shrink-0"
                                           title="刷新健康状态"
-                                          @click.stop="handleRecoverKey(key.id, formatGroup.api_format)"
+                                          @click.stop="handleRecoverKey(key.id, providerEntry.endpoint?.api_format || formatGroup.api_format)"
                                         >
                                           <RefreshCw class="w-3 h-3" />
                                         </button>
@@ -653,6 +653,8 @@ interface FormatProviderEntry {
   endpoint: RoutingEndpointInfo | null
   keys: RoutingKeyInfo[]
   active_keys: number
+  is_cross_format: boolean
+  priority_api_format: string
 }
 
 // 全局 Key 模式下的 Key 条目（包含 Provider 信息）
@@ -660,11 +662,14 @@ interface GlobalKeyEntry {
   key: RoutingKeyInfo
   provider: RoutingProviderInfo
   endpoint: RoutingEndpointInfo | null
+  is_cross_format: boolean
+  priority_api_format: string
 }
 
 // 全局 Key 模式下的优先级分组
 interface GlobalKeyGroup {
   priority: number | null
+  demote_cross_format: boolean
   keys: GlobalKeyEntry[]
 }
 
@@ -680,6 +685,128 @@ interface ApiFormatGroup {
   active_keys: number
 }
 
+const STANDARD_ROUTING_API_FORMATS = [
+  'openai:chat',
+  'openai:cli',
+  'claude:chat',
+  'claude:cli',
+  'gemini:chat',
+  'gemini:cli'
+]
+
+function apiDataFormatId(apiFormat: string): string | null {
+  switch (apiFormat.trim().toLowerCase()) {
+    case 'claude:chat':
+    case 'claude:cli':
+      return 'claude'
+    case 'gemini:chat':
+    case 'gemini:cli':
+      return 'gemini'
+    case 'openai:chat':
+      return 'openai_chat'
+    case 'openai:cli':
+    case 'openai:compact':
+      return 'openai_responses'
+    default:
+      return null
+  }
+}
+
+function requestConversionKind(clientApiFormat: string, providerApiFormat: string): string | null {
+  const client = clientApiFormat.trim().toLowerCase()
+  const provider = providerApiFormat.trim().toLowerCase()
+  if (client === provider) return null
+  if (!STANDARD_ROUTING_API_FORMATS.includes(client) || !STANDARD_ROUTING_API_FORMATS.includes(provider)) {
+    return null
+  }
+
+  switch (provider) {
+    case 'openai:chat':
+      return 'to_openai_chat'
+    case 'openai:cli':
+      return 'to_openai_cli'
+    case 'claude:chat':
+    case 'claude:cli':
+      return 'to_claude'
+    case 'gemini:chat':
+    case 'gemini:cli':
+      return 'to_gemini'
+    default:
+      return null
+  }
+}
+
+function requestConversionRequiresEnableFlag(clientApiFormat: string, providerApiFormat: string): boolean {
+  const clientDataFormat = apiDataFormatId(clientApiFormat)
+  const providerDataFormat = apiDataFormatId(providerApiFormat)
+  if (!clientDataFormat || !providerDataFormat) return true
+  return clientDataFormat !== providerDataFormat
+}
+
+function endpointFormatAcceptanceEnabled(endpoint: RoutingEndpointInfo): boolean {
+  return endpoint.format_acceptance_config?.enabled === true
+}
+
+function endpointFormatListContains(formats: string[] | null | undefined, apiFormat: string): boolean {
+  if (!Array.isArray(formats)) return false
+  return formats.some(value => value.trim().toLowerCase() === apiFormat.trim().toLowerCase())
+}
+
+function endpointAcceptsClientFormat(endpoint: RoutingEndpointInfo, clientApiFormat: string): boolean {
+  if (!endpointFormatAcceptanceEnabled(endpoint)) return false
+
+  const config = endpoint.format_acceptance_config
+  if (endpointFormatListContains(config?.reject_formats, clientApiFormat)) {
+    return false
+  }
+  if (config?.accept_formats) {
+    return endpointFormatListContains(config.accept_formats, clientApiFormat)
+  }
+  return true
+}
+
+function endpointSupportsClientFormat(
+  provider: RoutingProviderInfo,
+  endpoint: RoutingEndpointInfo,
+  clientApiFormat: string,
+  providerApiFormat: string
+): boolean {
+  const clientFormat = clientApiFormat.trim().toLowerCase()
+  const providerFormat = providerApiFormat.trim().toLowerCase()
+  if (clientFormat === providerFormat) return true
+  if (!requestConversionKind(clientFormat, providerFormat)) return false
+  if (!requestConversionRequiresEnableFlag(clientFormat, providerFormat)) return true
+  return !!provider.enable_format_conversion || endpointAcceptsClientFormat(endpoint, clientFormat)
+}
+
+function targetFormatsForEndpoint(
+  provider: RoutingProviderInfo,
+  endpoint: RoutingEndpointInfo
+): string[] {
+  return STANDARD_ROUTING_API_FORMATS.filter(format =>
+    endpointSupportsClientFormat(provider, endpoint, format, endpoint.api_format)
+  )
+}
+
+function keepPriorityOnConversion(provider: RoutingProviderInfo): boolean {
+  return !!(routingData.value?.keep_priority_on_conversion || provider.keep_priority_on_conversion)
+}
+
+function shouldDemoteCrossFormat(
+  targetApiFormat: string,
+  entryApiFormat: string,
+  provider: RoutingProviderInfo
+): boolean {
+  return targetApiFormat !== entryApiFormat && !keepPriorityOnConversion(provider)
+}
+
+function resolvedGlobalKeyPriority(keyEntry: GlobalKeyEntry): number {
+  const priorityByFormat = keyEntry.key.global_priority_by_format
+  if (!priorityByFormat) return 999
+  const value = priorityByFormat[keyEntry.priority_api_format]
+  return typeof value === 'number' ? value : 999
+}
+
 // 按 API 格式分组的计算属性
 const apiFormatGroups = computed<ApiFormatGroup[]>(() => {
   if (!routingData.value) return []
@@ -692,29 +819,32 @@ const apiFormatGroups = computed<ApiFormatGroup[]>(() => {
   // 遍历所有提供商和它们的 endpoints
   for (const provider of routingData.value.providers) {
     for (const endpoint of provider.endpoints || []) {
-      const format = endpoint.api_format
-      if (!formatMap.has(format)) {
-        formatMap.set(format, { providers: [], allKeys: [] })
-      }
+      for (const format of targetFormatsForEndpoint(provider, endpoint)) {
+        if (!formatMap.has(format)) {
+          formatMap.set(format, { providers: [], allKeys: [] })
+        }
 
-      const data = formatMap.get(format)
-      if (!data) continue
+        const data = formatMap.get(format)
+        if (!data) continue
 
-      // 添加 provider entry
-      data.providers.push({
-        provider,
-        endpoint,
-        keys: endpoint.keys || [],
-        active_keys: endpoint.active_keys || 0
-      })
-
-      // 添加 key entries（用于全局 Key 模式）
-      for (const key of endpoint.keys || []) {
-        data.allKeys.push({
-          key,
+        data.providers.push({
           provider,
-          endpoint
+          endpoint,
+          keys: endpoint.keys || [],
+          active_keys: endpoint.active_keys || 0,
+          is_cross_format: endpoint.api_format !== format,
+          priority_api_format: endpoint.api_format
         })
+
+        for (const key of endpoint.keys || []) {
+          data.allKeys.push({
+            key,
+            provider,
+            endpoint,
+            is_cross_format: endpoint.api_format !== format,
+            priority_api_format: endpoint.api_format
+          })
+        }
       }
     }
   }
@@ -727,29 +857,39 @@ const apiFormatGroups = computed<ApiFormatGroup[]>(() => {
       const aActive = a.provider.is_active && a.provider.model_is_active
       const bActive = b.provider.is_active && b.provider.model_is_active
       if (aActive !== bActive) return bActive ? 1 : -1
+      const aDemoted = shouldDemoteCrossFormat(format, a.priority_api_format, a.provider)
+      const bDemoted = shouldDemoteCrossFormat(format, b.priority_api_format, b.provider)
+      if (aDemoted !== bDemoted) return aDemoted ? 1 : -1
       return a.provider.provider_priority - b.provider.provider_priority
     })
 
     // Key 按全局优先级分组排序（全局 Key 优先模式）
-    // 从 global_priority_by_format 中提取当前 API 格式的优先级
-    const keyGroupMap = new Map<number, GlobalKeyEntry[]>()
+    const keyGroupMap = new Map<string, GlobalKeyGroup>()
     for (const keyEntry of data.allKeys) {
-      const priorityByFormat = keyEntry.key.global_priority_by_format
-      const priority = (priorityByFormat && format in priorityByFormat)
-        ? priorityByFormat[format]
-        : 999
-      if (!keyGroupMap.has(priority)) {
-        keyGroupMap.set(priority, [])
+      const priority = resolvedGlobalKeyPriority(keyEntry)
+      const demoteCrossFormat = shouldDemoteCrossFormat(format, keyEntry.priority_api_format, keyEntry.provider)
+      const groupKey = `${demoteCrossFormat ? 1 : 0}:${priority}`
+      if (!keyGroupMap.has(groupKey)) {
+        keyGroupMap.set(groupKey, {
+          priority: priority === 999 ? null : priority,
+          demote_cross_format: demoteCrossFormat,
+          keys: []
+        })
       }
-      keyGroupMap.get(priority)?.push(keyEntry)
+      keyGroupMap.get(groupKey)?.keys.push(keyEntry)
     }
 
     // 转换为分组数组并排序
-    const keyGroups: GlobalKeyGroup[] = Array.from(keyGroupMap.entries())
-      .sort((a, b) => a[0] - b[0])
-      .map(([priority, keys]) => ({
-        priority: priority === 999 ? null : priority,
-        keys: keys.sort((a, b) => {
+    const keyGroups: GlobalKeyGroup[] = Array.from(keyGroupMap.values())
+      .sort((a, b) => {
+        if (a.demote_cross_format !== b.demote_cross_format) {
+          return a.demote_cross_format ? 1 : -1
+        }
+        return (a.priority ?? 999) - (b.priority ?? 999)
+      })
+      .map(group => ({
+        ...group,
+        keys: group.keys.sort((a, b) => {
           // 同优先级内按活跃状态和健康度排序
           const aActive = a.key.is_active && a.provider.is_active && a.provider.model_is_active
           const bActive = b.key.is_active && b.provider.is_active && b.provider.model_is_active

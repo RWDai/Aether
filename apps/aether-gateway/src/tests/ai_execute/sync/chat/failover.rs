@@ -398,7 +398,7 @@ async fn gateway_skips_unsupported_local_openai_chat_sync_candidate_before_tryin
     assert_eq!(skipped_candidate.status, RequestCandidateStatus::Skipped);
     assert_eq!(
         skipped_candidate.skip_reason.as_deref(),
-        Some("transport_unsupported")
+        Some("transport_provider_type_unsupported")
     );
     assert!(skipped_candidate.started_at_unix_ms.is_none());
     assert!(skipped_candidate.finished_at_unix_ms.is_some());
@@ -665,7 +665,7 @@ async fn gateway_surfaces_local_execution_runtime_miss_reason_when_all_openai_ch
     assert_eq!(stored_candidates[0].status, RequestCandidateStatus::Skipped);
     assert_eq!(
         stored_candidates[0].skip_reason.as_deref(),
-        Some("transport_unsupported")
+        Some("transport_provider_type_unsupported")
     );
     assert_eq!(*public_hits.lock().expect("mutex should lock"), 0);
 

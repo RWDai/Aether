@@ -43,12 +43,15 @@ pub mod vertex {
 }
 
 pub use aether_provider_transport::{
-    apply_local_body_rules, apply_local_header_rules, body_rules_handle_path,
-    build_passthrough_headers, ensure_upstream_auth_header, resolve_transport_execution_timeouts,
+    apply_local_body_rules, apply_local_header_rules, body_rules_are_locally_supported,
+    body_rules_handle_path, build_passthrough_headers, ensure_upstream_auth_header,
+    header_rules_are_locally_supported, local_gemini_transport_unsupported_reason_with_network,
+    local_openai_chat_transport_unsupported_reason,
+    local_standard_transport_unsupported_reason_with_network, resolve_transport_execution_timeouts,
     resolve_transport_proxy_snapshot, resolve_transport_proxy_snapshot_with_tunnel_affinity,
     resolve_transport_tls_profile, should_skip_upstream_passthrough_header,
     supports_local_gemini_transport_with_network,
     supports_local_generic_oauth_request_auth_resolution,
-    supports_local_oauth_request_auth_resolution, GatewayProviderTransportSnapshot,
-    LocalResolvedOAuthRequestAuth,
+    supports_local_oauth_request_auth_resolution, transport_proxy_is_locally_supported,
+    GatewayProviderTransportSnapshot, LocalResolvedOAuthRequestAuth,
 };

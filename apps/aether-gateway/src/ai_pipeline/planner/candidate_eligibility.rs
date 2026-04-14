@@ -17,6 +17,8 @@ pub(crate) struct EligibleLocalExecutionCandidate {
 pub(crate) struct SkippedLocalExecutionCandidate {
     pub(crate) candidate: SchedulerMinimalCandidateSelectionCandidate,
     pub(crate) skip_reason: &'static str,
+    pub(crate) transport: Option<GatewayProviderTransportSnapshot>,
+    pub(crate) extra_data: Option<serde_json::Value>,
 }
 
 pub(crate) async fn filter_and_rank_local_execution_candidates(
@@ -96,6 +98,8 @@ where
             skipped.push(SkippedLocalExecutionCandidate {
                 candidate,
                 skip_reason: "transport_snapshot_missing",
+                transport: None,
+                extra_data: None,
             });
             continue;
         };
@@ -103,6 +107,8 @@ where
             Some(skip_reason) => skipped.push(SkippedLocalExecutionCandidate {
                 candidate,
                 skip_reason,
+                transport: Some(transport),
+                extra_data: None,
             }),
             None => selectable.push(EligibleLocalExecutionCandidate {
                 provider_api_format: transport.endpoint.api_format.trim().to_ascii_lowercase(),
@@ -190,8 +196,11 @@ fn current_local_execution_candidate_skip_reason_with_transport(
                 client_api_format.as_str(),
                 endpoint_api_format.as_str(),
             )
-            && !transport.provider.enable_format_conversion
-        {
+            && !crate::ai_pipeline::conversion::request_conversion_enabled_for_transport(
+                transport,
+                client_api_format.as_str(),
+                endpoint_api_format.as_str(),
+            ) {
             "format_conversion_disabled"
         } else {
             "transport_unsupported"

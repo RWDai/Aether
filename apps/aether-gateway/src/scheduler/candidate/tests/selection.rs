@@ -22,6 +22,7 @@ use crate::{AppState, GatewayError};
 use super::super::runtime::should_skip_provider_quota;
 use super::super::selection::{
     collect_selectable_candidates as collect_selectable_candidates_impl,
+    collect_selectable_candidates_with_skip_reasons as collect_selectable_candidates_with_skip_reasons_impl,
     select_minimal_candidate as select_candidate_impl,
 };
 use super::support::{sample_auth_snapshot, sample_key, sample_provider, sample_row};
@@ -58,6 +59,34 @@ async fn collect_selectable_candidates(
     now_unix_secs: u64,
 ) -> Result<Vec<SchedulerMinimalCandidateSelectionCandidate>, GatewayError> {
     collect_selectable_candidates_impl(
+        selection_row_source,
+        runtime_state,
+        api_format,
+        global_model_name,
+        require_streaming,
+        None,
+        auth_snapshot,
+        now_unix_secs,
+    )
+    .await
+}
+
+async fn collect_selectable_candidates_with_skip_reasons(
+    selection_row_source: &(impl MinimalCandidateSelectionRowSource + Sync),
+    runtime_state: &AppState,
+    api_format: &str,
+    global_model_name: &str,
+    require_streaming: bool,
+    auth_snapshot: Option<&GatewayAuthApiKeySnapshot>,
+    now_unix_secs: u64,
+) -> Result<
+    (
+        Vec<SchedulerMinimalCandidateSelectionCandidate>,
+        Vec<super::super::SchedulerSkippedCandidate>,
+    ),
+    GatewayError,
+> {
+    collect_selectable_candidates_with_skip_reasons_impl(
         selection_row_source,
         runtime_state,
         api_format,
@@ -1042,6 +1071,73 @@ async fn selects_next_candidate_when_first_provider_key_circuit_is_open() {
 
     assert_eq!(selected.provider_id, "provider-b");
     assert_eq!(selected.key_id, "key-b");
+}
+
+#[tokio::test]
+async fn exposes_runtime_skipped_candidates_with_skip_reasons() {
+    let mut first = sample_row();
+    first.provider_id = "provider-a".to_string();
+    first.provider_name = "openai-a".to_string();
+    first.endpoint_id = "endpoint-a".to_string();
+    first.key_id = "key-a".to_string();
+    first.key_name = "alpha".to_string();
+    first.key_global_priority_by_format = Some(serde_json::json!({"openai:chat": 1}));
+
+    let mut second = sample_row();
+    second.provider_id = "provider-b".to_string();
+    second.provider_name = "openai-b".to_string();
+    second.endpoint_id = "endpoint-b".to_string();
+    second.key_id = "key-b".to_string();
+    second.key_name = "beta".to_string();
+    second.key_global_priority_by_format = Some(serde_json::json!({"openai:chat": 2}));
+
+    let candidates = Arc::new(InMemoryMinimalCandidateSelectionReadRepository::seed(vec![
+        first, second,
+    ]));
+    let provider_catalog = Arc::new(InMemoryProviderCatalogReadRepository::seed(
+        vec![
+            sample_provider("provider-a", None),
+            sample_provider("provider-b", None),
+        ],
+        Vec::new(),
+        vec![
+            sample_key("key-a", "provider-a", Some(10)).with_health_fields(
+                Some(serde_json::json!({"openai:chat": {"health_score": 0.2}})),
+                Some(serde_json::json!({"openai:chat": {"open": true}})),
+            ),
+            sample_key("key-b", "provider-b", Some(10)),
+        ],
+    ));
+    let quotas = Arc::new(InMemoryProviderQuotaRepository::seed(vec![]));
+    let request_candidates = Arc::new(InMemoryRequestCandidateRepository::seed(vec![]));
+    let state = AppState::new()
+        .expect("state should build")
+        .with_data_state_for_tests(
+            GatewayDataState::with_candidate_selection_provider_catalog_quota_and_request_candidates_for_tests(
+                candidates,
+                provider_catalog,
+                quotas,
+                request_candidates,
+            ),
+        );
+
+    let (selected, skipped) = collect_selectable_candidates_with_skip_reasons(
+        state.data.as_ref(),
+        &state,
+        "openai:chat",
+        "gpt-4.1",
+        false,
+        None,
+        100,
+    )
+    .await
+    .expect("selection should succeed");
+
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].provider_id, "provider-b");
+    assert_eq!(skipped.len(), 1);
+    assert_eq!(skipped[0].candidate.provider_id, "provider-a");
+    assert_eq!(skipped[0].skip_reason, "key_circuit_open");
 }
 
 #[tokio::test]

@@ -2,9 +2,7 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
-use crate::ai_pipeline::conversion::{
-    request_conversion_direct_auth, request_conversion_kind, request_conversion_transport_supported,
-};
+use crate::ai_pipeline::conversion::{request_conversion_direct_auth, request_conversion_kind};
 use crate::ai_pipeline::planner::candidate_eligibility::EligibleLocalExecutionCandidate;
 use crate::ai_pipeline::planner::candidate_preparation::{
     prepare_header_authenticated_candidate, OauthPreparationContext,
@@ -20,7 +18,7 @@ use crate::ai_pipeline::transport::auth::{
     build_claude_passthrough_headers, build_complete_passthrough_headers_with_auth,
     build_openai_passthrough_headers, ensure_upstream_auth_header, resolve_local_openai_chat_auth,
 };
-use crate::ai_pipeline::transport::policy::supports_local_openai_chat_transport;
+use crate::ai_pipeline::transport::local_openai_chat_transport_unsupported_reason;
 use crate::ai_pipeline::{ConversionMode, ExecutionStrategy, GatewayProviderTransportSnapshot};
 use crate::AppState;
 
@@ -60,7 +58,7 @@ pub(crate) async fn resolve_local_openai_chat_candidate_payload_parts(
     let transport = &eligible.transport;
 
     if provider_api_format == "openai:chat" {
-        if !supports_local_openai_chat_transport(transport) {
+        if let Some(skip_reason) = local_openai_chat_transport_unsupported_reason(transport) {
             mark_skipped_local_openai_chat_candidate(
                 state,
                 input,
@@ -68,7 +66,7 @@ pub(crate) async fn resolve_local_openai_chat_candidate_payload_parts(
                 candidate,
                 candidate_index,
                 candidate_id,
-                "transport_unsupported",
+                skip_reason,
             )
             .await;
             return None;
@@ -208,12 +206,17 @@ pub(crate) async fn resolve_local_openai_chat_candidate_payload_parts(
             candidate,
             candidate_index,
             candidate_id,
-            "transport_unsupported",
+            "transport_api_format_unsupported",
         )
         .await;
         return None;
     };
-    if !request_conversion_transport_supported(transport, conversion_kind) {
+    if let Some(skip_reason) =
+        crate::ai_pipeline::conversion::request_conversion_transport_unsupported_reason(
+            transport,
+            conversion_kind,
+        )
+    {
         mark_skipped_local_openai_chat_candidate(
             state,
             input,
@@ -221,7 +224,7 @@ pub(crate) async fn resolve_local_openai_chat_candidate_payload_parts(
             candidate,
             candidate_index,
             candidate_id,
-            "transport_unsupported",
+            skip_reason,
         )
         .await;
         return None;

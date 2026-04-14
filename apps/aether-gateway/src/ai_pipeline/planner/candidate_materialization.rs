@@ -136,6 +136,7 @@ pub(crate) async fn persist_skipped_local_execution_candidate(
     candidate_id: &str,
     required_capabilities: Option<&Value>,
     skip_reason: &'static str,
+    extra_data: Option<Value>,
     error_context: &'static str,
     record_runtime_miss_diagnostic: bool,
 ) {
@@ -153,6 +154,7 @@ pub(crate) async fn persist_skipped_local_execution_candidate(
             candidate_id,
             required_capabilities,
             skip_reason,
+            extra_data,
             current_unix_ms(),
             error_context,
         )
@@ -178,6 +180,7 @@ pub(crate) async fn mark_skipped_local_execution_candidate(
         candidate_id,
         context.required_capabilities,
         skip_reason,
+        None,
         context.error_context,
         context.record_runtime_miss_diagnostic,
     )
@@ -208,6 +211,7 @@ pub(crate) async fn persist_skipped_local_execution_candidates(
             &generated_candidate_id,
             required_capabilities,
             skipped_candidate.skip_reason,
+            skipped_candidate.extra_data,
             error_context,
             record_runtime_miss_diagnostic,
         )

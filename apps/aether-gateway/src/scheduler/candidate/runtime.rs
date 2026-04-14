@@ -4,8 +4,8 @@ use aether_data_contracts::repository::candidates::StoredRequestCandidate;
 use aether_data_contracts::repository::provider_catalog::StoredProviderCatalogKey;
 use aether_scheduler_core::{
     auth_api_key_concurrency_limit_reached, build_provider_concurrent_limit_map,
-    candidate_is_selectable_with_runtime_state, CandidateRuntimeSelectabilityInput,
-    SchedulerAffinityTarget,
+    candidate_is_selectable_with_runtime_state, candidate_runtime_skip_reason_with_state,
+    CandidateRuntimeSelectabilityInput, SchedulerAffinityTarget,
 };
 
 use crate::data::auth::GatewayAuthApiKeySnapshot;
@@ -77,6 +77,32 @@ pub(super) fn is_candidate_selectable(
     now_unix_secs: u64,
     cached_affinity_target: Option<&SchedulerAffinityTarget>,
 ) -> bool {
+    candidate_is_selectable_with_runtime_state(CandidateRuntimeSelectabilityInput {
+        candidate,
+        recent_candidates: &snapshot.recent_candidates,
+        provider_concurrent_limits: &snapshot.provider_concurrent_limits,
+        provider_key_rpm_states: &snapshot.provider_key_rpm_states,
+        now_unix_secs,
+        cached_affinity_target,
+        provider_quota_blocks_requests: snapshot
+            .provider_quota_blocks_requests
+            .get(candidate.provider_id.as_str())
+            .copied()
+            .unwrap_or(false),
+        rpm_reset_at: snapshot
+            .provider_key_rpm_reset_ats
+            .get(candidate.key_id.as_str())
+            .copied()
+            .flatten(),
+    })
+}
+
+pub(super) fn current_candidate_runtime_skip_reason(
+    candidate: &SchedulerMinimalCandidateSelectionCandidate,
+    snapshot: &CandidateRuntimeSelectionSnapshot,
+    now_unix_secs: u64,
+    cached_affinity_target: Option<&SchedulerAffinityTarget>,
+) -> Option<&'static str> {
     let provider_quota_blocks_requests = snapshot
         .provider_quota_blocks_requests
         .get(candidate.provider_id.as_str())
@@ -88,7 +114,7 @@ pub(super) fn is_candidate_selectable(
         .copied()
         .flatten();
 
-    candidate_is_selectable_with_runtime_state(CandidateRuntimeSelectabilityInput {
+    candidate_runtime_skip_reason_with_state(CandidateRuntimeSelectabilityInput {
         candidate,
         recent_candidates: &snapshot.recent_candidates,
         provider_concurrent_limits: &snapshot.provider_concurrent_limits,

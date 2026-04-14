@@ -20,10 +20,16 @@ use super::affinity::{
     build_scheduler_affinity_cache_key, candidate_key, remember_scheduler_affinity,
 };
 use super::runtime::{
-    auth_snapshot_concurrency_limit_reached, is_candidate_selectable,
+    auth_snapshot_concurrency_limit_reached, current_candidate_runtime_skip_reason,
     read_candidate_runtime_selection_snapshot,
 };
 use super::{SchedulerMinimalCandidateSelectionCandidate, SchedulerRuntimeState};
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SchedulerSkippedCandidate {
+    pub(crate) candidate: SchedulerMinimalCandidateSelectionCandidate,
+    pub(crate) skip_reason: &'static str,
+}
 
 pub(super) fn reorder_candidates_by_scheduler_health(
     candidates: &mut [SchedulerMinimalCandidateSelectionCandidate],
@@ -130,6 +136,36 @@ pub(super) async fn collect_selectable_candidates(
     auth_snapshot: Option<&GatewayAuthApiKeySnapshot>,
     now_unix_secs: u64,
 ) -> Result<Vec<SchedulerMinimalCandidateSelectionCandidate>, GatewayError> {
+    Ok(collect_selectable_candidates_with_skip_reasons(
+        selection_row_source,
+        runtime_state,
+        api_format,
+        global_model_name,
+        require_streaming,
+        required_capabilities,
+        auth_snapshot,
+        now_unix_secs,
+    )
+    .await?
+    .0)
+}
+
+pub(super) async fn collect_selectable_candidates_with_skip_reasons(
+    selection_row_source: &(impl MinimalCandidateSelectionRowSource + Sync),
+    runtime_state: &impl SchedulerRuntimeState,
+    api_format: &str,
+    global_model_name: &str,
+    require_streaming: bool,
+    required_capabilities: Option<&serde_json::Value>,
+    auth_snapshot: Option<&GatewayAuthApiKeySnapshot>,
+    now_unix_secs: u64,
+) -> Result<
+    (
+        Vec<SchedulerMinimalCandidateSelectionCandidate>,
+        Vec<SchedulerSkippedCandidate>,
+    ),
+    GatewayError,
+> {
     let ordering_config = runtime_state.read_scheduler_ordering_config().await?;
     let priority_affinity_key =
         scheduling_priority_affinity_key(auth_snapshot, ordering_config.scheduling_mode);
@@ -176,27 +212,48 @@ pub(super) async fn collect_selectable_candidates(
     };
 
     if auth_snapshot_concurrency_limit_reached(auth_snapshot, &runtime_snapshot, now_unix_secs) {
-        return Ok(Vec::new());
+        return Ok((
+            Vec::new(),
+            candidates
+                .into_iter()
+                .map(|candidate| SchedulerSkippedCandidate {
+                    candidate,
+                    skip_reason: "api_key_concurrency_limit_reached",
+                })
+                .collect(),
+        ));
     }
 
     let mut selected_keys = BTreeSet::new();
+    let mut skipped = Vec::new();
+    let mut emitted_skipped_keys = BTreeSet::new();
 
     for candidate in &candidates {
-        if !is_candidate_selectable(
+        let key = candidate_key(candidate);
+        if let Some(skip_reason) = current_candidate_runtime_skip_reason(
             candidate,
             &runtime_snapshot,
             now_unix_secs,
             cached_affinity_target.as_ref(),
         ) {
+            if emitted_skipped_keys.insert(key) {
+                skipped.push(SchedulerSkippedCandidate {
+                    candidate: candidate.clone(),
+                    skip_reason,
+                });
+            }
             continue;
         }
-        selected_keys.insert(candidate_key(candidate));
+        selected_keys.insert(key);
     }
 
-    Ok(collect_selectable_candidates_from_keys(
-        candidates,
-        &selected_keys,
-        cached_affinity_target.as_ref(),
+    Ok((
+        collect_selectable_candidates_from_keys(
+            candidates,
+            &selected_keys,
+            cached_affinity_target.as_ref(),
+        ),
+        skipped,
     ))
 }
 

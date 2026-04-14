@@ -376,6 +376,12 @@ pub struct CandidateRuntimeSelectabilityInput<'a> {
 pub fn candidate_is_selectable_with_runtime_state(
     input: CandidateRuntimeSelectabilityInput<'_>,
 ) -> bool {
+    candidate_runtime_skip_reason_with_state(input).is_none()
+}
+
+pub fn candidate_runtime_skip_reason_with_state(
+    input: CandidateRuntimeSelectabilityInput<'_>,
+) -> Option<&'static str> {
     let CandidateRuntimeSelectabilityInput {
         candidate,
         recent_candidates,
@@ -388,7 +394,7 @@ pub fn candidate_is_selectable_with_runtime_state(
     } = input;
 
     if provider_quota_blocks_requests {
-        return false;
+        return Some("provider_quota_blocked");
     }
     if crate::is_candidate_in_recent_failure_cooldown(
         recent_candidates,
@@ -397,7 +403,7 @@ pub fn candidate_is_selectable_with_runtime_state(
         candidate.key_id.as_str(),
         now_unix_secs,
     ) {
-        return false;
+        return Some("recent_failure_cooldown");
     }
     if provider_concurrent_limits
         .get(&candidate.provider_id)
@@ -409,7 +415,7 @@ pub fn candidate_is_selectable_with_runtime_state(
             ) >= *limit
         })
     {
-        return false;
+        return Some("provider_concurrency_limit_reached");
     }
 
     let is_cached_user = cached_affinity_target
@@ -417,12 +423,12 @@ pub fn candidate_is_selectable_with_runtime_state(
     if let Some(provider_key) = provider_key_rpm_states.get(&candidate.key_id) {
         if crate::is_provider_key_circuit_open(provider_key, candidate.endpoint_api_format.as_str())
         {
-            return false;
+            return Some("key_circuit_open");
         }
         if crate::provider_key_health_score(provider_key, candidate.endpoint_api_format.as_str())
             .is_some_and(|score| score <= 0.0)
         {
-            return false;
+            return Some("key_health_score_zero");
         }
         if !crate::provider_key_rpm_allows_request_since(
             provider_key,
@@ -431,11 +437,11 @@ pub fn candidate_is_selectable_with_runtime_state(
             is_cached_user,
             rpm_reset_at,
         ) {
-            return false;
+            return Some("key_rpm_exhausted");
         }
     }
 
-    true
+    None
 }
 
 fn compare_provider_key_health_order(

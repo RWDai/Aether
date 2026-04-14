@@ -455,6 +455,7 @@ pub(crate) async fn persist_skipped_local_candidate(
     candidate_id: &str,
     required_capabilities: Option<&Value>,
     skip_reason: &str,
+    extra_data: Option<serde_json::Value>,
     finished_at_unix_ms: u64,
     error_context: &'static str,
 ) {
@@ -479,7 +480,7 @@ pub(crate) async fn persist_skipped_local_candidate(
             error_message: None,
             latency_ms: None,
             concurrent_requests: None,
-            extra_data: None,
+            extra_data,
             required_capabilities: required_capabilities.cloned(),
             created_at_unix_ms: None,
             started_at_unix_ms: None,

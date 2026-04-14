@@ -4,6 +4,7 @@ use aether_scheduler_core::SchedulerMinimalCandidateSelectionCandidate;
 
 use super::super::{GatewayError, LocalOpenAiChatDecisionInput};
 use crate::ai_pipeline::conversion::request_candidate_api_formats;
+use crate::ai_pipeline::planner::candidate_eligibility::SkippedLocalExecutionCandidate;
 use crate::ai_pipeline::planner::candidate_source::auth_snapshot_allows_cross_format_candidate;
 use crate::ai_pipeline::PlannerAppState;
 use crate::clock::current_unix_secs;
@@ -13,11 +14,19 @@ pub(crate) async fn list_local_openai_chat_candidates(
     state: &AppState,
     input: &LocalOpenAiChatDecisionInput,
     require_streaming: bool,
-) -> Result<Vec<SchedulerMinimalCandidateSelectionCandidate>, GatewayError> {
+) -> Result<
+    (
+        Vec<SchedulerMinimalCandidateSelectionCandidate>,
+        Vec<SkippedLocalExecutionCandidate>,
+    ),
+    GatewayError,
+> {
     let planner_state = PlannerAppState::new(state);
     let now_unix_secs = current_unix_secs();
     let mut combined = Vec::new();
     let mut seen = BTreeSet::new();
+    let mut skipped = Vec::new();
+    let mut seen_skipped = BTreeSet::new();
 
     let api_formats = request_candidate_api_formats("openai:chat", require_streaming);
 
@@ -27,8 +36,8 @@ pub(crate) async fn list_local_openai_chat_candidates(
         } else {
             None
         };
-        let mut candidates = planner_state
-            .list_selectable_candidates(
+        let (mut candidates, skipped_candidates) = planner_state
+            .list_selectable_candidates_with_skip_reasons(
                 api_format,
                 &input.requested_model,
                 require_streaming,
@@ -46,6 +55,33 @@ pub(crate) async fn list_local_openai_chat_candidates(
                 )
             });
         }
+        for skipped_candidate in skipped_candidates {
+            if api_format != "openai:chat"
+                && !auth_snapshot_allows_cross_format_candidate(
+                    &input.auth_snapshot,
+                    &input.requested_model,
+                    &skipped_candidate.candidate,
+                )
+            {
+                continue;
+            }
+            let candidate_key = format!(
+                "{}:{}:{}:{}:{}",
+                skipped_candidate.candidate.provider_id,
+                skipped_candidate.candidate.endpoint_id,
+                skipped_candidate.candidate.key_id,
+                skipped_candidate.candidate.model_id,
+                skipped_candidate.candidate.selected_provider_model_name,
+            );
+            if seen_skipped.insert(candidate_key) {
+                skipped.push(SkippedLocalExecutionCandidate {
+                    candidate: skipped_candidate.candidate,
+                    skip_reason: skipped_candidate.skip_reason,
+                    transport: None,
+                    extra_data: None,
+                });
+            }
+        }
         for candidate in candidates {
             let candidate_key = format!(
                 "{}:{}:{}:{}:{}",
@@ -61,5 +97,5 @@ pub(crate) async fn list_local_openai_chat_candidates(
         }
     }
 
-    Ok(combined)
+    Ok((combined, skipped))
 }

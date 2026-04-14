@@ -1,7 +1,9 @@
 use aether_scheduler_core::SchedulerMinimalCandidateSelectionCandidate;
 
 use crate::ai_pipeline::contracts::ExecutionRuntimeAuthContext;
-use crate::ai_pipeline::planner::candidate_eligibility::filter_and_rank_local_execution_candidates;
+use crate::ai_pipeline::planner::candidate_eligibility::{
+    filter_and_rank_local_execution_candidates, SkippedLocalExecutionCandidate,
+};
 use crate::ai_pipeline::planner::candidate_materialization::{
     mark_skipped_local_execution_candidate,
     persist_available_local_execution_candidates_with_context,
@@ -9,7 +11,9 @@ use crate::ai_pipeline::planner::candidate_materialization::{
     remember_first_local_candidate_affinity,
 };
 use crate::ai_pipeline::planner::candidate_metadata::{
-    build_local_execution_candidate_contract_metadata, LocalExecutionCandidateMetadataParts,
+    build_local_execution_candidate_contract_metadata,
+    build_local_execution_candidate_contract_metadata_for_candidate,
+    LocalExecutionCandidateMetadataParts,
 };
 use crate::ai_pipeline::planner::materialization_policy::{
     build_local_candidate_persistence_policy, LocalCandidatePersistencePolicyKind,
@@ -52,6 +56,7 @@ pub(crate) async fn materialize_local_openai_chat_candidate_attempts(
     trace_id: &str,
     input: &LocalOpenAiChatDecisionInput,
     candidates: Vec<SchedulerMinimalCandidateSelectionCandidate>,
+    preselection_skipped: Vec<SkippedLocalExecutionCandidate>,
 ) -> Vec<LocalOpenAiChatCandidateAttempt> {
     let planner_state = PlannerAppState::new(state);
     let auth_context: &ExecutionRuntimeAuthContext = &input.auth_context;
@@ -68,6 +73,44 @@ pub(crate) async fn materialize_local_openai_chat_candidate_attempts(
         input.required_capabilities.as_ref(),
     )
     .await;
+    let skipped_candidates = preselection_skipped
+        .into_iter()
+        .chain(skipped_candidates)
+        .map(|mut skipped_candidate| {
+            let provider_api_format = skipped_candidate
+                .transport
+                .as_ref()
+                .map(|transport| transport.endpoint.api_format.trim().to_ascii_lowercase())
+                .unwrap_or_else(|| {
+                    skipped_candidate
+                        .candidate
+                        .endpoint_api_format
+                        .trim()
+                        .to_ascii_lowercase()
+                });
+            let (execution_strategy, conversion_mode) = if provider_api_format == "openai:chat" {
+                (ExecutionStrategy::LocalSameFormat, ConversionMode::None)
+            } else {
+                (
+                    ExecutionStrategy::LocalCrossFormat,
+                    ConversionMode::Bidirectional,
+                )
+            };
+            skipped_candidate.extra_data = Some(
+                build_local_execution_candidate_contract_metadata_for_candidate(
+                    &skipped_candidate.candidate,
+                    skipped_candidate.transport.as_ref(),
+                    provider_api_format.as_str(),
+                    "openai:chat",
+                    serde_json::Map::new(),
+                    execution_strategy,
+                    conversion_mode,
+                    provider_api_format.as_str(),
+                ),
+            );
+            skipped_candidate
+        })
+        .collect::<Vec<_>>();
     remember_first_local_candidate_affinity(
         planner_state,
         Some(&input.auth_snapshot),

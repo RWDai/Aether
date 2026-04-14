@@ -1814,6 +1814,41 @@ WHERE id = $1
         Ok(rows_affected > 0)
     }
 
+    pub async fn update_key_upstream_metadata(
+        &self,
+        key_id: &str,
+        upstream_metadata: Option<&serde_json::Value>,
+        updated_at_unix_secs: Option<u64>,
+    ) -> Result<bool, DataLayerError> {
+        if key_id.trim().is_empty() {
+            return Err(DataLayerError::InvalidInput(
+                "provider catalog key_id is empty".to_string(),
+            ));
+        }
+
+        let rows_affected = sqlx::query(
+            r#"
+UPDATE provider_api_keys
+SET
+  upstream_metadata = $2,
+  updated_at = CASE
+    WHEN $3::double precision IS NULL THEN NOW()
+    ELSE TO_TIMESTAMP($3::double precision)
+  END
+WHERE id = $1
+"#,
+        )
+        .bind(key_id)
+        .bind(upstream_metadata)
+        .bind(updated_at_unix_secs.map(|value| value as f64))
+        .execute(&self.pool)
+        .await
+        .map_postgres_err()?
+        .rows_affected();
+
+        Ok(rows_affected > 0)
+    }
+
     pub async fn update_key_health_state(
         &self,
         key_id: &str,
@@ -1977,6 +2012,16 @@ impl ProviderCatalogWriteRepository for SqlxProviderCatalogReadRepository {
         key: &StoredProviderCatalogKey,
     ) -> Result<StoredProviderCatalogKey, DataLayerError> {
         Self::update_key(self, key).await
+    }
+
+    async fn update_key_upstream_metadata(
+        &self,
+        key_id: &str,
+        upstream_metadata: Option<&serde_json::Value>,
+        updated_at_unix_secs: Option<u64>,
+    ) -> Result<bool, DataLayerError> {
+        Self::update_key_upstream_metadata(self, key_id, upstream_metadata, updated_at_unix_secs)
+            .await
     }
 
     async fn delete_key(&self, key_id: &str) -> Result<bool, DataLayerError> {

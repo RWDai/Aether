@@ -597,6 +597,13 @@ pub trait ProviderCatalogWriteRepository: Send + Sync {
         key: &StoredProviderCatalogKey,
     ) -> Result<StoredProviderCatalogKey, crate::DataLayerError>;
 
+    async fn update_key_upstream_metadata(
+        &self,
+        key_id: &str,
+        upstream_metadata: Option<&serde_json::Value>,
+        updated_at_unix_secs: Option<u64>,
+    ) -> Result<bool, crate::DataLayerError>;
+
     async fn delete_key(&self, key_id: &str) -> Result<bool, crate::DataLayerError>;
 
     async fn clear_key_oauth_invalid_marker(

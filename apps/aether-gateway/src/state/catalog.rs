@@ -593,6 +593,27 @@ impl AppState {
         Ok(updated)
     }
 
+    pub(crate) async fn update_provider_catalog_key_upstream_metadata(
+        &self,
+        key_id: &str,
+        upstream_metadata: Option<&serde_json::Value>,
+        updated_at_unix_secs: Option<u64>,
+    ) -> Result<bool, GatewayError> {
+        let updated = self
+            .data
+            .update_provider_catalog_key_upstream_metadata(
+                key_id,
+                upstream_metadata,
+                updated_at_unix_secs,
+            )
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))?;
+        if updated {
+            self.clear_provider_transport_snapshot_cache();
+        }
+        Ok(updated)
+    }
+
     pub(crate) async fn delete_provider_catalog_key(
         &self,
         key_id: &str,

@@ -363,6 +363,25 @@ impl ProviderCatalogWriteRepository for InMemoryProviderCatalogReadRepository {
         Ok(stored.clone())
     }
 
+    async fn update_key_upstream_metadata(
+        &self,
+        key_id: &str,
+        upstream_metadata: Option<&serde_json::Value>,
+        updated_at_unix_secs: Option<u64>,
+    ) -> Result<bool, DataLayerError> {
+        let mut index = self
+            .index
+            .write()
+            .expect("provider catalog repository lock");
+        let Some(key) = index.keys.get_mut(key_id) else {
+            return Ok(false);
+        };
+
+        key.upstream_metadata = upstream_metadata.cloned();
+        key.updated_at_unix_secs = updated_at_unix_secs;
+        Ok(true)
+    }
+
     async fn delete_key(&self, key_id: &str) -> Result<bool, DataLayerError> {
         let mut index = self
             .index

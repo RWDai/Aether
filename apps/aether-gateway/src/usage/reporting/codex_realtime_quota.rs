@@ -141,7 +141,7 @@ pub(super) async fn sync_codex_quota_from_response_headers(
         return Ok(false);
     }
 
-    let Some(mut key) = state
+    let Some(key) = state
         .read_provider_catalog_keys_by_ids(std::slice::from_ref(&key_id))
         .await?
         .into_iter()
@@ -178,33 +178,21 @@ pub(super) async fn sync_codex_quota_from_response_headers(
         set_cached_fingerprint(&key_id, incoming_fingerprint, now);
         return Ok(false);
     };
-
-    let mut merged_codex = current_codex
-        .as_object()
-        .cloned()
-        .unwrap_or_else(serde_json::Map::new);
-    let Some(parsed_object) = parsed.as_object() else {
-        set_cached_fingerprint(&key_id, incoming_fingerprint, now);
-        return Ok(false);
-    };
-    for (field, value) in parsed_object {
-        merged_codex.insert(field.clone(), value.clone());
-    }
-    let merged_codex = Value::Object(merged_codex);
-    let Some(merged_fingerprint) = fingerprint_codex_payload(&merged_codex) else {
-        set_cached_fingerprint(&key_id, incoming_fingerprint, now);
-        return Ok(false);
-    };
-    if current_fingerprint == merged_fingerprint {
+    if current_fingerprint == incoming_fingerprint {
         set_cached_fingerprint(&key_id, incoming_fingerprint, now);
         return Ok(false);
     }
 
-    key.upstream_metadata =
-        merge_metadata_object(key.upstream_metadata.as_ref(), "codex", merged_codex);
-    key.updated_at_unix_secs = Some(now_unix_secs);
+    let updated_upstream_metadata =
+        merge_metadata_object(key.upstream_metadata.as_ref(), "codex", parsed);
 
-    let updated = state.update_provider_catalog_key(&key).await?.is_some();
+    let updated = state
+        .update_provider_catalog_key_upstream_metadata(
+            &key_id,
+            updated_upstream_metadata.as_ref(),
+            Some(now_unix_secs),
+        )
+        .await?;
     if updated {
         set_cached_fingerprint(&key_id, incoming_fingerprint, now);
     }
@@ -332,7 +320,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sync_codex_quota_updates_paid_windows_and_preserves_existing_fields() {
+    async fn sync_codex_quota_replaces_existing_codex_fields_and_preserves_other_sections() {
         clear_codex_quota_fingerprint_cache();
 
         let repository = Arc::new(InMemoryProviderCatalogReadRepository::seed(
@@ -343,8 +331,11 @@ mod tests {
                 "provider-codex",
                 Some(json!({
                     "codex": {
-                        "legacy_marker": "keep-me",
-                        "secondary_used_percent": 2.0
+                        "legacy_marker": "drop-me",
+                        "secondary_used_percent": 2.0,
+                        "credits_balance": 42.0,
+                        "account_disabled": true,
+                        "reason": "deactivated_workspace"
                     },
                     "other": {
                         "value": true
@@ -380,7 +371,12 @@ mod tests {
         assert_eq!(codex.get("plan_type"), Some(&json!("team")));
         assert_eq!(codex.get("primary_used_percent"), Some(&json!(31.0)));
         assert_eq!(codex.get("secondary_used_percent"), Some(&json!(100.0)));
-        assert_eq!(codex.get("legacy_marker"), Some(&json!("keep-me")));
+        assert_eq!(codex.get("has_credits"), Some(&json!(false)));
+        assert_eq!(codex.get("credits_unlimited"), Some(&json!(false)));
+        assert!(codex.get("legacy_marker").is_none());
+        assert!(codex.get("credits_balance").is_none());
+        assert!(codex.get("account_disabled").is_none());
+        assert!(codex.get("reason").is_none());
         assert!(codex.get("updated_at").and_then(Value::as_u64).is_some());
         assert_eq!(
             reloaded[0]

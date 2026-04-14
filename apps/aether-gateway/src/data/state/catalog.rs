@@ -443,6 +443,22 @@ impl GatewayDataState {
         }
     }
 
+    pub(crate) async fn update_provider_catalog_key_upstream_metadata(
+        &self,
+        key_id: &str,
+        upstream_metadata: Option<&serde_json::Value>,
+        updated_at_unix_secs: Option<u64>,
+    ) -> Result<bool, DataLayerError> {
+        match &self.provider_catalog_writer {
+            Some(repository) => {
+                repository
+                    .update_key_upstream_metadata(key_id, upstream_metadata, updated_at_unix_secs)
+                    .await
+            }
+            None => Ok(false),
+        }
+    }
+
     pub(crate) async fn delete_provider_catalog_key(
         &self,
         key_id: &str,

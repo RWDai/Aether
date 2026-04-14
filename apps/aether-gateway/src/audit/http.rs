@@ -8,69 +8,6 @@ use serde_json::json;
 
 use crate::{AppState, GatewayError};
 
-const DEFAULT_RECENT_LIMIT: usize = 20;
-const MAX_RECENT_LIMIT: usize = 200;
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct ListRecentShadowResultsQuery {
-    pub(crate) limit: Option<usize>,
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct ShadowResultStatusCounts {
-    pub(crate) pending: usize,
-    pub(crate) r#match: usize,
-    pub(crate) mismatch: usize,
-    pub(crate) error: usize,
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct ListRecentShadowResultsResponse {
-    pub(crate) items: Vec<aether_data::repository::shadow_results::StoredShadowResult>,
-    pub(crate) limit_applied: usize,
-    pub(crate) counts: ShadowResultStatusCounts,
-}
-
-pub(crate) async fn list_recent_shadow_results(
-    State(state): State<AppState>,
-    Query(query): Query<ListRecentShadowResultsQuery>,
-) -> Result<Json<ListRecentShadowResultsResponse>, GatewayError> {
-    let limit = query
-        .limit
-        .unwrap_or(DEFAULT_RECENT_LIMIT)
-        .clamp(1, MAX_RECENT_LIMIT);
-    let items = state.list_recent_shadow_results(limit).await?;
-
-    let mut counts = ShadowResultStatusCounts {
-        pending: 0,
-        r#match: 0,
-        mismatch: 0,
-        error: 0,
-    };
-    for item in &items {
-        match item.match_status {
-            aether_data::repository::shadow_results::ShadowResultMatchStatus::Pending => {
-                counts.pending += 1
-            }
-            aether_data::repository::shadow_results::ShadowResultMatchStatus::Match => {
-                counts.r#match += 1
-            }
-            aether_data::repository::shadow_results::ShadowResultMatchStatus::Mismatch => {
-                counts.mismatch += 1
-            }
-            aether_data::repository::shadow_results::ShadowResultMatchStatus::Error => {
-                counts.error += 1
-            }
-        }
-    }
-
-    Ok(Json(ListRecentShadowResultsResponse {
-        items,
-        limit_applied: limit,
-        counts,
-    }))
-}
-
 #[derive(Debug, Deserialize)]
 pub(crate) struct GetRequestCandidateTraceQuery {
     pub(crate) attempted_only: Option<bool>,

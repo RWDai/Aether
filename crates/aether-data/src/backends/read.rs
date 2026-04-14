@@ -15,7 +15,6 @@ use crate::repository::oauth_providers::OAuthProviderReadRepository;
 use crate::repository::provider_catalog::ProviderCatalogReadRepository;
 use crate::repository::proxy_nodes::ProxyNodeReadRepository;
 use crate::repository::quota::ProviderQuotaReadRepository;
-use crate::repository::shadow_results::ShadowResultReadRepository;
 use crate::repository::usage::UsageReadRepository;
 use crate::repository::users::UserReadRepository;
 use crate::repository::video_tasks::VideoTaskReadRepository;
@@ -40,7 +39,6 @@ pub struct DataReadRepositories {
     users: Option<Arc<dyn UserReadRepository>>,
     video_tasks: Option<Arc<dyn VideoTaskReadRepository>>,
     wallets: Option<Arc<dyn WalletReadRepository>>,
-    shadow_results: Option<Arc<dyn ShadowResultReadRepository>>,
 }
 
 impl fmt::Debug for DataReadRepositories {
@@ -69,7 +67,6 @@ impl fmt::Debug for DataReadRepositories {
             .field("has_users", &self.users.is_some())
             .field("has_video_tasks", &self.video_tasks.is_some())
             .field("has_wallets", &self.wallets.is_some())
-            .field("has_shadow_results", &self.shadow_results.is_some())
             .finish()
     }
 }
@@ -96,7 +93,6 @@ impl DataReadRepositories {
             users: postgres.map(PostgresBackend::user_read_repository),
             video_tasks: postgres.map(PostgresBackend::video_task_read_repository),
             wallets: postgres.map(PostgresBackend::wallet_read_repository),
-            shadow_results: postgres.map(PostgresBackend::shadow_result_read_repository),
         }
     }
 
@@ -170,10 +166,6 @@ impl DataReadRepositories {
         self.wallets.clone()
     }
 
-    pub fn shadow_results(&self) -> Option<Arc<dyn ShadowResultReadRepository>> {
-        self.shadow_results.clone()
-    }
-
     pub fn has_any(&self) -> bool {
         self.auth_api_keys.is_some()
             || self.announcements.is_some()
@@ -192,7 +184,6 @@ impl DataReadRepositories {
             || self.users.is_some()
             || self.video_tasks.is_some()
             || self.wallets.is_some()
-            || self.shadow_results.is_some()
     }
 }
 
@@ -235,6 +226,5 @@ mod tests {
         assert!(read.usage().is_some());
         assert!(read.video_tasks().is_some());
         assert!(read.wallets().is_some());
-        assert!(read.shadow_results().is_some());
     }
 }

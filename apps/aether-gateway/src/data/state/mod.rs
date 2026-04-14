@@ -44,10 +44,6 @@ use aether_data::repository::proxy_nodes::{
     ProxyNodeRemoteConfigMutation, ProxyNodeTunnelStatusMutation, ProxyNodeWriteRepository,
     StoredProxyNode, StoredProxyNodeEvent,
 };
-use aether_data::repository::shadow_results::{
-    merge_shadow_result_sample, RecordShadowResultSample, ShadowResultLookupKey,
-    ShadowResultReadRepository, ShadowResultWriteRepository, StoredShadowResult,
-};
 pub(crate) use aether_data::repository::system::{AdminSystemStats, StoredSystemConfigEntry};
 use aether_data::repository::users::{
     StoredUserAuthRecord, StoredUserExportRow, StoredUserSummary, UserReadRepository,
@@ -146,8 +142,6 @@ pub(crate) struct GatewayDataState {
     wallet_reader: Option<Arc<dyn WalletReadRepository>>,
     wallet_writer: Option<Arc<dyn WalletWriteRepository>>,
     settlement_writer: Option<Arc<dyn SettlementWriteRepository>>,
-    shadow_result_reader: Option<Arc<dyn ShadowResultReadRepository>>,
-    shadow_result_writer: Option<Arc<dyn ShadowResultWriteRepository>>,
     system_config_values: Option<Arc<RwLock<BTreeMap<String, StoredSystemConfigEntry>>>>,
 }
 
@@ -249,14 +243,6 @@ impl fmt::Debug for GatewayDataState {
             .field("has_wallet_reader", &self.wallet_reader.is_some())
             .field("has_wallet_writer", &self.wallet_writer.is_some())
             .field("has_settlement_writer", &self.settlement_writer.is_some())
-            .field(
-                "has_shadow_result_reader",
-                &self.shadow_result_reader.is_some(),
-            )
-            .field(
-                "has_shadow_result_writer",
-                &self.shadow_result_writer.is_some(),
-            )
             .field(
                 "has_system_config_values",
                 &self.system_config_values.is_some(),

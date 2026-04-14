@@ -5,10 +5,7 @@ use crate::async_task::{
     cancel_video_task, get_video_task_detail, get_video_task_stats, get_video_task_video,
     list_video_tasks,
 };
-use crate::audit::{
-    get_auth_api_key_snapshot, get_decision_trace, get_request_candidate_trace,
-    list_recent_shadow_results,
-};
+use crate::audit::{get_auth_api_key_snapshot, get_decision_trace, get_request_candidate_trace};
 use crate::hooks::{get_request_audit_bundle, get_request_usage_audit};
 use crate::router::metrics;
 use crate::state::AppState;
@@ -52,9 +49,5 @@ pub(crate) fn mount_operational_routes(router: Router<AppState>) -> Router<AppSt
         .route(
             "/_gateway/audit/request-usage/{request_id}",
             get(get_request_usage_audit),
-        )
-        .route(
-            "/_gateway/audit/shadow-results/recent",
-            get(list_recent_shadow_results),
         )
 }

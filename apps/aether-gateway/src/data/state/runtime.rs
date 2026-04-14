@@ -1,22 +1,21 @@
 use super::{
-    merge_shadow_result_sample, read_decision_trace, read_provider_transport_snapshot,
-    read_request_candidate_trace, AdjustWalletBalanceInput, AdminPaymentOrderListQuery,
-    AdminWalletLedgerQuery, AdminWalletListQuery, AdminWalletRefundRequestListQuery,
-    AnnouncementListQuery, CompleteAdminWalletRefundInput, CreateAnnouncementRecord,
-    CreateManualWalletRechargeInput, CreateWalletRechargeOrderInput,
-    CreateWalletRechargeOrderOutcome, CreateWalletRefundRequestInput,
-    CreateWalletRefundRequestOutcome, CreditAdminPaymentOrderInput, DataLayerError, DecisionTrace,
-    FailAdminWalletRefundInput, GatewayDataState, GatewayProviderTransportSnapshot,
-    LocalVideoTaskReadResponse, ProcessAdminWalletRefundInput, ProcessPaymentCallbackInput,
-    ProcessPaymentCallbackOutcome, RecordShadowResultSample, RedisStreamRunner, RequestAuditBundle,
-    RequestCandidateTrace, ShadowResultLookupKey, StoredAdminPaymentCallbackPage,
+    read_decision_trace, read_provider_transport_snapshot, read_request_candidate_trace,
+    AdjustWalletBalanceInput, AdminPaymentOrderListQuery, AdminWalletLedgerQuery,
+    AdminWalletListQuery, AdminWalletRefundRequestListQuery, AnnouncementListQuery,
+    CompleteAdminWalletRefundInput, CreateAnnouncementRecord, CreateManualWalletRechargeInput,
+    CreateWalletRechargeOrderInput, CreateWalletRechargeOrderOutcome,
+    CreateWalletRefundRequestInput, CreateWalletRefundRequestOutcome, CreditAdminPaymentOrderInput,
+    DataLayerError, DecisionTrace, FailAdminWalletRefundInput, GatewayDataState,
+    GatewayProviderTransportSnapshot, LocalVideoTaskReadResponse, ProcessAdminWalletRefundInput,
+    ProcessPaymentCallbackInput, ProcessPaymentCallbackOutcome, RedisStreamRunner,
+    RequestAuditBundle, RequestCandidateTrace, StoredAdminPaymentCallbackPage,
     StoredAdminPaymentOrder, StoredAdminPaymentOrderPage, StoredAdminWalletLedgerPage,
     StoredAdminWalletListPage, StoredAdminWalletRefund, StoredAdminWalletRefundPage,
     StoredAdminWalletRefundRequestPage, StoredAdminWalletTransaction,
     StoredAdminWalletTransactionPage, StoredAnnouncement, StoredAnnouncementPage,
     StoredBillingModelContext, StoredProviderQuotaSnapshot, StoredProviderUsageSummary,
-    StoredRequestUsageAudit, StoredShadowResult, StoredUsageSettlement, StoredUserAuthRecord,
-    StoredUserExportRow, StoredUserSummary, StoredVideoTask, StoredWalletDailyUsageLedger,
+    StoredRequestUsageAudit, StoredUsageSettlement, StoredUserAuthRecord, StoredUserExportRow,
+    StoredUserSummary, StoredVideoTask, StoredWalletDailyUsageLedger,
     StoredWalletDailyUsageLedgerPage, StoredWalletSnapshot, UpdateAnnouncementRecord,
     UpsertUsageRecord, UpsertVideoTask, UsageSettlementInput, VideoTaskLookupKey,
     VideoTaskModelCount, VideoTaskQueryFilter, VideoTaskStatusCount, WalletLookupKey,
@@ -24,12 +23,6 @@ use super::{
 };
 use aether_data_contracts::repository::usage::UsageAuditListQuery;
 use aether_video_tasks_core::read_data_backed_video_task_response;
-
-fn is_missing_shadow_results_relation_error(error: &DataLayerError) -> bool {
-    error
-        .to_string()
-        .contains("relation \"gateway_shadow_results\" does not exist")
-}
 
 impl GatewayDataState {
     pub(crate) async fn list_announcements(
@@ -873,68 +866,6 @@ impl GatewayDataState {
     ) -> Result<Option<LocalVideoTaskReadResponse>, DataLayerError> {
         read_data_backed_video_task_response(self, route_family, request_path).await
     }
-
-    #[cfg(test)]
-    pub(crate) async fn write_shadow_result(
-        &self,
-        result: aether_data::repository::shadow_results::UpsertShadowResult,
-    ) -> Result<Option<StoredShadowResult>, DataLayerError> {
-        match &self.shadow_result_writer {
-            Some(repository) => match repository.upsert(result).await {
-                Ok(stored) => Ok(Some(stored)),
-                Err(err) if is_missing_shadow_results_relation_error(&err) => Ok(None),
-                Err(err) => Err(err),
-            },
-            None => Ok(None),
-        }
-    }
-
-    pub(crate) async fn record_shadow_result_sample(
-        &self,
-        sample: RecordShadowResultSample,
-    ) -> Result<Option<StoredShadowResult>, DataLayerError> {
-        let Some(writer) = &self.shadow_result_writer else {
-            return Ok(None);
-        };
-
-        let existing = match &self.shadow_result_reader {
-            Some(reader) => {
-                match reader
-                    .find(ShadowResultLookupKey::TraceFingerprint {
-                        trace_id: &sample.trace_id,
-                        request_fingerprint: &sample.request_fingerprint,
-                    })
-                    .await
-                {
-                    Ok(existing) => existing,
-                    Err(err) if is_missing_shadow_results_relation_error(&err) => return Ok(None),
-                    Err(err) => return Err(err),
-                }
-            }
-            None => None,
-        };
-        let merged = merge_shadow_result_sample(existing.as_ref(), sample);
-
-        match writer.upsert(merged).await {
-            Ok(stored) => Ok(Some(stored)),
-            Err(err) if is_missing_shadow_results_relation_error(&err) => Ok(None),
-            Err(err) => Err(err),
-        }
-    }
-
-    pub(crate) async fn list_recent_shadow_results(
-        &self,
-        limit: usize,
-    ) -> Result<Vec<StoredShadowResult>, DataLayerError> {
-        match &self.shadow_result_reader {
-            Some(repository) => match repository.list_recent(limit).await {
-                Ok(results) => Ok(results),
-                Err(err) if is_missing_shadow_results_relation_error(&err) => Ok(Vec::new()),
-                Err(err) => Err(err),
-            },
-            None => Ok(Vec::new()),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -942,9 +873,8 @@ mod tests {
     use std::sync::Arc;
 
     use aether_data::repository::users::{InMemoryUserReadRepository, StoredUserExportRow};
-    use aether_data::DataLayerError;
 
-    use super::{is_missing_shadow_results_relation_error, GatewayDataState};
+    use super::GatewayDataState;
 
     #[tokio::test]
     async fn lists_non_admin_export_users_from_user_reader() {
@@ -982,20 +912,5 @@ mod tests {
             rows[0].model_capability_settings,
             Some(serde_json::json!({"gpt-4.1": {"cache_1h": true}}))
         );
-    }
-
-    #[test]
-    fn detects_missing_shadow_results_relation_error_text() {
-        let missing_relation = DataLayerError::UnexpectedValue(
-            "postgres error: error returned from database: relation \"gateway_shadow_results\" does not exist"
-                .to_string(),
-        );
-        let other = DataLayerError::UnexpectedValue(
-            "postgres error: error returned from database: relation \"usage\" does not exist"
-                .to_string(),
-        );
-
-        assert!(is_missing_shadow_results_relation_error(&missing_relation));
-        assert!(!is_missing_shadow_results_relation_error(&other));
     }
 }

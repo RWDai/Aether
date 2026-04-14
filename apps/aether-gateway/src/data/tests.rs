@@ -7,11 +7,6 @@ use aether_data::repository::auth::{
 use aether_data::repository::candidate_selection::InMemoryMinimalCandidateSelectionReadRepository;
 use aether_data::repository::candidates::InMemoryRequestCandidateRepository;
 use aether_data::repository::provider_catalog::InMemoryProviderCatalogReadRepository;
-use aether_data::repository::shadow_results::{
-    InMemoryShadowResultRepository, RecordShadowResultSample, ShadowResultLookupKey,
-    ShadowResultMatchStatus, ShadowResultReadRepository, ShadowResultSampleOrigin,
-    ShadowResultWriteRepository, StoredShadowResult, UpsertShadowResult,
-};
 use aether_data::repository::usage::InMemoryUsageReadRepository;
 use aether_data::repository::video_tasks::InMemoryVideoTaskRepository;
 use aether_data::DataLayerError;
@@ -32,7 +27,6 @@ use aether_scheduler_core::{
     build_minimal_candidate_selection, BuildMinimalCandidateSelectionInput,
     SchedulerAuthConstraints, SchedulerPriorityMode,
 };
-use async_trait::async_trait;
 use serde_json::json;
 
 use super::{GatewayDataConfig, GatewayDataState};
@@ -52,8 +46,6 @@ fn disabled_gateway_data_state_has_no_backends() {
     assert!(!state.has_proxy_node_writer());
     assert!(!state.has_usage_reader());
     assert!(!state.has_video_task_reader());
-    assert!(!state.has_shadow_result_reader());
-    assert!(!state.has_shadow_result_writer());
 }
 
 #[tokio::test]
@@ -73,8 +65,6 @@ async fn postgres_gateway_data_state_builds_video_task_reader() {
     assert!(state.has_proxy_node_writer());
     assert!(state.has_usage_reader());
     assert!(state.has_video_task_reader());
-    assert!(state.has_shadow_result_reader());
-    assert!(state.has_shadow_result_writer());
 }
 
 #[tokio::test]
@@ -152,8 +142,6 @@ async fn app_state_wires_gateway_data_state_from_config() {
     assert!(state.data.has_proxy_node_writer());
     assert!(state.data.has_usage_reader());
     assert!(state.data.has_video_task_reader());
-    assert!(state.data.has_shadow_result_reader());
-    assert!(state.data.has_shadow_result_writer());
 }
 
 fn sample_auth_snapshot(api_key_id: &str, user_id: &str) -> StoredAuthApiKeySnapshot {
@@ -281,40 +269,6 @@ fn sample_request_usage(request_id: &str) -> StoredRequestUsageAudit {
         Some(102),
     )
     .expect("usage should build")
-}
-
-#[derive(Default)]
-struct MissingShadowResultsRelationRepository;
-
-fn missing_shadow_results_relation_error() -> DataLayerError {
-    DataLayerError::UnexpectedValue(
-        "postgres error: error returned from database: relation \"gateway_shadow_results\" does not exist"
-            .to_string(),
-    )
-}
-
-#[async_trait]
-impl ShadowResultReadRepository for MissingShadowResultsRelationRepository {
-    async fn find(
-        &self,
-        _key: ShadowResultLookupKey<'_>,
-    ) -> Result<Option<StoredShadowResult>, DataLayerError> {
-        Err(missing_shadow_results_relation_error())
-    }
-
-    async fn list_recent(&self, _limit: usize) -> Result<Vec<StoredShadowResult>, DataLayerError> {
-        Err(missing_shadow_results_relation_error())
-    }
-}
-
-#[async_trait]
-impl ShadowResultWriteRepository for MissingShadowResultsRelationRepository {
-    async fn upsert(
-        &self,
-        _result: UpsertShadowResult,
-    ) -> Result<StoredShadowResult, DataLayerError> {
-        Err(missing_shadow_results_relation_error())
-    }
 }
 
 fn sample_minimal_candidate_selection_row(
@@ -828,162 +782,6 @@ async fn maps_gemini_video_task_repository_row_into_read_response() {
         "models/veo-3/operations/localshort123"
     );
     assert_eq!(response.body_json["done"], true);
-}
-
-#[tokio::test]
-async fn data_state_write_uses_configured_shadow_result_writer() {
-    let repository = Arc::new(InMemoryShadowResultRepository::default());
-    let state = GatewayDataState::with_shadow_result_writer_for_tests(repository.clone());
-
-    let written = state
-        .write_shadow_result(UpsertShadowResult {
-            trace_id: "trace-1".to_string(),
-            request_fingerprint: "fp-1".to_string(),
-            request_id: Some("req-1".to_string()),
-            route_family: Some("openai".to_string()),
-            route_kind: Some("chat".to_string()),
-            candidate_id: None,
-            rust_result_digest: Some("rust-digest".to_string()),
-            python_result_digest: None,
-            match_status: ShadowResultMatchStatus::Pending,
-            status_code: Some(200),
-            error_message: None,
-            created_at_unix_ms: 100,
-            updated_at_unix_secs: 100,
-        })
-        .await
-        .expect("write should succeed");
-
-    assert!(written.is_some());
-    let stored = repository
-        .find(ShadowResultLookupKey::TraceFingerprint {
-            trace_id: "trace-1",
-            request_fingerprint: "fp-1",
-        })
-        .await
-        .expect("find should succeed");
-    assert_eq!(
-        stored.expect("stored result should exist").match_status,
-        ShadowResultMatchStatus::Pending
-    );
-}
-
-#[tokio::test]
-async fn data_state_records_shadow_result_samples_and_merges_match_status() {
-    let repository = Arc::new(InMemoryShadowResultRepository::default());
-    let state = GatewayDataState::with_shadow_result_repository_for_tests(repository);
-
-    let first = state
-        .record_shadow_result_sample(RecordShadowResultSample {
-            trace_id: "trace-1".to_string(),
-            request_fingerprint: "fp-1".to_string(),
-            request_id: Some("req-1".to_string()),
-            route_family: Some("openai".to_string()),
-            route_kind: Some("chat".to_string()),
-            candidate_id: None,
-            origin: ShadowResultSampleOrigin::Rust,
-            result_digest: "digest-1".to_string(),
-            status_code: Some(200),
-            error_message: None,
-            recorded_at_unix_secs: 100,
-        })
-        .await
-        .expect("first record should succeed")
-        .expect("first stored result should exist");
-    assert_eq!(first.match_status, ShadowResultMatchStatus::Pending);
-
-    let second = state
-        .record_shadow_result_sample(RecordShadowResultSample {
-            trace_id: "trace-1".to_string(),
-            request_fingerprint: "fp-1".to_string(),
-            request_id: Some("req-1".to_string()),
-            route_family: Some("openai".to_string()),
-            route_kind: Some("chat".to_string()),
-            candidate_id: None,
-            origin: ShadowResultSampleOrigin::Python,
-            result_digest: "digest-1".to_string(),
-            status_code: Some(200),
-            error_message: None,
-            recorded_at_unix_secs: 200,
-        })
-        .await
-        .expect("second record should succeed")
-        .expect("second stored result should exist");
-
-    assert_eq!(second.match_status, ShadowResultMatchStatus::Match);
-    assert_eq!(second.created_at_unix_ms, 100);
-    assert_eq!(second.updated_at_unix_secs, 200);
-    assert_eq!(second.request_id.as_deref(), Some("req-1"));
-}
-
-#[tokio::test]
-async fn data_state_lists_recent_shadow_results_from_reader() {
-    let repository = Arc::new(InMemoryShadowResultRepository::default());
-    let state = GatewayDataState::with_shadow_result_repository_for_tests(repository.clone());
-
-    state
-        .record_shadow_result_sample(RecordShadowResultSample {
-            trace_id: "trace-1".to_string(),
-            request_fingerprint: "fp-1".to_string(),
-            request_id: Some("req-shadow-1".to_string()),
-            route_family: Some("openai".to_string()),
-            route_kind: Some("chat".to_string()),
-            candidate_id: None,
-            origin: ShadowResultSampleOrigin::Rust,
-            result_digest: "digest-1".to_string(),
-            status_code: Some(200),
-            error_message: None,
-            recorded_at_unix_secs: 100,
-        })
-        .await
-        .expect("record should succeed");
-
-    let recent = state
-        .list_recent_shadow_results(5)
-        .await
-        .expect("list recent should succeed");
-
-    assert_eq!(recent.len(), 1);
-    assert_eq!(recent[0].trace_id, "trace-1");
-    assert_eq!(recent[0].request_id.as_deref(), Some("req-shadow-1"));
-}
-
-#[tokio::test]
-async fn data_state_ignores_missing_shadow_results_relation_when_recording_sample() {
-    let repository = Arc::new(MissingShadowResultsRelationRepository);
-    let state = GatewayDataState::with_shadow_result_repository_for_tests(repository);
-
-    let recorded = state
-        .record_shadow_result_sample(RecordShadowResultSample {
-            trace_id: "trace-missing-shadow".to_string(),
-            request_fingerprint: "fp-missing-shadow".to_string(),
-            request_id: Some("req-missing-shadow".to_string()),
-            route_family: Some("openai".to_string()),
-            route_kind: Some("chat".to_string()),
-            candidate_id: None,
-            origin: ShadowResultSampleOrigin::Rust,
-            result_digest: "digest-missing-shadow".to_string(),
-            status_code: Some(200),
-            error_message: None,
-            recorded_at_unix_secs: 100,
-        })
-        .await
-        .expect("missing shadow result table should be ignored");
-
-    assert!(recorded.is_none());
-}
-
-#[tokio::test]
-async fn data_state_returns_empty_shadow_results_when_relation_missing() {
-    let repository = Arc::new(MissingShadowResultsRelationRepository);
-    let state = GatewayDataState::with_shadow_result_repository_for_tests(repository);
-
-    let recent = state
-        .list_recent_shadow_results(5)
-        .await
-        .expect("missing shadow result table should be ignored");
-
-    assert!(recent.is_empty());
 }
 
 fn sample_request_candidate(

@@ -7,9 +7,6 @@ use aether_data::repository::auth::{
 use aether_data::repository::candidate_selection::InMemoryMinimalCandidateSelectionReadRepository;
 use aether_data::repository::candidates::InMemoryRequestCandidateRepository;
 use aether_data::repository::provider_catalog::InMemoryProviderCatalogReadRepository;
-use aether_data::repository::shadow_results::{
-    InMemoryShadowResultRepository, ShadowResultMatchStatus, ShadowResultReadRepository,
-};
 use aether_data::repository::usage::InMemoryUsageReadRepository;
 use aether_data_contracts::repository::candidate_selection::{
     StoredMinimalCandidateSelectionRow, StoredProviderModelMapping,
@@ -158,110 +155,6 @@ fn sample_local_openai_key() -> StoredProviderCatalogKey {
         None,
     )
     .expect("key transport should build")
-}
-
-#[tokio::test]
-async fn gateway_records_candidate_id_in_shadow_result_for_local_execution_response() {
-    let repository = Arc::new(InMemoryShadowResultRepository::default());
-    let request_candidate_repository = Arc::new(InMemoryRequestCandidateRepository::default());
-    let auth_repository = Arc::new(InMemoryAuthApiKeySnapshotRepository::seed(vec![(
-        Some(hash_api_key("sk-client-openai-audit-local")),
-        sample_local_openai_auth_snapshot(
-            "api-key-openai-audit-local-1",
-            "user-openai-audit-local-1",
-        ),
-    )]));
-    let candidate_selection_repository =
-        Arc::new(InMemoryMinimalCandidateSelectionReadRepository::seed(vec![
-            sample_local_openai_candidate_row(),
-        ]));
-
-    let provider = Router::new().route(
-        "/v1/chat/completions",
-        any(|_request: Request| async move {
-            Json(json!({
-                "id": "chatcmpl-shadow-local-123",
-                "object": "chat.completion",
-                "model": "gpt-5-upstream",
-                "choices": [],
-                "usage": {
-                    "prompt_tokens": 2,
-                    "completion_tokens": 3,
-                    "total_tokens": 5
-                }
-            }))
-        }),
-    );
-
-    let (provider_url, provider_handle) = start_server(provider).await;
-    let provider_catalog_repository = Arc::new(InMemoryProviderCatalogReadRepository::seed(
-        vec![sample_local_openai_provider()],
-        vec![sample_local_openai_endpoint(provider_url)],
-        vec![sample_local_openai_key()],
-    ));
-    let gateway_state = AppState::new()
-        .expect("gateway state should build")
-        .with_data_state_for_tests(
-            crate::data::GatewayDataState::with_auth_candidate_selection_provider_catalog_request_candidates_and_shadow_results_for_tests(
-                auth_repository,
-                candidate_selection_repository,
-                provider_catalog_repository,
-                Arc::clone(&request_candidate_repository),
-                Arc::clone(&repository),
-                DEVELOPMENT_ENCRYPTION_KEY,
-            ),
-        );
-    let gateway = build_router_with_state(gateway_state);
-    let (gateway_url, gateway_handle) = start_server(gateway).await;
-
-    let response = reqwest::Client::new()
-        .post(format!("{gateway_url}/v1/chat/completions"))
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .header(
-            http::header::AUTHORIZATION,
-            "Bearer sk-client-openai-audit-local",
-        )
-        .header(TRACE_ID_HEADER, "req-shadow-direct-123")
-        .body("{\"model\":\"gpt-5\",\"messages\":[]}")
-        .send()
-        .await
-        .expect("request should succeed");
-
-    assert_eq!(response.status(), StatusCode::OK);
-    let candidate_id = response
-        .headers()
-        .get(CONTROL_CANDIDATE_ID_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .expect("candidate id header should exist")
-        .to_string();
-
-    for _ in 0..50 {
-        if repository
-            .list_recent(1)
-            .await
-            .map(|rows| !rows.is_empty())
-            .unwrap_or(false)
-        {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
-
-    let stored = repository
-        .list_recent(1)
-        .await
-        .expect("list should succeed")
-        .into_iter()
-        .next()
-        .expect("stored result should exist");
-    assert_eq!(stored.request_id.as_deref(), Some("req-shadow-direct-123"));
-    assert_eq!(stored.candidate_id.as_deref(), Some(candidate_id.as_str()));
-    assert_eq!(stored.route_family.as_deref(), Some("openai"));
-    assert_eq!(stored.route_kind.as_deref(), Some("chat"));
-    assert_eq!(stored.match_status, ShadowResultMatchStatus::Pending);
-
-    gateway_handle.abort();
-    provider_handle.abort();
 }
 
 #[tokio::test]

@@ -14,7 +14,6 @@ pub mod provider_oauth;
 pub mod proxy_nodes;
 pub mod quota;
 pub mod settlement;
-pub mod shadow_results;
 pub mod system;
 pub mod usage;
 pub mod users;

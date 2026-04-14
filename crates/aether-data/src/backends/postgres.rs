@@ -47,9 +47,6 @@ use crate::repository::quota::{
     ProviderQuotaReadRepository, ProviderQuotaWriteRepository, SqlxProviderQuotaRepository,
 };
 use crate::repository::settlement::{SettlementWriteRepository, SqlxSettlementRepository};
-use crate::repository::shadow_results::{
-    ShadowResultReadRepository, ShadowResultWriteRepository, SqlxShadowResultRepository,
-};
 use crate::repository::system::{AdminSystemStats, StoredSystemConfigEntry};
 use crate::repository::usage::{
     SqlxUsageReadRepository, UsageReadRepository, UsageWriteRepository,
@@ -287,16 +284,8 @@ impl PostgresBackend {
         PostgresLeaseRunner::new(self.transaction_runner(), config)
     }
 
-    pub fn shadow_result_write_repository(&self) -> Arc<dyn ShadowResultWriteRepository> {
-        Arc::new(SqlxShadowResultRepository::new(self.pool_clone()))
-    }
-
     pub fn provider_quota_write_repository(&self) -> Arc<dyn ProviderQuotaWriteRepository> {
         Arc::new(SqlxProviderQuotaRepository::new(self.pool_clone()))
-    }
-
-    pub fn shadow_result_read_repository(&self) -> Arc<dyn ShadowResultReadRepository> {
-        Arc::new(SqlxShadowResultRepository::new(self.pool_clone()))
     }
 
     pub async fn find_system_config_value(
@@ -465,8 +454,6 @@ mod tests {
         let _lease_runner = backend
             .lease_runner(PostgresLeaseRunnerConfig::default())
             .expect("lease runner should build");
-        let _shadow_result_reader = backend.shadow_result_read_repository();
-        let _shadow_result_writer = backend.shadow_result_write_repository();
         let _provider_quota_writer = backend.provider_quota_write_repository();
     }
 }

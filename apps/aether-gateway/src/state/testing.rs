@@ -578,27 +578,4 @@ impl AppState {
             .insert(provider_type.trim().to_ascii_lowercase(), token_url.into());
         self
     }
-
-    pub(crate) fn with_shadow_result_data_writer_for_tests(
-        mut self,
-        repository: Arc<dyn aether_data::repository::shadow_results::ShadowResultWriteRepository>,
-    ) -> Self {
-        self.replace_data_state(Arc::new(
-            GatewayDataState::with_shadow_result_writer_for_tests(repository),
-        ));
-        self
-    }
-
-    pub(crate) fn with_shadow_result_data_repository_for_tests<T>(
-        mut self,
-        repository: Arc<T>,
-    ) -> Self
-    where
-        T: aether_data::repository::shadow_results::ShadowResultRepository + 'static,
-    {
-        self.replace_data_state(Arc::new(
-            GatewayDataState::with_shadow_result_repository_for_tests(repository),
-        ));
-        self
-    }
 }

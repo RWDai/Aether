@@ -15,7 +15,6 @@ mod candidate_queries;
 mod gemini_files;
 mod payments;
 mod security;
-mod shadow_results;
 mod usage_queries;
 mod user_preferences;
 mod wallet;
@@ -98,14 +97,6 @@ impl AppState {
 
     pub fn has_provider_quota_data_writer(&self) -> bool {
         self.data.has_provider_quota_writer()
-    }
-
-    pub fn has_shadow_result_data_writer(&self) -> bool {
-        self.data.has_shadow_result_writer()
-    }
-
-    pub fn has_shadow_result_data_reader(&self) -> bool {
-        self.data.has_shadow_result_reader()
     }
 
     pub(crate) async fn count_active_admin_users(&self) -> Result<u64, GatewayError> {

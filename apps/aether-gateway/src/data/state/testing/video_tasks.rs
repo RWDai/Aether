@@ -50,8 +50,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -104,8 +102,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -155,8 +151,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -210,8 +204,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -269,8 +261,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -337,8 +327,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }

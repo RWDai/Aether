@@ -14,7 +14,6 @@ use crate::repository::provider_catalog::ProviderCatalogWriteRepository;
 use crate::repository::proxy_nodes::ProxyNodeWriteRepository;
 use crate::repository::quota::ProviderQuotaWriteRepository;
 use crate::repository::settlement::SettlementWriteRepository;
-use crate::repository::shadow_results::ShadowResultWriteRepository;
 use crate::repository::usage::UsageWriteRepository;
 use crate::repository::video_tasks::VideoTaskWriteRepository;
 use crate::repository::wallet::WalletWriteRepository;
@@ -24,7 +23,6 @@ pub struct DataWriteRepositories {
     announcements: Option<Arc<dyn AnnouncementWriteRepository>>,
     auth_api_keys: Option<Arc<dyn AuthApiKeyWriteRepository>>,
     auth_modules: Option<Arc<dyn AuthModuleWriteRepository>>,
-    shadow_results: Option<Arc<dyn ShadowResultWriteRepository>>,
     request_candidates: Option<Arc<dyn RequestCandidateWriteRepository>>,
     gemini_file_mappings: Option<Arc<dyn GeminiFileMappingWriteRepository>>,
     global_models: Option<Arc<dyn GlobalModelWriteRepository>>,
@@ -45,7 +43,6 @@ impl fmt::Debug for DataWriteRepositories {
             .field("has_announcements", &self.announcements.is_some())
             .field("has_auth_api_keys", &self.auth_api_keys.is_some())
             .field("has_auth_modules", &self.auth_modules.is_some())
-            .field("has_shadow_results", &self.shadow_results.is_some())
             .field("has_request_candidates", &self.request_candidates.is_some())
             .field(
                 "has_gemini_file_mappings",
@@ -71,7 +68,6 @@ impl DataWriteRepositories {
             announcements: postgres.map(PostgresBackend::announcement_write_repository),
             auth_api_keys: postgres.map(PostgresBackend::auth_api_key_write_repository),
             auth_modules: postgres.map(PostgresBackend::auth_module_write_repository),
-            shadow_results: postgres.map(PostgresBackend::shadow_result_write_repository),
             request_candidates: postgres.map(PostgresBackend::request_candidate_write_repository),
             gemini_file_mappings: postgres
                 .map(PostgresBackend::gemini_file_mapping_write_repository),
@@ -86,10 +82,6 @@ impl DataWriteRepositories {
             video_tasks: postgres.map(PostgresBackend::video_task_write_repository),
             wallets: postgres.map(PostgresBackend::wallet_write_repository),
         }
-    }
-
-    pub fn shadow_results(&self) -> Option<Arc<dyn ShadowResultWriteRepository>> {
-        self.shadow_results.clone()
     }
 
     pub fn announcements(&self) -> Option<Arc<dyn AnnouncementWriteRepository>> {
@@ -156,7 +148,6 @@ impl DataWriteRepositories {
         self.announcements.is_some()
             || self.auth_api_keys.is_some()
             || self.auth_modules.is_some()
-            || self.shadow_results.is_some()
             || self.request_candidates.is_some()
             || self.gemini_file_mappings.is_some()
             || self.global_models.is_some()
@@ -179,7 +170,7 @@ mod tests {
     use crate::postgres::PostgresPoolConfig;
 
     #[tokio::test]
-    async fn builds_shadow_result_writer_from_postgres_backend() {
+    async fn builds_write_repositories_from_postgres_backend() {
         let backend = PostgresBackend::from_config(PostgresPoolConfig {
             database_url: "postgres://localhost/aether".to_string(),
             min_connections: 1,
@@ -198,7 +189,6 @@ mod tests {
         assert!(write.announcements().is_some());
         assert!(write.auth_api_keys().is_some());
         assert!(write.auth_modules().is_some());
-        assert!(write.shadow_results().is_some());
         assert!(write.request_candidates().is_some());
         assert!(write.gemini_file_mappings().is_some());
         assert!(write.global_models().is_some());

@@ -54,8 +54,6 @@ impl GatewayDataState {
                 wallet_reader: None,
                 wallet_writer: None,
                 settlement_writer: None,
-                shadow_result_reader: None,
-                shadow_result_writer: None,
                 system_config_values: None,
             });
         }
@@ -94,8 +92,6 @@ impl GatewayDataState {
         let wallet_reader = backends.read().wallets();
         let wallet_writer = backends.write().wallets();
         let settlement_writer = backends.write().settlement();
-        let shadow_result_reader = backends.read().shadow_results();
-        let shadow_result_writer = backends.write().shadow_results();
 
         Ok(Self {
             config,
@@ -134,8 +130,6 @@ impl GatewayDataState {
             wallet_reader,
             wallet_writer,
             settlement_writer,
-            shadow_result_reader,
-            shadow_result_writer,
             system_config_values: None,
         })
     }
@@ -295,14 +289,6 @@ impl GatewayDataState {
 
     pub(crate) fn has_settlement_writer(&self) -> bool {
         self.settlement_writer.is_some()
-    }
-
-    pub(crate) fn has_shadow_result_writer(&self) -> bool {
-        self.shadow_result_writer.is_some()
-    }
-
-    pub(crate) fn has_shadow_result_reader(&self) -> bool {
-        self.shadow_result_reader.is_some()
     }
 
     #[allow(dead_code)]

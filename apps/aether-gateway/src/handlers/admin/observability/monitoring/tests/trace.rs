@@ -76,6 +76,83 @@ async fn admin_monitoring_trace_request_returns_local_payload() {
 }
 
 #[tokio::test]
+async fn admin_monitoring_trace_request_hides_format_conversion_disabled_candidates() {
+    let mut hidden_candidate = sample_candidate(
+        "cand-hidden",
+        "request-1",
+        0,
+        RequestCandidateStatus::Skipped,
+        None,
+        None,
+        None,
+    );
+    hidden_candidate.skip_reason = Some("format_conversion_disabled".to_string());
+
+    let mut visible_skipped_candidate = sample_candidate(
+        "cand-visible-skipped",
+        "request-1",
+        1,
+        RequestCandidateStatus::Skipped,
+        None,
+        None,
+        None,
+    );
+    visible_skipped_candidate.skip_reason = Some("transport_unsupported".to_string());
+
+    let request_candidates = Arc::new(InMemoryRequestCandidateRepository::seed(vec![
+        hidden_candidate,
+        visible_skipped_candidate,
+        sample_candidate(
+            "cand-used",
+            "request-1",
+            2,
+            RequestCandidateStatus::Failed,
+            Some(101),
+            Some(33),
+            Some(502),
+        ),
+    ]));
+    let provider_catalog = Arc::new(InMemoryProviderCatalogReadRepository::seed(
+        vec![sample_provider()],
+        vec![sample_endpoint()],
+        vec![sample_key()],
+    ));
+    let state = AppState::new()
+        .expect("state should build")
+        .with_decision_trace_data_readers_for_tests(request_candidates, provider_catalog);
+    let context = request_context(
+        http::Method::GET,
+        "/api/admin/monitoring/trace/request-1?attempted_only=false",
+    );
+
+    let response = local_monitoring_response(&state, &context)
+        .await
+        .expect("handler should not error")
+        .expect("route should be handled locally");
+
+    assert_eq!(response.status(), http::StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body should read");
+    let payload: serde_json::Value = serde_json::from_slice(&body).expect("json body should parse");
+
+    assert_eq!(payload["total_candidates"], json!(2));
+    assert_eq!(
+        payload["candidates"]
+            .as_array()
+            .expect("candidates should be an array")
+            .iter()
+            .map(|item| item["id"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>(),
+        vec!["cand-visible-skipped", "cand-used"]
+    );
+    assert_eq!(
+        payload["candidates"][0]["skip_reason"],
+        json!("transport_unsupported")
+    );
+}
+
+#[tokio::test]
 async fn admin_monitoring_trace_provider_stats_returns_local_payload() {
     let request_candidates = Arc::new(InMemoryRequestCandidateRepository::seed(vec![
         sample_candidate(

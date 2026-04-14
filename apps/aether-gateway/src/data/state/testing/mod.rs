@@ -15,10 +15,9 @@ use super::{
     OAuthProviderWriteRepository, ProviderCatalogReadRepository, ProviderCatalogWriteRepository,
     ProviderQuotaReadRepository, ProviderQuotaWriteRepository, ProxyNodeReadRepository,
     ProxyNodeWriteRepository, RequestCandidateReadRepository, RequestCandidateWriteRepository,
-    SettlementWriteRepository, ShadowResultReadRepository, ShadowResultWriteRepository,
-    StoredSystemConfigEntry, StoredUserPreferenceRecord, UsageReadRepository, UsageWriteRepository,
-    UserReadRepository, VideoTaskReadRepository, VideoTaskWriteRepository, WalletReadRepository,
-    WalletWriteRepository,
+    SettlementWriteRepository, StoredSystemConfigEntry, StoredUserPreferenceRecord,
+    UsageReadRepository, UsageWriteRepository, UserReadRepository, VideoTaskReadRepository,
+    VideoTaskWriteRepository, WalletReadRepository, WalletWriteRepository,
 };
 
 mod announcements;
@@ -80,8 +79,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -131,8 +128,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -178,8 +173,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -313,8 +306,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -376,8 +367,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -432,8 +421,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -497,8 +484,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -544,8 +529,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -592,8 +575,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -651,8 +632,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -712,8 +691,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -757,8 +734,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -817,8 +792,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -870,8 +843,6 @@ impl GatewayDataState {
             wallet_reader: Some(wallet_reader),
             wallet_writer: Some(wallet_writer),
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -928,8 +899,6 @@ impl GatewayDataState {
             wallet_reader: Some(wallet_reader),
             wallet_writer: Some(wallet_writer),
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -987,8 +956,6 @@ impl GatewayDataState {
             wallet_reader: Some(wallet_reader),
             wallet_writer: Some(wallet_writer),
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -1045,8 +1012,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -1092,8 +1057,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -1139,8 +1102,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -1198,8 +1159,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -1262,8 +1221,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -1309,8 +1266,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -1361,8 +1316,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -1430,8 +1383,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -1494,8 +1445,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -1542,8 +1491,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -1590,8 +1537,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -1640,106 +1585,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
-            system_config_values: None,
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn with_shadow_result_writer_for_tests(
-        repository: Arc<dyn ShadowResultWriteRepository>,
-    ) -> Self {
-        Self {
-            config: GatewayDataConfig::disabled(),
-            backends: None,
-            auth_api_key_reader: None,
-            auth_api_key_writer: None,
-            auth_module_reader: None,
-            auth_module_writer: None,
-            announcement_reader: None,
-            announcement_writer: None,
-            management_token_reader: None,
-            management_token_writer: None,
-            oauth_provider_reader: None,
-            oauth_provider_writer: None,
-            proxy_node_reader: None,
-            proxy_node_writer: None,
-            billing_reader: None,
-            gemini_file_mapping_reader: None,
-            gemini_file_mapping_writer: None,
-            global_model_reader: None,
-            global_model_writer: None,
-            minimal_candidate_selection_reader: None,
-            request_candidate_reader: None,
-            request_candidate_writer: None,
-            provider_catalog_reader: None,
-            provider_catalog_writer: None,
-            provider_quota_reader: None,
-            provider_quota_writer: None,
-            usage_reader: None,
-            usage_writer: None,
-            user_reader: None,
-            user_preferences: None,
-            usage_worker_runner: None,
-            video_task_reader: None,
-            video_task_writer: None,
-            wallet_reader: None,
-            wallet_writer: None,
-            settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: Some(repository),
-            system_config_values: None,
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn with_shadow_result_repository_for_tests<T>(repository: Arc<T>) -> Self
-    where
-        T: aether_data::repository::shadow_results::ShadowResultRepository + 'static,
-    {
-        let shadow_result_reader: Arc<dyn ShadowResultReadRepository> = repository.clone();
-        let shadow_result_writer: Arc<dyn ShadowResultWriteRepository> = repository;
-
-        Self {
-            config: GatewayDataConfig::disabled(),
-            backends: None,
-            auth_api_key_reader: None,
-            auth_api_key_writer: None,
-            auth_module_reader: None,
-            auth_module_writer: None,
-            announcement_reader: None,
-            announcement_writer: None,
-            management_token_reader: None,
-            management_token_writer: None,
-            oauth_provider_reader: None,
-            oauth_provider_writer: None,
-            proxy_node_reader: None,
-            proxy_node_writer: None,
-            billing_reader: None,
-            gemini_file_mapping_reader: None,
-            gemini_file_mapping_writer: None,
-            global_model_reader: None,
-            global_model_writer: None,
-            minimal_candidate_selection_reader: None,
-            request_candidate_reader: None,
-            request_candidate_writer: None,
-            provider_catalog_reader: None,
-            provider_catalog_writer: None,
-            provider_quota_reader: None,
-            provider_quota_writer: None,
-            usage_reader: None,
-            usage_writer: None,
-            user_reader: None,
-            user_preferences: None,
-            usage_worker_runner: None,
-            video_task_reader: None,
-            video_task_writer: None,
-            wallet_reader: None,
-            wallet_writer: None,
-            settlement_writer: None,
-            shadow_result_reader: Some(shadow_result_reader),
-            shadow_result_writer: Some(shadow_result_writer),
             system_config_values: None,
         }
     }
@@ -1786,8 +1631,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -1834,8 +1677,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -1890,8 +1731,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -1947,8 +1786,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -2007,8 +1844,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -2073,29 +1908,24 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
 
     #[cfg(test)]
-    pub(crate) fn with_auth_candidate_selection_provider_catalog_request_candidates_and_shadow_results_for_tests<
+    pub(crate) fn with_auth_candidate_selection_provider_catalog_request_candidates_for_tests<
         T,
         U,
-        V,
     >(
         auth_api_key_repository: Arc<dyn AuthApiKeyReadRepository>,
         candidate_selection_repository: Arc<dyn MinimalCandidateSelectionReadRepository>,
         provider_catalog_repository: Arc<U>,
         request_candidate_repository: Arc<T>,
-        shadow_result_repository: Arc<V>,
         encryption_key: impl Into<String>,
     ) -> Self
     where
         T: RequestCandidateRepository + 'static,
         U: ProviderCatalogReadRepository + ProviderCatalogWriteRepository + 'static,
-        V: aether_data::repository::shadow_results::ShadowResultRepository + 'static,
     {
         let request_candidate_reader: Arc<dyn RequestCandidateReadRepository> =
             request_candidate_repository.clone();
@@ -2105,9 +1935,6 @@ impl GatewayDataState {
             provider_catalog_repository.clone();
         let provider_catalog_writer: Arc<dyn ProviderCatalogWriteRepository> =
             provider_catalog_repository;
-        let shadow_result_reader: Arc<dyn ShadowResultReadRepository> =
-            shadow_result_repository.clone();
-        let shadow_result_writer: Arc<dyn ShadowResultWriteRepository> = shadow_result_repository;
 
         Self {
             config: GatewayDataConfig::disabled().with_encryption_key(encryption_key),
@@ -2146,8 +1973,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: Some(shadow_result_reader),
-            shadow_result_writer: Some(shadow_result_writer),
             system_config_values: None,
         }
     }
@@ -2217,8 +2042,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -2295,8 +2118,6 @@ impl GatewayDataState {
             wallet_reader: Some(wallet_reader),
             wallet_writer: Some(wallet_writer),
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -2355,8 +2176,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -2406,8 +2225,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -2453,8 +2270,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -2506,8 +2321,6 @@ impl GatewayDataState {
             wallet_reader: Some(wallet_reader),
             wallet_writer: Some(wallet_writer),
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -2563,8 +2376,6 @@ impl GatewayDataState {
             wallet_reader: Some(wallet_reader),
             wallet_writer: Some(wallet_writer),
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -2621,8 +2432,6 @@ impl GatewayDataState {
             wallet_reader: Some(wallet_reader),
             wallet_writer: Some(wallet_writer),
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }
@@ -2672,8 +2481,6 @@ impl GatewayDataState {
             wallet_reader: None,
             wallet_writer: None,
             settlement_writer: None,
-            shadow_result_reader: None,
-            shadow_result_writer: None,
             system_config_values: None,
         }
     }

@@ -29,10 +29,6 @@ fn gateway_small_runtime_shims_stay_deleted() {
 
     let hooks_mod = read_workspace_file("apps/aether-gateway/src/hooks/mod.rs");
     assert!(
-        hooks_mod.contains("pub(crate) use crate::audit::record_shadow_result_non_blocking;"),
-        "hooks/mod.rs should re-export shadow audit directly from crate::audit"
-    );
-    assert!(
         hooks_mod.contains("pub(crate) use crate::usage::http::{get_request_audit_bundle, get_request_usage_audit};"),
         "hooks/mod.rs should re-export request audit helpers directly from usage/http"
     );

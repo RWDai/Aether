@@ -1,4 +1,4 @@
-use crate::audit::{emit_admin_audit, record_shadow_result_non_blocking};
+use crate::audit::emit_admin_audit;
 use crate::constants::{
     CONTROL_ENDPOINT_SIGNATURE_HEADER, CONTROL_EXECUTION_RUNTIME_HEADER, CONTROL_REQUEST_ID_HEADER,
     CONTROL_ROUTE_CLASS_HEADER, CONTROL_ROUTE_FAMILY_HEADER, CONTROL_ROUTE_KIND_HEADER,
@@ -164,16 +164,6 @@ pub(super) fn finalize_gateway_response(
         );
     }
     response.extensions_mut().insert(RequestLogEmitted);
-
-    record_shadow_result_non_blocking(
-        state.clone(),
-        trace_id,
-        method,
-        path_and_query,
-        control_decision,
-        execution_path,
-        &response,
-    );
 
     maybe_hold_axum_response_permit(response, request_permit)
 }

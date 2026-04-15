@@ -104,6 +104,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         TunnelControlPlaneClient::new(args.app_base_url),
         TunnelConnConfig {
             ping_interval,
+            idle_timeout: Duration::from_secs(0),
             outbound_queue_capacity,
         },
         args.max_streams,

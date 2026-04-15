@@ -490,6 +490,7 @@ mod tests {
             ControlPlaneClient::disabled(),
             ConnConfig {
                 ping_interval: Duration::from_secs(15),
+                idle_timeout: Duration::from_secs(0),
                 outbound_queue_capacity: 128,
             },
             128,

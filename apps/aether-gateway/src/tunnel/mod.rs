@@ -47,7 +47,7 @@ pub(crate) const TUNNEL_NODE_STATUS_PATH: &str = "/api/internal/tunnel/node-stat
 pub(crate) const TUNNEL_RELAY_PATH_PATTERN: &str = "/api/internal/tunnel/relay/{node_id}";
 pub(crate) const TUNNEL_ROUTE_FAMILY: &str = "tunnel_manage";
 
-const DEFAULT_PROXY_IDLE_TIMEOUT_MS: u64 = 2_000;
+const DEFAULT_PROXY_IDLE_TIMEOUT_MS: u64 = 0;
 const DEFAULT_PING_INTERVAL_MS: u64 = 500;
 const DEFAULT_MAX_STREAMS: usize = 2048;
 const DEFAULT_OUTBOUND_QUEUE_CAPACITY: usize = 128;

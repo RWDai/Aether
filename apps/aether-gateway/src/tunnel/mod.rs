@@ -483,6 +483,7 @@ impl EmbeddedTunnelState {
             url: url.trim().to_string(),
             headers: HashMap::new(),
             timeout: timeout_secs,
+            timeout_ms: None,
             follow_redirects: Some(false),
             http1_only: false,
         };

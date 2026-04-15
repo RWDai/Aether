@@ -1,4 +1,5 @@
 use std::io::Read;
+use std::time::Duration;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use flate2::read::GzDecoder;
@@ -177,9 +178,23 @@ pub struct RequestMeta {
     #[serde(default = "default_timeout", deserialize_with = "deserialize_timeout")]
     pub timeout: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub follow_redirects: Option<bool>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub http1_only: bool,
+}
+
+impl RequestMeta {
+    pub fn effective_timeout_ms(&self) -> u64 {
+        self.timeout_ms
+            .unwrap_or_else(|| self.timeout.saturating_mul(1_000))
+            .clamp(1, 300_000)
+    }
+
+    pub fn effective_timeout_duration(&self) -> Duration {
+        Duration::from_millis(self.effective_timeout_ms())
+    }
 }
 
 fn default_timeout() -> u64 {
@@ -318,12 +333,14 @@ fn compress_gzip(data: &[u8]) -> Result<Bytes, std::io::Error> {
 mod tests {
     use super::{encode_ping, Frame, FrameHeader, MsgType, RequestMeta, FLAG_GZIP_COMPRESSED};
     use bytes::Bytes;
+    use std::time::Duration;
 
     #[test]
     fn request_meta_accepts_integer_timeout() {
         let raw = br#"{"method":"GET","url":"https://example.com","headers":{},"timeout":15}"#;
         let meta: RequestMeta = serde_json::from_slice(raw).expect("parse request meta");
         assert_eq!(meta.timeout, 15);
+        assert_eq!(meta.timeout_ms, None);
     }
 
     #[test]
@@ -331,6 +348,36 @@ mod tests {
         let raw = br#"{"method":"GET","url":"https://example.com","headers":{},"timeout":15.0}"#;
         let meta: RequestMeta = serde_json::from_slice(raw).expect("parse request meta");
         assert_eq!(meta.timeout, 15);
+        assert_eq!(meta.timeout_ms, None);
+    }
+
+    #[test]
+    fn request_meta_accepts_timeout_ms_and_prefers_it_for_effective_duration() {
+        let raw = br#"{"method":"GET","url":"https://example.com","headers":{},"timeout":30,"timeout_ms":2500}"#;
+        let meta: RequestMeta = serde_json::from_slice(raw).expect("parse request meta");
+        assert_eq!(meta.timeout, 30);
+        assert_eq!(meta.timeout_ms, Some(2_500));
+        assert_eq!(meta.effective_timeout_ms(), 2_500);
+        assert_eq!(
+            meta.effective_timeout_duration(),
+            Duration::from_millis(2_500)
+        );
+    }
+
+    #[test]
+    fn request_meta_effective_timeout_falls_back_to_seconds_when_timeout_ms_missing() {
+        let meta = RequestMeta {
+            method: "GET".to_string(),
+            url: "https://example.com".to_string(),
+            headers: Default::default(),
+            timeout: 3,
+            timeout_ms: None,
+            follow_redirects: None,
+            http1_only: false,
+        };
+
+        assert_eq!(meta.effective_timeout_ms(), 3_000);
+        assert_eq!(meta.effective_timeout_duration(), Duration::from_secs(3));
     }
 
     #[test]

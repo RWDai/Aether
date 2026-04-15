@@ -92,7 +92,7 @@ pub(crate) async fn open_direct_relay_stream(
         return Err(format!("connect: {error}"));
     }
 
-    let wait_timeout = Duration::from_secs(meta.timeout.clamp(5, 300));
+    let wait_timeout = meta.effective_timeout_duration();
     let response_head = match stream.wait_headers(wait_timeout).await {
         Ok(response) => response,
         Err(error) => {
@@ -322,7 +322,7 @@ pub async fn relay_request(
         finished: false,
     };
 
-    let wait_timeout = Duration::from_secs(meta.timeout.clamp(5, 300));
+    let wait_timeout = meta.effective_timeout_duration();
     let response_head = match stream.wait_headers(wait_timeout).await {
         Ok(response) => response,
         Err(error) => {
@@ -635,6 +635,7 @@ mod tests {
             url: "https://example.com/health".to_string(),
             headers: HashMap::new(),
             timeout: 30,
+            timeout_ms: None,
             follow_redirects: None,
             http1_only: false,
         };
@@ -745,6 +746,7 @@ mod tests {
             url: "https://example.com/headers".to_string(),
             headers: HashMap::new(),
             timeout: 30,
+            timeout_ms: None,
             follow_redirects: None,
             http1_only: false,
         };

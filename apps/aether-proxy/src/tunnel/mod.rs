@@ -373,6 +373,7 @@ mod tests {
             url: "http://127.0.0.1:80/blocked".to_string(),
             headers: std::collections::HashMap::new(),
             timeout: 5,
+            timeout_ms: None,
             follow_redirects: None,
             http1_only: false,
         };

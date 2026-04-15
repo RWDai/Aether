@@ -914,6 +914,7 @@ mod tests {
             url: "https://example.com".to_string(),
             headers: HashMap::new(),
             timeout: 30,
+            timeout_ms: None,
             follow_redirects: None,
             http1_only: false,
         }

@@ -1201,6 +1201,7 @@ fn build_tunnel_probe_relay_envelope(probe_url: &str) -> Result<Vec<u8>, String>
         url: probe_url.trim().to_string(),
         headers: std::collections::HashMap::new(),
         timeout: PROXY_CONNECTIVITY_TIMEOUT_SECS,
+        timeout_ms: None,
         follow_redirects: Some(false),
         http1_only: false,
     };

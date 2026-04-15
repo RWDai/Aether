@@ -36,10 +36,6 @@ const MAX_CHUNK_SIZE: usize = 32 * 1024;
 /// rather than blocking indefinitely and exhausting the stream pool.
 const FRAME_SEND_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Minimum allowed upstream request timeout (seconds).
-const MIN_TIMEOUT_SECS: u64 = 5;
-/// Maximum allowed upstream request timeout (seconds).
-const MAX_TIMEOUT_SECS: u64 = 300;
 /// Match reqwest's default redirect budget so direct execution and tunnel relay
 /// fail at the same point instead of diverging after a different number of hops.
 const MAX_REDIRECTS: usize = 10;
@@ -682,12 +678,11 @@ async fn handle_stream_inner(
         }
     }
 
-    let deadline = Instant::now()
-        + Duration::from_secs(meta.timeout.clamp(MIN_TIMEOUT_SECS, MAX_TIMEOUT_SECS));
+    let timeout = meta.effective_timeout_duration();
+    let deadline = Instant::now() + timeout;
     let follow_redirects = follow_redirects_enabled(&meta);
     let mut current_method: hyper::Method = meta.method.parse().unwrap_or(hyper::Method::GET);
     let mut current_headers = sanitize_upstream_headers(&meta.headers);
-    let timeout = Duration::from_secs(meta.timeout.clamp(MIN_TIMEOUT_SECS, MAX_TIMEOUT_SECS));
     let request_body_size = Arc::new(AtomicUsize::new(0));
     let mut prepared_body = if follow_redirects {
         match prepare_redirect_request_body(
@@ -1140,6 +1135,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn honors_timeout_ms_below_five_seconds() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener");
+        let addr = listener.local_addr().expect("addr");
+        let app = Router::new().route(
+            "/slow",
+            get(|| async {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .body(Body::from("too-late"))
+                    .expect("slow response")
+            }),
+        );
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("test server should run");
+        });
+
+        let host = "timeout-ms.test";
+        let state = sample_state_for_port(addr.port());
+        cache_test_host(&state, host, addr).await;
+        let server_ctx = sample_server(&state);
+        let (frame_tx, mut frame_rx) = bounded_queue::<TunnelFrame>(16);
+        let (_body_tx, body_rx) = mpsc::channel(1);
+
+        let mut meta = sample_request_meta();
+        meta.url = format!("http://{host}:{}/slow", addr.port());
+        meta.timeout = 30;
+        meta.timeout_ms = Some(100);
+
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            handle_stream(Arc::clone(&state), server_ctx, 13, meta, body_rx, frame_tx),
+        )
+        .await
+        .expect("stream should honor timeout_ms without five-second floor");
+        let result = collect_stream_result(&mut frame_rx).await;
+        server.abort();
+
+        assert_eq!(result.error.as_deref(), Some("upstream timeout"));
+        assert!(
+            result.response.is_none(),
+            "timed out request should not send response headers"
+        );
+    }
+
+    #[tokio::test]
     async fn relays_basic_get_request_successfully_through_tunnel() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -1478,6 +1523,7 @@ mod tests {
             url: "https://example.com/ok".to_string(),
             headers: HashMap::new(),
             timeout: 30,
+            timeout_ms: None,
             follow_redirects: None,
             http1_only: false,
         }

@@ -123,6 +123,8 @@ struct RelayRequestMeta {
     headers: BTreeMap<String, String>,
     timeout: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
+    timeout_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     follow_redirects: Option<bool>,
     #[serde(default, skip_serializing_if = "is_false")]
     http1_only: bool,
@@ -402,11 +404,13 @@ fn build_direct_tunnel_request_meta(
     headers: &HeaderMap,
     transport_controls: ExecutionTransportControls,
 ) -> tunnel_protocol::RequestMeta {
+    let timeout_ms = resolve_relay_timeout_millis(plan);
     tunnel_protocol::RequestMeta {
         method: plan.method.clone(),
         url: plan.url.clone(),
         headers: header_map_to_string_map(headers).into_iter().collect(),
-        timeout: resolve_relay_timeout_seconds(plan),
+        timeout: timeout_ms.div_ceil(1_000),
+        timeout_ms: Some(timeout_ms),
         follow_redirects: transport_controls.follow_redirects,
         http1_only: transport_controls.http1_only,
     }
@@ -502,12 +506,14 @@ async fn send_via_tunnel_relay(
 ) -> Result<reqwest::Response, ExecutionRuntimeTransportError> {
     let client = build_relay_client(plan.timeouts.as_ref())?;
     let relay_url = build_relay_url(plan.proxy.as_ref(), node_id);
+    let timeout_ms = resolve_relay_timeout_millis(plan);
     let envelope = build_relay_envelope(
         RelayRequestMeta {
             method: method.as_str().to_string(),
             url: plan.url.clone(),
             headers: header_map_to_string_map(&headers),
-            timeout: resolve_relay_timeout_seconds(plan),
+            timeout: timeout_ms.div_ceil(1_000),
+            timeout_ms: Some(timeout_ms),
             follow_redirects: transport_controls.follow_redirects,
             http1_only: transport_controls.http1_only,
         },
@@ -636,9 +642,8 @@ fn resolve_tunnel_base_url_from_proxy(proxy: &ProxySnapshot) -> Option<String> {
     None
 }
 
-fn resolve_relay_timeout_seconds(plan: &ExecutionPlan) -> u64 {
-    let ms = plan
-        .timeouts
+fn resolve_relay_timeout_millis(plan: &ExecutionPlan) -> u64 {
+    plan.timeouts
         .as_ref()
         .and_then(|timeouts| {
             timeouts
@@ -646,9 +651,8 @@ fn resolve_relay_timeout_seconds(plan: &ExecutionPlan) -> u64 {
                 .or(timeouts.total_ms)
                 .or(timeouts.connect_ms)
         })
-        .unwrap_or(60_000);
-    let secs = ms.div_ceil(1_000);
-    secs.clamp(1, 300)
+        .unwrap_or(60_000)
+        .clamp(1, 300_000)
 }
 
 fn resolve_tunnel_node_id(proxy: Option<&ProxySnapshot>) -> Option<String> {
@@ -1135,6 +1139,8 @@ mod tests {
                 assert_eq!(node_id, "node-1");
                 assert_eq!(meta["method"], "POST");
                 assert_eq!(meta["url"], "https://example.com/chat");
+                assert_eq!(meta["timeout"], 3);
+                assert_eq!(meta["timeout_ms"], 2500);
                 let request_json: serde_json::Value =
                     serde_json::from_slice(&request_body).expect("request body should be json");
                 assert_eq!(request_json["model"], "gpt-4.1");
@@ -1172,8 +1178,8 @@ mod tests {
                 proxy: Some(tunnel_proxy_snapshot(format!("http://{addr}"))),
                 tls_profile: None,
                 timeouts: Some(ExecutionTimeouts {
-                    connect_ms: Some(5_000),
-                    total_ms: Some(5_000),
+                    connect_ms: Some(2_500),
+                    total_ms: Some(2_500),
                     ..ExecutionTimeouts::default()
                 }),
             })
@@ -1224,8 +1230,8 @@ mod tests {
             proxy: Some(tunnel_proxy_snapshot("http://127.0.0.1:1".to_string())),
             tls_profile: None,
             timeouts: Some(ExecutionTimeouts {
-                connect_ms: Some(5_000),
-                total_ms: Some(5_000),
+                connect_ms: Some(2_500),
+                total_ms: Some(2_500),
                 ..ExecutionTimeouts::default()
             }),
         };
@@ -1251,6 +1257,8 @@ mod tests {
                 .expect("request meta should decode");
         assert_eq!(request_meta.method, "POST");
         assert_eq!(request_meta.url, "https://example.com/chat");
+        assert_eq!(request_meta.timeout, 3);
+        assert_eq!(request_meta.timeout_ms, Some(2_500));
 
         let request_body = match proxy_rx.recv().await.expect("body frame should arrive") {
             Message::Binary(data) => data,

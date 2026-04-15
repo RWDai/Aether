@@ -282,10 +282,17 @@ impl LocalStream {
         if self.terminal.load(Ordering::Acquire) {
             return false;
         }
-        self.body_tx
-            .send(LocalBodyEvent::Chunk(payload))
-            .await
-            .is_ok()
+        // Use a timeout to prevent a slow consumer from blocking the shared
+        // proxy-connection reader (head-of-line blocking across streams).
+        match tokio::time::timeout(
+            Duration::from_secs(5),
+            self.body_tx.send(LocalBodyEvent::Chunk(payload)),
+        )
+        .await
+        {
+            Ok(Ok(())) => true,
+            _ => false,
+        }
     }
 
     fn finish(&self) {

@@ -606,6 +606,7 @@ fn relay_envelope() -> Vec<u8> {
             "application/json".to_string(),
         )]),
         timeout: 30,
+        timeout_ms: None,
         follow_redirects: None,
         http1_only: false,
     };

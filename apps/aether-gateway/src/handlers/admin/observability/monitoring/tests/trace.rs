@@ -76,9 +76,9 @@ async fn admin_monitoring_trace_request_returns_local_payload() {
 }
 
 #[tokio::test]
-async fn admin_monitoring_trace_request_hides_format_conversion_disabled_candidates() {
-    let mut hidden_candidate = sample_candidate(
-        "cand-hidden",
+async fn admin_monitoring_trace_request_keeps_format_conversion_disabled_candidates_visible() {
+    let mut format_disabled_candidate = sample_candidate(
+        "cand-format-disabled",
         "request-1",
         0,
         RequestCandidateStatus::Skipped,
@@ -86,7 +86,7 @@ async fn admin_monitoring_trace_request_hides_format_conversion_disabled_candida
         None,
         None,
     );
-    hidden_candidate.skip_reason = Some("format_conversion_disabled".to_string());
+    format_disabled_candidate.skip_reason = Some("format_conversion_disabled".to_string());
 
     let mut visible_skipped_candidate = sample_candidate(
         "cand-visible-skipped",
@@ -100,7 +100,7 @@ async fn admin_monitoring_trace_request_hides_format_conversion_disabled_candida
     visible_skipped_candidate.skip_reason = Some("transport_unsupported".to_string());
 
     let request_candidates = Arc::new(InMemoryRequestCandidateRepository::seed(vec![
-        hidden_candidate,
+        format_disabled_candidate,
         visible_skipped_candidate,
         sample_candidate(
             "cand-used",
@@ -136,7 +136,7 @@ async fn admin_monitoring_trace_request_hides_format_conversion_disabled_candida
         .expect("body should read");
     let payload: serde_json::Value = serde_json::from_slice(&body).expect("json body should parse");
 
-    assert_eq!(payload["total_candidates"], json!(2));
+    assert_eq!(payload["total_candidates"], json!(3));
     assert_eq!(
         payload["candidates"]
             .as_array()
@@ -144,10 +144,14 @@ async fn admin_monitoring_trace_request_hides_format_conversion_disabled_candida
             .iter()
             .map(|item| item["id"].as_str().unwrap_or_default())
             .collect::<Vec<_>>(),
-        vec!["cand-visible-skipped", "cand-used"]
+        vec!["cand-format-disabled", "cand-visible-skipped", "cand-used"]
     );
     assert_eq!(
         payload["candidates"][0]["skip_reason"],
+        json!("format_conversion_disabled")
+    );
+    assert_eq!(
+        payload["candidates"][1]["skip_reason"],
         json!("transport_unsupported")
     );
 }

@@ -295,12 +295,14 @@ fn provider_query_transport_supports_standard_test_execution(
                 transport, api_format,
             )
         }
-        "claude:chat" => {
+        "claude:chat" | "claude:cli" => {
             crate::provider_transport::policy::supports_local_standard_transport_with_network(
                 transport, api_format,
             )
         }
-        "gemini:chat" => state.supports_local_gemini_transport_with_network(transport, api_format),
+        "gemini:chat" | "gemini:cli" => {
+            state.supports_local_gemini_transport_with_network(transport, api_format)
+        }
         _ => false,
     }
 }
@@ -845,6 +847,7 @@ async fn provider_query_execute_standard_test_candidate(
     ) {
         return Ok(ProviderQueryExecutionOutcome {
             status: "skipped",
+            skip_reason: None,
             error_message: None,
             status_code: None,
             latency_ms: None,
@@ -890,7 +893,7 @@ async fn provider_query_execute_standard_test_candidate(
             }
             provider_request_body
         }
-        "claude:chat" | "gemini:chat" => {
+        "claude:chat" | "claude:cli" | "gemini:chat" | "gemini:cli" => {
             let Some(mut provider_request_body) =
                 crate::ai_pipeline::build_cross_format_openai_chat_request_body(
                     &request_body,
@@ -963,7 +966,7 @@ async fn provider_query_execute_standard_test_candidate(
     };
 
     let oauth_auth = match provider_api_format {
-        "openai:chat" | "openai:cli" | "claude:chat" => {
+        "openai:chat" | "openai:cli" | "claude:chat" | "claude:cli" => {
             state.resolve_local_oauth_header_auth(&transport).await?
         }
         _ => None,
@@ -973,10 +976,10 @@ async fn provider_query_execute_standard_test_candidate(
             crate::provider_transport::auth::resolve_local_openai_bearer_auth(&transport)
                 .or(oauth_auth)
         }
-        "claude:chat" => {
+        "claude:chat" | "claude:cli" => {
             crate::provider_transport::auth::resolve_local_standard_auth(&transport).or(oauth_auth)
         }
-        "gemini:chat" => state.resolve_local_gemini_auth(&transport),
+        "gemini:chat" | "gemini:cli" => state.resolve_local_gemini_auth(&transport),
         _ => None,
     };
     let Some((auth_header, auth_value)) = auth else {
@@ -1013,7 +1016,7 @@ async fn provider_query_execute_standard_test_candidate(
                 ),
             }
         }
-        "claude:chat" => {
+        "claude:chat" | "claude:cli" => {
             let custom_path = transport
                 .endpoint
                 .custom_path
@@ -1033,7 +1036,7 @@ async fn provider_query_execute_standard_test_candidate(
                 ),
             }
         }
-        "gemini:chat" => {
+        "gemini:chat" | "gemini:cli" => {
             let custom_path = transport
                 .endpoint
                 .custom_path
@@ -1086,13 +1089,15 @@ async fn provider_query_execute_standard_test_candidate(
     };
 
     let mut request_headers = match provider_api_format {
-        "claude:chat" => crate::provider_transport::auth::build_claude_passthrough_headers(
-            &parts.headers,
-            &auth_header,
-            &auth_value,
-            &BTreeMap::new(),
-            Some("application/json"),
-        ),
+        "claude:chat" | "claude:cli" => {
+            crate::provider_transport::auth::build_claude_passthrough_headers(
+                &parts.headers,
+                &auth_header,
+                &auth_value,
+                &BTreeMap::new(),
+                Some("application/json"),
+            )
+        }
         "openai:cli" => crate::provider_transport::auth::build_openai_passthrough_headers(
             &parts.headers,
             &auth_header,
@@ -1105,9 +1110,11 @@ async fn provider_query_execute_standard_test_candidate(
             &auth_header,
             &auth_value,
             &BTreeMap::new(),
-            Some("application/json"),
         ),
     };
+    request_headers
+        .entry("content-type".to_string())
+        .or_insert_with(|| "application/json".to_string());
     if !state.apply_local_header_rules(
         &mut request_headers,
         transport.endpoint.header_rules.as_ref(),

@@ -2173,6 +2173,551 @@ async fn gateway_handles_openai_cli_test_model_failover_locally() {
 }
 
 #[tokio::test]
+async fn gateway_handles_claude_cli_test_model_locally() {
+    let execution_runtime = Router::new().route(
+        "/v1/execute/sync",
+        any(move |Json(plan): Json<ExecutionPlan>| async move {
+            assert_eq!(plan.provider_id, "provider-claude");
+            assert_eq!(plan.endpoint_id, "endpoint-claude-cli");
+            assert_eq!(plan.key_id, "key-claude-cli");
+            assert_eq!(plan.provider_api_format, "claude:cli");
+            assert_eq!(plan.url, "https://api.anthropic.example/v1/messages");
+            assert_eq!(plan.model_name.as_deref(), Some("claude-sonnet-4-5"));
+            Json(json!({
+                "request_id": plan.request_id,
+                "candidate_id": plan.candidate_id,
+                "status_code": 200,
+                "headers": {
+                    "content-type": "application/json"
+                },
+                "body": {
+                    "json_body": {
+                        "id": "chatcmpl-claude-cli-test-model",
+                        "choices": [{
+                            "message": {
+                                "role": "assistant",
+                                "content": "Hello from Claude CLI"
+                            }
+                        }]
+                    }
+                },
+                "telemetry": {
+                    "elapsed_ms": 14
+                }
+            }))
+        }),
+    );
+
+    let (execution_runtime_url, execution_runtime_handle) = start_server(execution_runtime).await;
+    let mut provider = sample_provider("provider-claude", "Claude", 10);
+    provider.provider_type = "anthropic".to_string();
+    let provider_catalog_repository = Arc::new(InMemoryProviderCatalogReadRepository::seed(
+        vec![provider],
+        vec![sample_endpoint(
+            "endpoint-claude-cli",
+            "provider-claude",
+            "claude:cli",
+            "https://api.anthropic.example",
+        )],
+        vec![sample_key(
+            "key-claude-cli",
+            "provider-claude",
+            "claude:cli",
+            "sk-test-claude-cli",
+        )],
+    ));
+
+    let gateway = build_router_with_state(
+        build_state_with_execution_runtime_override(execution_runtime_url)
+            .with_data_state_for_tests(GatewayDataState::with_provider_transport_reader_for_tests(
+                provider_catalog_repository,
+                DEVELOPMENT_ENCRYPTION_KEY.to_string(),
+            )),
+    );
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+
+    let response = reqwest::Client::new()
+        .post(format!("{gateway_url}/api/admin/provider-query/test-model"))
+        .header(GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .json(&json!({
+            "provider_id": "provider-claude",
+            "model": "claude-sonnet-4-5",
+            "api_format": "claude:cli"
+        }))
+        .send()
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: serde_json::Value = response.json().await.expect("json body should parse");
+    assert_eq!(payload["success"], json!(true));
+    assert_eq!(
+        payload["data"]["response"]["choices"][0]["message"]["content"],
+        json!("Hello from Claude CLI")
+    );
+
+    gateway_handle.abort();
+    execution_runtime_handle.abort();
+}
+
+#[tokio::test]
+async fn gateway_uses_compatible_claude_cli_endpoint_when_api_format_is_omitted() {
+    let execution_runtime = Router::new().route(
+        "/v1/execute/sync",
+        any(move |Json(plan): Json<ExecutionPlan>| async move {
+            assert_eq!(plan.endpoint_id, "endpoint-claude-cli");
+            assert_eq!(plan.provider_api_format, "claude:cli");
+            assert_eq!(plan.key_id, "key-claude-cli");
+            Json(json!({
+                "request_id": plan.request_id,
+                "candidate_id": plan.candidate_id,
+                "status_code": 200,
+                "headers": {
+                    "content-type": "application/json"
+                },
+                "body": {
+                    "json_body": {
+                        "id": "chatcmpl-claude-cli-only-endpoint",
+                        "choices": [{
+                            "message": {
+                                "role": "assistant",
+                                "content": "Selected compatible Claude CLI endpoint"
+                            }
+                        }]
+                    }
+                },
+                "telemetry": {
+                    "elapsed_ms": 12
+                }
+            }))
+        }),
+    );
+
+    let (execution_runtime_url, execution_runtime_handle) = start_server(execution_runtime).await;
+    let mut provider = sample_provider("provider-claude", "Claude", 10);
+    provider.provider_type = "anthropic".to_string();
+    let provider_catalog_repository = Arc::new(InMemoryProviderCatalogReadRepository::seed(
+        vec![provider],
+        vec![sample_endpoint(
+            "endpoint-claude-cli",
+            "provider-claude",
+            "claude:cli",
+            "https://api.anthropic.example",
+        )],
+        vec![sample_key(
+            "key-claude-cli",
+            "provider-claude",
+            "claude:cli",
+            "sk-test-claude-cli",
+        )],
+    ));
+
+    let gateway = build_router_with_state(
+        build_state_with_execution_runtime_override(execution_runtime_url)
+            .with_data_state_for_tests(GatewayDataState::with_provider_transport_reader_for_tests(
+                provider_catalog_repository,
+                DEVELOPMENT_ENCRYPTION_KEY.to_string(),
+            )),
+    );
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+
+    let response = reqwest::Client::new()
+        .post(format!("{gateway_url}/api/admin/provider-query/test-model"))
+        .header(GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .json(&json!({
+            "provider_id": "provider-claude",
+            "model": "claude-sonnet-4-5"
+        }))
+        .send()
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: serde_json::Value = response.json().await.expect("json body should parse");
+    assert_eq!(payload["success"], json!(true));
+    assert_eq!(
+        payload["data"]["response"]["choices"][0]["message"]["content"],
+        json!("Selected compatible Claude CLI endpoint")
+    );
+
+    gateway_handle.abort();
+    execution_runtime_handle.abort();
+}
+
+#[tokio::test]
+async fn gateway_handles_claude_cli_test_model_failover_locally() {
+    let execution_runtime = Router::new().route(
+        "/v1/execute/sync",
+        any(move |Json(plan): Json<ExecutionPlan>| async move {
+            assert_eq!(plan.provider_id, "provider-claude");
+            assert_eq!(plan.endpoint_id, "endpoint-claude-cli");
+            assert_eq!(plan.key_id, "key-claude-cli");
+            assert_eq!(plan.provider_api_format, "claude:cli");
+            assert_eq!(plan.model_name.as_deref(), Some("claude-sonnet-4-5"));
+            Json(json!({
+                "request_id": plan.request_id,
+                "candidate_id": plan.candidate_id,
+                "status_code": 200,
+                "headers": {
+                    "content-type": "application/json"
+                },
+                "body": {
+                    "json_body": {
+                        "id": "chatcmpl-claude-cli-failover",
+                        "choices": [{
+                            "message": {
+                                "role": "assistant",
+                                "content": "Claude CLI failover path succeeded"
+                            }
+                        }]
+                    }
+                },
+                "telemetry": {
+                    "elapsed_ms": 16
+                }
+            }))
+        }),
+    );
+
+    let (execution_runtime_url, execution_runtime_handle) = start_server(execution_runtime).await;
+    let mut provider = sample_provider("provider-claude", "Claude", 10);
+    provider.provider_type = "anthropic".to_string();
+    let provider_catalog_repository = Arc::new(InMemoryProviderCatalogReadRepository::seed(
+        vec![provider],
+        vec![sample_endpoint(
+            "endpoint-claude-cli",
+            "provider-claude",
+            "claude:cli",
+            "https://api.anthropic.example",
+        )],
+        vec![sample_key(
+            "key-claude-cli",
+            "provider-claude",
+            "claude:cli",
+            "sk-test-claude-cli",
+        )],
+    ));
+
+    let gateway = build_router_with_state(
+        build_state_with_execution_runtime_override(execution_runtime_url)
+            .with_data_state_for_tests(GatewayDataState::with_provider_transport_reader_for_tests(
+                provider_catalog_repository,
+                DEVELOPMENT_ENCRYPTION_KEY.to_string(),
+            )),
+    );
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+
+    let response = reqwest::Client::new()
+        .post(format!(
+            "{gateway_url}/api/admin/provider-query/test-model-failover"
+        ))
+        .header(GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .json(&json!({
+            "provider_id": "provider-claude",
+            "failover_models": ["claude-sonnet-4-5"],
+            "api_format": "claude:cli"
+        }))
+        .send()
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: serde_json::Value = response.json().await.expect("json body should parse");
+    assert_eq!(payload["success"], json!(true));
+    assert_eq!(payload["total_attempts"], json!(1));
+    assert_eq!(
+        payload["data"]["response"]["choices"][0]["message"]["content"],
+        json!("Claude CLI failover path succeeded")
+    );
+
+    gateway_handle.abort();
+    execution_runtime_handle.abort();
+}
+
+#[tokio::test]
+async fn gateway_handles_gemini_cli_test_model_locally() {
+    let execution_runtime = Router::new().route(
+        "/v1/execute/sync",
+        any(move |Json(plan): Json<ExecutionPlan>| async move {
+            assert_eq!(plan.provider_id, "provider-gemini");
+            assert_eq!(plan.endpoint_id, "endpoint-gemini-cli");
+            assert_eq!(plan.key_id, "key-gemini-cli");
+            assert_eq!(plan.provider_api_format, "gemini:cli");
+            assert_eq!(
+                plan.url,
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent"
+            );
+            assert_eq!(plan.model_name.as_deref(), Some("gemini-2.5-pro"));
+            Json(json!({
+                "request_id": plan.request_id,
+                "candidate_id": plan.candidate_id,
+                "status_code": 200,
+                "headers": {
+                    "content-type": "application/json"
+                },
+                "body": {
+                    "json_body": {
+                        "id": "chatcmpl-gemini-cli-test-model",
+                        "choices": [{
+                            "message": {
+                                "role": "assistant",
+                                "content": "Hello from Gemini CLI"
+                            }
+                        }]
+                    }
+                },
+                "telemetry": {
+                    "elapsed_ms": 19
+                }
+            }))
+        }),
+    );
+
+    let (execution_runtime_url, execution_runtime_handle) = start_server(execution_runtime).await;
+    let mut provider = sample_provider("provider-gemini", "Gemini", 10);
+    provider.provider_type = "google".to_string();
+    let provider_catalog_repository = Arc::new(InMemoryProviderCatalogReadRepository::seed(
+        vec![provider],
+        vec![sample_endpoint(
+            "endpoint-gemini-cli",
+            "provider-gemini",
+            "gemini:cli",
+            "https://generativelanguage.googleapis.com",
+        )],
+        vec![sample_key(
+            "key-gemini-cli",
+            "provider-gemini",
+            "gemini:cli",
+            "sk-test-gemini-cli",
+        )],
+    ));
+
+    let gateway = build_router_with_state(
+        build_state_with_execution_runtime_override(execution_runtime_url)
+            .with_data_state_for_tests(GatewayDataState::with_provider_transport_reader_for_tests(
+                provider_catalog_repository,
+                DEVELOPMENT_ENCRYPTION_KEY.to_string(),
+            )),
+    );
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+
+    let response = reqwest::Client::new()
+        .post(format!("{gateway_url}/api/admin/provider-query/test-model"))
+        .header(GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .json(&json!({
+            "provider_id": "provider-gemini",
+            "model": "gemini-2.5-pro",
+            "api_format": "gemini:cli"
+        }))
+        .send()
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: serde_json::Value = response.json().await.expect("json body should parse");
+    assert_eq!(payload["success"], json!(true));
+    assert_eq!(
+        payload["data"]["response"]["choices"][0]["message"]["content"],
+        json!("Hello from Gemini CLI")
+    );
+
+    gateway_handle.abort();
+    execution_runtime_handle.abort();
+}
+
+#[tokio::test]
+async fn gateway_uses_compatible_gemini_cli_endpoint_when_api_format_is_omitted() {
+    let execution_runtime = Router::new().route(
+        "/v1/execute/sync",
+        any(move |Json(plan): Json<ExecutionPlan>| async move {
+            assert_eq!(plan.endpoint_id, "endpoint-gemini-cli");
+            assert_eq!(plan.provider_api_format, "gemini:cli");
+            assert_eq!(plan.key_id, "key-gemini-cli");
+            Json(json!({
+                "request_id": plan.request_id,
+                "candidate_id": plan.candidate_id,
+                "status_code": 200,
+                "headers": {
+                    "content-type": "application/json"
+                },
+                "body": {
+                    "json_body": {
+                        "id": "chatcmpl-gemini-cli-only-endpoint",
+                        "choices": [{
+                            "message": {
+                                "role": "assistant",
+                                "content": "Selected compatible Gemini CLI endpoint"
+                            }
+                        }]
+                    }
+                },
+                "telemetry": {
+                    "elapsed_ms": 21
+                }
+            }))
+        }),
+    );
+
+    let (execution_runtime_url, execution_runtime_handle) = start_server(execution_runtime).await;
+    let mut provider = sample_provider("provider-gemini", "Gemini", 10);
+    provider.provider_type = "google".to_string();
+    let provider_catalog_repository = Arc::new(InMemoryProviderCatalogReadRepository::seed(
+        vec![provider],
+        vec![sample_endpoint(
+            "endpoint-gemini-cli",
+            "provider-gemini",
+            "gemini:cli",
+            "https://generativelanguage.googleapis.com",
+        )],
+        vec![sample_key(
+            "key-gemini-cli",
+            "provider-gemini",
+            "gemini:cli",
+            "sk-test-gemini-cli",
+        )],
+    ));
+
+    let gateway = build_router_with_state(
+        build_state_with_execution_runtime_override(execution_runtime_url)
+            .with_data_state_for_tests(GatewayDataState::with_provider_transport_reader_for_tests(
+                provider_catalog_repository,
+                DEVELOPMENT_ENCRYPTION_KEY.to_string(),
+            )),
+    );
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+
+    let response = reqwest::Client::new()
+        .post(format!("{gateway_url}/api/admin/provider-query/test-model"))
+        .header(GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .json(&json!({
+            "provider_id": "provider-gemini",
+            "model": "gemini-2.5-pro"
+        }))
+        .send()
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: serde_json::Value = response.json().await.expect("json body should parse");
+    assert_eq!(payload["success"], json!(true));
+    assert_eq!(
+        payload["data"]["response"]["choices"][0]["message"]["content"],
+        json!("Selected compatible Gemini CLI endpoint")
+    );
+
+    gateway_handle.abort();
+    execution_runtime_handle.abort();
+}
+
+#[tokio::test]
+async fn gateway_handles_gemini_cli_test_model_failover_locally() {
+    let execution_runtime = Router::new().route(
+        "/v1/execute/sync",
+        any(move |Json(plan): Json<ExecutionPlan>| async move {
+            assert_eq!(plan.provider_id, "provider-gemini");
+            assert_eq!(plan.endpoint_id, "endpoint-gemini-cli");
+            assert_eq!(plan.key_id, "key-gemini-cli");
+            assert_eq!(plan.provider_api_format, "gemini:cli");
+            assert_eq!(plan.model_name.as_deref(), Some("gemini-2.5-pro"));
+            Json(json!({
+                "request_id": plan.request_id,
+                "candidate_id": plan.candidate_id,
+                "status_code": 200,
+                "headers": {
+                    "content-type": "application/json"
+                },
+                "body": {
+                    "json_body": {
+                        "id": "chatcmpl-gemini-cli-failover",
+                        "choices": [{
+                            "message": {
+                                "role": "assistant",
+                                "content": "Gemini CLI failover path succeeded"
+                            }
+                        }]
+                    }
+                },
+                "telemetry": {
+                    "elapsed_ms": 23
+                }
+            }))
+        }),
+    );
+
+    let (execution_runtime_url, execution_runtime_handle) = start_server(execution_runtime).await;
+    let mut provider = sample_provider("provider-gemini", "Gemini", 10);
+    provider.provider_type = "google".to_string();
+    let provider_catalog_repository = Arc::new(InMemoryProviderCatalogReadRepository::seed(
+        vec![provider],
+        vec![sample_endpoint(
+            "endpoint-gemini-cli",
+            "provider-gemini",
+            "gemini:cli",
+            "https://generativelanguage.googleapis.com",
+        )],
+        vec![sample_key(
+            "key-gemini-cli",
+            "provider-gemini",
+            "gemini:cli",
+            "sk-test-gemini-cli",
+        )],
+    ));
+
+    let gateway = build_router_with_state(
+        build_state_with_execution_runtime_override(execution_runtime_url)
+            .with_data_state_for_tests(GatewayDataState::with_provider_transport_reader_for_tests(
+                provider_catalog_repository,
+                DEVELOPMENT_ENCRYPTION_KEY.to_string(),
+            )),
+    );
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+
+    let response = reqwest::Client::new()
+        .post(format!(
+            "{gateway_url}/api/admin/provider-query/test-model-failover"
+        ))
+        .header(GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .json(&json!({
+            "provider_id": "provider-gemini",
+            "failover_models": ["gemini-2.5-pro"],
+            "api_format": "gemini:cli"
+        }))
+        .send()
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: serde_json::Value = response.json().await.expect("json body should parse");
+    assert_eq!(payload["success"], json!(true));
+    assert_eq!(payload["total_attempts"], json!(1));
+    assert_eq!(
+        payload["data"]["response"]["choices"][0]["message"]["content"],
+        json!("Gemini CLI failover path succeeded")
+    );
+
+    gateway_handle.abort();
+    execution_runtime_handle.abort();
+}
+
+#[tokio::test]
 async fn gateway_handles_admin_provider_query_test_model_failover_with_single_model_name_alias() {
     let execution_runtime = Router::new().route(
         "/v1/execute/sync",

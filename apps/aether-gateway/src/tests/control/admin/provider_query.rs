@@ -2685,7 +2685,7 @@ async fn gateway_handles_gemini_cli_test_model_with_oauth_header_fallback() {
                 plan.headers.get("authorization").map(String::as_str),
                 Some("Bearer cached-gemini-cli-token")
             );
-            assert!(plan.headers.get("x-goog-api-key").is_none());
+            assert!(!plan.headers.contains_key("x-goog-api-key"));
             Json(json!({
                 "request_id": plan.request_id,
                 "candidate_id": plan.candidate_id,

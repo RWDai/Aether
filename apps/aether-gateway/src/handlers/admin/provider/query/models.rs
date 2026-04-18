@@ -19,6 +19,7 @@ use crate::provider_transport::kiro::{
     build_kiro_provider_request_body, supports_local_kiro_request_transport_with_network,
     KiroProviderHeadersInput, KIRO_ENVELOPE_NAME,
 };
+use crate::provider_transport::url::build_openai_cli_url;
 use crate::usage::GatewaySyncReportRequest;
 use crate::{AppState, GatewayError};
 use aether_admin::provider::pool as admin_provider_pool_pure;
@@ -95,6 +96,7 @@ struct ProviderQueryTestAttempt {
 #[derive(Debug, Clone)]
 struct ProviderQueryExecutionOutcome {
     status: &'static str,
+    skip_reason: Option<String>,
     error_message: Option<String>,
     status_code: Option<u16>,
     latency_ms: Option<u64>,
@@ -103,6 +105,43 @@ struct ProviderQueryExecutionOutcome {
     request_body: Value,
     response_headers: BTreeMap<String, String>,
     response_body: Option<Value>,
+}
+
+fn provider_query_skipped_execution_outcome(
+    request_body: Value,
+    skip_reason: impl Into<String>,
+) -> ProviderQueryExecutionOutcome {
+    ProviderQueryExecutionOutcome {
+        status: "skipped",
+        skip_reason: Some(skip_reason.into()),
+        error_message: None,
+        status_code: None,
+        latency_ms: None,
+        request_url: String::new(),
+        request_headers: BTreeMap::new(),
+        request_body,
+        response_headers: BTreeMap::new(),
+        response_body: None,
+    }
+}
+
+fn provider_query_default_local_test_error(route_path: &str) -> &'static str {
+    if route_path.ends_with("/test-model") {
+        ADMIN_PROVIDER_QUERY_LOCAL_TEST_MODEL_MESSAGE
+    } else {
+        ADMIN_PROVIDER_QUERY_LOCAL_TEST_MODEL_FAILOVER_MESSAGE
+    }
+}
+
+fn provider_query_unsupported_test_api_format_message(api_format: &str) -> String {
+    let api_format = api_format.trim();
+    if api_format.is_empty() {
+        "Rust local provider-query model test does not support an empty endpoint format".to_string()
+    } else {
+        format!(
+            "Rust local provider-query model test does not support endpoint format {api_format}"
+        )
+    }
 }
 
 fn provider_query_provider_payload(provider: &StoredProviderCatalogProvider) -> Value {
@@ -251,12 +290,19 @@ fn provider_query_transport_supports_standard_test_execution(
         "openai:chat" => {
             crate::provider_transport::policy::supports_local_openai_chat_transport(transport)
         }
-        "claude:chat" => {
+        "openai:cli" => {
             crate::provider_transport::policy::supports_local_standard_transport_with_network(
                 transport, api_format,
             )
         }
-        "gemini:chat" => state.supports_local_gemini_transport_with_network(transport, api_format),
+        "claude:chat" | "claude:cli" => {
+            crate::provider_transport::policy::supports_local_standard_transport_with_network(
+                transport, api_format,
+            )
+        }
+        "gemini:chat" | "gemini:cli" => {
+            state.supports_local_gemini_transport_with_network(transport, api_format)
+        }
         _ => false,
     }
 }
@@ -269,7 +315,34 @@ async fn provider_query_select_preferred_non_kiro_endpoint(
     selected_key_id: Option<&str>,
 ) -> Option<StoredProviderCatalogEndpoint> {
     for endpoint in endpoints.iter().filter(|endpoint| endpoint.is_active) {
-        if !provider_query_supports_standard_test_api_format(&endpoint.api_format) {
+        if !provider_query_prefers_chat_standard_test_api_format(&endpoint.api_format) {
+            continue;
+        }
+        for key in keys {
+            if !key.is_active
+                || selected_key_id.is_some_and(|value| value != key.id.as_str())
+                || !provider_query_key_supports_endpoint(key, &endpoint.api_format)
+            {
+                continue;
+            }
+            let Ok(Some(transport)) = state
+                .read_provider_transport_snapshot(&provider.id, &endpoint.id, &key.id)
+                .await
+            else {
+                continue;
+            };
+            if provider_query_transport_supports_standard_test_execution(
+                state,
+                &transport,
+                endpoint.api_format.as_str(),
+            ) {
+                return Some(endpoint.clone());
+            }
+        }
+    }
+
+    for endpoint in endpoints.iter().filter(|endpoint| endpoint.is_active) {
+        if !provider_query_supports_cli_standard_test_api_format(&endpoint.api_format) {
             continue;
         }
         for key in keys {
@@ -626,31 +699,17 @@ async fn provider_query_execute_kiro_test_candidate(
         .read_provider_transport_snapshot(&provider.id, &candidate.endpoint.id, &candidate.key.id)
         .await?
     else {
-        return Ok(ProviderQueryExecutionOutcome {
-            status: "skipped",
-            error_message: None,
-            status_code: None,
-            latency_ms: None,
-            request_url: String::new(),
-            request_headers: BTreeMap::new(),
-            request_body: Value::Null,
-            response_headers: BTreeMap::new(),
-            response_body: None,
-        });
+        return Ok(provider_query_skipped_execution_outcome(
+            Value::Null,
+            "Provider transport snapshot is unavailable",
+        ));
     };
 
     if !supports_local_kiro_request_transport_with_network(&transport) {
-        return Ok(ProviderQueryExecutionOutcome {
-            status: "skipped",
-            error_message: None,
-            status_code: None,
-            latency_ms: None,
-            request_url: String::new(),
-            request_headers: BTreeMap::new(),
-            request_body: Value::Null,
-            response_headers: BTreeMap::new(),
-            response_body: None,
-        });
+        return Ok(provider_query_skipped_execution_outcome(
+            Value::Null,
+            "Kiro local transport is unavailable for this endpoint",
+        ));
     }
 
     let Some(kiro_auth) = state
@@ -659,6 +718,7 @@ async fn provider_query_execute_kiro_test_candidate(
     else {
         return Ok(ProviderQueryExecutionOutcome {
             status: "failed",
+            skip_reason: None,
             error_message: Some("oauth auth failed".to_string()),
             status_code: None,
             latency_ms: None,
@@ -681,6 +741,7 @@ async fn provider_query_execute_kiro_test_candidate(
         None => {
             return Ok(ProviderQueryExecutionOutcome {
                 status: "failed",
+                skip_reason: None,
                 error_message: Some("provider request body build failed".to_string()),
                 status_code: None,
                 latency_ms: None,
@@ -777,6 +838,7 @@ async fn provider_query_execute_kiro_test_candidate(
         } else {
             "success"
         },
+        skip_reason: None,
         error_message,
         status_code: Some(result.status_code),
         latency_ms: result.telemetry.as_ref().and_then(|value| value.elapsed_ms),
@@ -800,17 +862,10 @@ async fn provider_query_execute_standard_test_candidate(
         .read_provider_transport_snapshot(&provider.id, &candidate.endpoint.id, &candidate.key.id)
         .await?
     else {
-        return Ok(ProviderQueryExecutionOutcome {
-            status: "skipped",
-            error_message: None,
-            status_code: None,
-            latency_ms: None,
-            request_url: String::new(),
-            request_headers: BTreeMap::new(),
-            request_body: Value::Null,
-            response_headers: BTreeMap::new(),
-            response_body: None,
-        });
+        return Ok(provider_query_skipped_execution_outcome(
+            Value::Null,
+            "Provider transport snapshot is unavailable",
+        ));
     };
     if !provider_query_transport_supports_standard_test_execution(
         state,
@@ -819,6 +874,7 @@ async fn provider_query_execute_standard_test_candidate(
     ) {
         return Ok(ProviderQueryExecutionOutcome {
             status: "skipped",
+            skip_reason: None,
             error_message: None,
             status_code: None,
             latency_ms: None,
@@ -847,29 +903,24 @@ async fn provider_query_execute_standard_test_candidate(
                     false,
                 )
             else {
-                return Ok(ProviderQueryExecutionOutcome {
-                    status: "skipped",
-                    error_message: None,
-                    status_code: None,
-                    latency_ms: None,
-                    request_url: String::new(),
-                    request_headers: BTreeMap::new(),
-                    request_body,
-                    response_headers: BTreeMap::new(),
-                    response_body: None,
-                });
+                return Ok(provider_query_skipped_execution_outcome(
+                    request_body.clone(),
+                    format!("Provider request body could not be built for {provider_api_format}"),
+                ));
             };
             if !crate::provider_transport::apply_local_body_rules(
                 &mut provider_request_body,
                 transport.endpoint.body_rules.as_ref(),
                 Some(&request_body),
             ) {
-                None
-            } else {
-                Some(provider_request_body)
+                return Ok(provider_query_skipped_execution_outcome(
+                    request_body.clone(),
+                    format!("Provider request body rules rejected {provider_api_format}"),
+                ));
             }
+            provider_request_body
         }
-        "claude:chat" | "gemini:chat" => {
+        "claude:chat" | "claude:cli" | "gemini:chat" | "gemini:cli" => {
             let Some(mut provider_request_body) =
                 crate::ai_pipeline::build_cross_format_openai_chat_request_body(
                     &request_body,
@@ -878,71 +929,89 @@ async fn provider_query_execute_standard_test_candidate(
                     false,
                 )
             else {
-                return Ok(ProviderQueryExecutionOutcome {
-                    status: "skipped",
-                    error_message: None,
-                    status_code: None,
-                    latency_ms: None,
-                    request_url: String::new(),
-                    request_headers: BTreeMap::new(),
-                    request_body,
-                    response_headers: BTreeMap::new(),
-                    response_body: None,
-                });
+                return Ok(provider_query_skipped_execution_outcome(
+                    request_body.clone(),
+                    format!("Provider request body could not be built for {provider_api_format}"),
+                ));
             };
             if !crate::provider_transport::apply_local_body_rules(
                 &mut provider_request_body,
                 transport.endpoint.body_rules.as_ref(),
                 Some(&request_body),
             ) {
-                None
-            } else {
-                Some(provider_request_body)
+                return Ok(provider_query_skipped_execution_outcome(
+                    request_body.clone(),
+                    format!("Provider request body rules rejected {provider_api_format}"),
+                ));
             }
+            provider_request_body
         }
-        _ => None,
-    };
-    let Some(provider_request_body) = provider_request_body else {
-        return Ok(ProviderQueryExecutionOutcome {
-            status: "skipped",
-            error_message: None,
-            status_code: None,
-            latency_ms: None,
-            request_url: String::new(),
-            request_headers: BTreeMap::new(),
-            request_body,
-            response_headers: BTreeMap::new(),
-            response_body: None,
-        });
+        "openai:cli" => {
+            let Some(mut provider_request_body) =
+                crate::ai_pipeline::build_cross_format_openai_chat_request_body(
+                    &request_body,
+                    &candidate.effective_model,
+                    provider_api_format,
+                    false,
+                )
+            else {
+                return Ok(provider_query_skipped_execution_outcome(
+                    request_body.clone(),
+                    format!("Provider request body could not be built for {provider_api_format}"),
+                ));
+            };
+            if !crate::provider_transport::apply_local_body_rules(
+                &mut provider_request_body,
+                transport.endpoint.body_rules.as_ref(),
+                Some(&request_body),
+            ) {
+                return Ok(provider_query_skipped_execution_outcome(
+                    request_body.clone(),
+                    format!("Provider request body rules rejected {provider_api_format}"),
+                ));
+            }
+            crate::ai_pipeline::apply_codex_openai_cli_special_body_edits(
+                &mut provider_request_body,
+                transport.provider.provider_type.as_str(),
+                provider_api_format,
+                transport.endpoint.body_rules.as_ref(),
+                Some(candidate.key.id.as_str()),
+            );
+            crate::ai_pipeline::apply_openai_compact_special_body_edits(
+                &mut provider_request_body,
+                provider_api_format,
+            );
+            provider_request_body
+        }
+        _ => {
+            return Ok(provider_query_skipped_execution_outcome(
+                request_body.clone(),
+                provider_query_unsupported_test_api_format_message(provider_api_format),
+            ));
+        }
     };
 
     let oauth_auth = match provider_api_format {
-        "openai:chat" | "claude:chat" => state.resolve_local_oauth_header_auth(&transport).await?,
+        "openai:chat" | "openai:cli" | "claude:chat" | "claude:cli" | "gemini:chat"
+        | "gemini:cli" => state.resolve_local_oauth_header_auth(&transport).await?,
         _ => None,
     };
     let auth = match provider_api_format {
-        "openai:chat" => {
+        "openai:chat" | "openai:cli" => {
             crate::provider_transport::auth::resolve_local_openai_bearer_auth(&transport)
                 .or(oauth_auth)
         }
-        "claude:chat" => {
+        "claude:chat" | "claude:cli" => {
             crate::provider_transport::auth::resolve_local_standard_auth(&transport).or(oauth_auth)
         }
-        "gemini:chat" => state.resolve_local_gemini_auth(&transport),
+        "gemini:chat" | "gemini:cli" => state.resolve_local_gemini_auth(&transport).or(oauth_auth),
         _ => None,
     };
     let Some((auth_header, auth_value)) = auth else {
-        return Ok(ProviderQueryExecutionOutcome {
-            status: "skipped",
-            error_message: None,
-            status_code: None,
-            latency_ms: None,
-            request_url: String::new(),
-            request_headers: BTreeMap::new(),
-            request_body: provider_request_body,
-            response_headers: BTreeMap::new(),
-            response_body: None,
-        });
+        return Ok(provider_query_skipped_execution_outcome(
+            provider_request_body,
+            format!("Provider auth is unavailable for {provider_api_format}"),
+        ));
     };
 
     let mut synthetic_request = http::Request::builder()
@@ -972,7 +1041,7 @@ async fn provider_query_execute_standard_test_candidate(
                 ),
             }
         }
-        "claude:chat" => {
+        "claude:chat" | "claude:cli" => {
             let custom_path = transport
                 .endpoint
                 .custom_path
@@ -992,7 +1061,7 @@ async fn provider_query_execute_standard_test_candidate(
                 ),
             }
         }
-        "gemini:chat" => {
+        "gemini:chat" | "gemini:cli" => {
             let custom_path = transport
                 .endpoint
                 .custom_path
@@ -1014,26 +1083,65 @@ async fn provider_query_execute_standard_test_candidate(
                 ),
             }
         }
+        "openai:cli" => {
+            let custom_path = transport
+                .endpoint
+                .custom_path
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            match custom_path {
+                Some(path) => state.build_passthrough_path_url(
+                    &transport.endpoint.base_url,
+                    path,
+                    parts.uri.query(),
+                    &[],
+                ),
+                None => Some(build_openai_cli_url(
+                    &transport.endpoint.base_url,
+                    parts.uri.query(),
+                    false,
+                )),
+            }
+        }
         _ => None,
-    }
-    .ok_or_else(|| GatewayError::Internal("provider request url is unavailable".to_string()))?;
+    };
+    let Some(request_url) = request_url else {
+        return Ok(provider_query_skipped_execution_outcome(
+            provider_request_body,
+            format!("Provider request URL is unavailable for {provider_api_format}"),
+        ));
+    };
 
     let mut request_headers = match provider_api_format {
-        "claude:chat" => crate::provider_transport::auth::build_claude_passthrough_headers(
+        "claude:chat" | "claude:cli" => {
+            crate::provider_transport::auth::build_claude_passthrough_headers(
+                &parts.headers,
+                &auth_header,
+                &auth_value,
+                &BTreeMap::new(),
+                Some("application/json"),
+            )
+        }
+        "openai:cli" => {
+            crate::provider_transport::auth::build_complete_passthrough_headers_with_auth(
+                &parts.headers,
+                &auth_header,
+                &auth_value,
+                &BTreeMap::new(),
+                Some("application/json"),
+            )
+        }
+        _ => state.build_passthrough_headers_with_auth(
             &parts.headers,
             &auth_header,
             &auth_value,
             &BTreeMap::new(),
-            Some("application/json"),
-        ),
-        _ => crate::provider_transport::auth::build_openai_passthrough_headers(
-            &parts.headers,
-            &auth_header,
-            &auth_value,
-            &BTreeMap::new(),
-            Some("application/json"),
         ),
     };
+    request_headers
+        .entry("content-type".to_string())
+        .or_insert_with(|| "application/json".to_string());
     if !state.apply_local_header_rules(
         &mut request_headers,
         transport.endpoint.header_rules.as_ref(),
@@ -1043,6 +1151,7 @@ async fn provider_query_execute_standard_test_candidate(
     ) {
         return Ok(ProviderQueryExecutionOutcome {
             status: "failed",
+            skip_reason: None,
             error_message: Some("provider request headers build failed".to_string()),
             status_code: None,
             latency_ms: None,
@@ -1052,6 +1161,17 @@ async fn provider_query_execute_standard_test_candidate(
             response_headers: BTreeMap::new(),
             response_body: None,
         });
+    }
+    if provider_api_format == "openai:cli" {
+        crate::ai_pipeline::apply_codex_openai_cli_special_headers(
+            &mut request_headers,
+            &provider_request_body,
+            &parts.headers,
+            transport.provider.provider_type.as_str(),
+            provider_api_format,
+            Some(trace_id),
+            transport.key.decrypted_auth_config.as_deref(),
+        );
     }
     crate::provider_transport::ensure_upstream_auth_header(
         &mut request_headers,
@@ -1096,6 +1216,7 @@ async fn provider_query_execute_standard_test_candidate(
 
     Ok(ProviderQueryExecutionOutcome {
         status: if did_fail { "failed" } else { "success" },
+        skip_reason: None,
         error_message,
         status_code: Some(result.status_code),
         latency_ms: result.telemetry.as_ref().and_then(|value| value.elapsed_ms),
@@ -1122,7 +1243,7 @@ fn provider_query_test_attempt_payload(
         "auth_type": candidate.key.auth_type,
         "effective_model": candidate.effective_model,
         "status": execution.status,
-        "skip_reason": Value::Null,
+        "skip_reason": execution.skip_reason,
         "error_message": execution.error_message,
         "status_code": execution.status_code,
         "latency_ms": execution.latency_ms,
@@ -1134,8 +1255,12 @@ fn provider_query_test_attempt_payload(
     })
 }
 
-fn provider_query_supports_standard_test_api_format(api_format: &str) -> bool {
+fn provider_query_prefers_chat_standard_test_api_format(api_format: &str) -> bool {
     matches!(api_format, "openai:chat" | "claude:chat" | "gemini:chat")
+}
+
+fn provider_query_supports_cli_standard_test_api_format(api_format: &str) -> bool {
+    matches!(api_format, "openai:cli" | "claude:cli" | "gemini:cli")
 }
 
 async fn build_admin_provider_query_kiro_failover_response(
@@ -1272,7 +1397,15 @@ async fn build_admin_provider_query_kiro_failover_response(
                     .cloned()
                     .filter(|value| !value.is_null())
             })
-            .unwrap_or_else(|| json!(ADMIN_PROVIDER_QUERY_NO_LOCAL_MODELS_DETAIL))
+            .or_else(|| {
+                attempts.iter().rev().find_map(|attempt| {
+                    attempt
+                        .get("skip_reason")
+                        .cloned()
+                        .filter(|value| !value.is_null())
+                })
+            })
+            .unwrap_or_else(|| json!(provider_query_default_local_test_error(route_path)))
     };
 
     Ok(Json(json!({

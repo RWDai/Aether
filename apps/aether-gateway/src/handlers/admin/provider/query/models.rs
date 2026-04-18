@@ -315,7 +315,34 @@ async fn provider_query_select_preferred_non_kiro_endpoint(
     selected_key_id: Option<&str>,
 ) -> Option<StoredProviderCatalogEndpoint> {
     for endpoint in endpoints.iter().filter(|endpoint| endpoint.is_active) {
-        if !provider_query_supports_standard_test_api_format(&endpoint.api_format) {
+        if !provider_query_prefers_chat_standard_test_api_format(&endpoint.api_format) {
+            continue;
+        }
+        for key in keys {
+            if !key.is_active
+                || selected_key_id.is_some_and(|value| value != key.id.as_str())
+                || !provider_query_key_supports_endpoint(key, &endpoint.api_format)
+            {
+                continue;
+            }
+            let Ok(Some(transport)) = state
+                .read_provider_transport_snapshot(&provider.id, &endpoint.id, &key.id)
+                .await
+            else {
+                continue;
+            };
+            if provider_query_transport_supports_standard_test_execution(
+                state,
+                &transport,
+                endpoint.api_format.as_str(),
+            ) {
+                return Some(endpoint.clone());
+            }
+        }
+    }
+
+    for endpoint in endpoints.iter().filter(|endpoint| endpoint.is_active) {
+        if !provider_query_supports_cli_standard_test_api_format(&endpoint.api_format) {
             continue;
         }
         for key in keys {
@@ -921,10 +948,9 @@ async fn provider_query_execute_standard_test_candidate(
         }
         "openai:cli" => {
             let Some(mut provider_request_body) =
-                crate::ai_pipeline::build_cross_format_openai_cli_request_body(
+                crate::ai_pipeline::build_cross_format_openai_chat_request_body(
                     &request_body,
                     &candidate.effective_model,
-                    "openai:chat",
                     provider_api_format,
                     false,
                 )
@@ -1228,8 +1254,12 @@ fn provider_query_test_attempt_payload(
     })
 }
 
-fn provider_query_supports_standard_test_api_format(api_format: &str) -> bool {
+fn provider_query_prefers_chat_standard_test_api_format(api_format: &str) -> bool {
     matches!(api_format, "openai:chat" | "claude:chat" | "gemini:chat")
+}
+
+fn provider_query_supports_cli_standard_test_api_format(api_format: &str) -> bool {
+    matches!(api_format, "openai:cli" | "claude:cli" | "gemini:cli")
 }
 
 async fn build_admin_provider_query_kiro_failover_response(

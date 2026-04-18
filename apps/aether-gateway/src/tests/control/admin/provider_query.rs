@@ -1503,6 +1503,7 @@ async fn gateway_handles_non_kiro_multi_model_failover_locally() {
 
 #[tokio::test]
 async fn gateway_handles_openai_cli_test_model_locally() {
+    let prompt = "Tell me whether the CLI request preserved this prompt.";
     let execution_runtime = Router::new().route(
         "/v1/execute/sync",
         any(move |Json(plan): Json<ExecutionPlan>| async move {
@@ -1529,6 +1530,31 @@ async fn gateway_handles_openai_cli_test_model_locally() {
                 .as_ref()
                 .and_then(|body| body.get("input"))
                 .is_some());
+            assert_eq!(
+                plan.body
+                    .json_body
+                    .as_ref()
+                    .and_then(|body| body.get("input"))
+                    .and_then(|input| input.as_array())
+                    .and_then(|items| items.first())
+                    .and_then(|item| item.get("type"))
+                    .and_then(|value| value.as_str()),
+                Some("message")
+            );
+            assert_eq!(
+                plan.body
+                    .json_body
+                    .as_ref()
+                    .and_then(|body| body.get("input"))
+                    .and_then(|input| input.as_array())
+                    .and_then(|items| items.first())
+                    .and_then(|item| item.get("content"))
+                    .and_then(|content| content.as_array())
+                    .and_then(|parts| parts.first())
+                    .and_then(|part| part.get("text"))
+                    .and_then(|value| value.as_str()),
+                Some(prompt)
+            );
             assert_eq!(
                 plan.body
                     .json_body
@@ -1612,7 +1638,8 @@ async fn gateway_handles_openai_cli_test_model_locally() {
         .json(&json!({
             "provider_id": "provider-openai",
             "model": "gpt-5.4-mini",
-            "api_format": "openai:cli"
+            "api_format": "openai:cli",
+            "message": prompt
         }))
         .send()
         .await
@@ -2073,6 +2100,103 @@ async fn gateway_uses_compatible_cli_endpoint_when_api_format_is_omitted() {
     assert_eq!(
         payload["data"]["response"]["choices"][0]["message"]["content"],
         json!("Selected compatible CLI endpoint")
+    );
+
+    gateway_handle.abort();
+    execution_runtime_handle.abort();
+}
+
+#[tokio::test]
+async fn gateway_uses_runnable_cli_endpoint_after_chat_preference_when_api_format_is_omitted() {
+    let execution_runtime = Router::new().route(
+        "/v1/execute/sync",
+        any(move |Json(plan): Json<ExecutionPlan>| async move {
+            assert_eq!(plan.endpoint_id, "endpoint-openai-cli-runnable");
+            assert_eq!(plan.provider_api_format, "openai:cli");
+            assert_eq!(plan.key_id, "key-openai-shared");
+            Json(json!({
+                "request_id": plan.request_id,
+                "candidate_id": plan.candidate_id,
+                "status_code": 200,
+                "headers": {
+                    "content-type": "application/json"
+                },
+                "body": {
+                    "json_body": {
+                        "id": "chatcmpl-cli-runnable-after-chat-preference",
+                        "choices": [{
+                            "message": {
+                                "role": "assistant",
+                                "content": "Selected runnable CLI endpoint after unsupported chat"
+                            }
+                        }]
+                    }
+                },
+                "telemetry": {
+                    "elapsed_ms": 18
+                }
+            }))
+        }),
+    );
+
+    let (execution_runtime_url, execution_runtime_handle) = start_server(execution_runtime).await;
+    let mut provider = sample_provider("provider-openai", "OpenAI", 10);
+    provider.provider_type = "openai".to_string();
+    let mut unsupported_chat_endpoint = sample_endpoint(
+        "endpoint-openai-chat-unsupported",
+        "provider-openai",
+        "openai:chat",
+        "https://api.openai.example",
+    );
+    unsupported_chat_endpoint.header_rules = Some(json!({"invalid": true}));
+    let cli_endpoint = sample_endpoint(
+        "endpoint-openai-cli-runnable",
+        "provider-openai",
+        "openai:cli",
+        "https://api.openai.example",
+    );
+    let mut shared_key = sample_key(
+        "key-openai-shared",
+        "provider-openai",
+        "openai:chat",
+        "sk-test-shared",
+    );
+    shared_key.api_formats = Some(json!(["openai:chat", "openai:cli"]));
+    let provider_catalog_repository = Arc::new(InMemoryProviderCatalogReadRepository::seed(
+        vec![provider],
+        vec![unsupported_chat_endpoint, cli_endpoint],
+        vec![shared_key],
+    ));
+
+    let gateway = build_router_with_state(
+        build_state_with_execution_runtime_override(execution_runtime_url)
+            .with_data_state_for_tests(GatewayDataState::with_provider_transport_reader_for_tests(
+                provider_catalog_repository,
+                DEVELOPMENT_ENCRYPTION_KEY.to_string(),
+            )),
+    );
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+
+    let response = reqwest::Client::new()
+        .post(format!("{gateway_url}/api/admin/provider-query/test-model"))
+        .header(GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .json(&json!({
+            "provider_id": "provider-openai",
+            "model": "gpt-5.4-mini"
+        }))
+        .send()
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: serde_json::Value = response.json().await.expect("json body should parse");
+    assert_eq!(payload["success"], json!(true));
+    assert_eq!(
+        payload["data"]["response"]["choices"][0]["message"]["content"],
+        json!("Selected runnable CLI endpoint after unsupported chat")
     );
 
     gateway_handle.abort();

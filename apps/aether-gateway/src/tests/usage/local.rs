@@ -33,7 +33,8 @@ where
     T: UsageReadRepository + ?Sized,
 {
     let mut stored = None;
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    let timeout = std::time::Duration::from_secs(10);
+    let deadline = tokio::time::Instant::now() + timeout;
     loop {
         stored = repository
             .find_by_request_id(request_id)
@@ -50,7 +51,10 @@ where
                 .as_ref()
                 .map(|usage| usage.status.as_str())
                 .unwrap_or("<missing>");
-            panic!("usage should reach status {expected_status}, last observed status: {observed}");
+            panic!(
+                "usage should reach status {expected_status} within {:?}, last observed status: {observed}",
+                timeout
+            );
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }

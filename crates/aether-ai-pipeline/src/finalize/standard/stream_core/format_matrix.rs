@@ -259,11 +259,17 @@ fn standardized_usage_from_canonical(usage: CanonicalUsage) -> StandardizedUsage
     let mut standardized = StandardizedUsage::new();
     standardized.input_tokens = usage.input_tokens as i64;
     standardized.output_tokens = usage.output_tokens as i64;
+    standardized.cache_creation_tokens = usage.cache_creation_tokens as i64;
+    standardized.cache_creation_ephemeral_5m_tokens =
+        usage.cache_creation_ephemeral_5m_tokens as i64;
+    standardized.cache_creation_ephemeral_1h_tokens =
+        usage.cache_creation_ephemeral_1h_tokens as i64;
+    standardized.cache_read_tokens = usage.cache_read_tokens as i64;
     standardized.dimensions.insert(
         "total_tokens".to_string(),
         serde_json::json!(usage.total_tokens),
     );
-    standardized
+    standardized.normalize_cache_creation_breakdown()
 }
 
 impl ClientStreamEmitter {
@@ -413,7 +419,7 @@ fn parse_gemini_error(payload: &Value) -> Option<(String, Option<String>, LocalC
 
 #[cfg(test)]
 mod tests {
-    use super::StreamingStandardFormatMatrix;
+    use super::{StreamingStandardFormatMatrix, StreamingStandardTerminalObserver};
     use serde_json::{json, Value};
 
     fn report_context(provider_api_format: &str, client_api_format: &str) -> Value {
@@ -688,5 +694,54 @@ mod tests {
                 .expect("finish should succeed")
                 .is_empty());
         }
+    }
+
+    #[test]
+    fn terminal_observer_preserves_claude_cache_usage() {
+        let report_context = report_context("claude:chat", "openai:chat");
+        let mut observer = StreamingStandardTerminalObserver::default();
+
+        observer
+            .push_line(
+                &report_context,
+                data_line(json!({
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_cache_123",
+                        "model": "claude-sonnet-4-5"
+                    }
+                })),
+            )
+            .expect("message_start should parse");
+        observer
+            .push_line(
+                &report_context,
+                data_line(json!({
+                    "type": "message_delta",
+                    "delta": {
+                        "stop_reason": "end_turn"
+                    },
+                    "usage": {
+                        "input_tokens": 6,
+                        "output_tokens": 20,
+                        "cache_creation_input_tokens": 42262,
+                        "cache_read_input_tokens": 0
+                    }
+                })),
+            )
+            .expect("message_delta should parse");
+
+        let summary = observer
+            .latest_summary()
+            .cloned()
+            .expect("summary should exist");
+        let usage = summary
+            .standardized_usage
+            .expect("standardized usage should exist");
+
+        assert_eq!(usage.input_tokens, 6);
+        assert_eq!(usage.output_tokens, 20);
+        assert_eq!(usage.cache_creation_tokens, 42_262);
+        assert_eq!(usage.cache_read_tokens, 0);
     }
 }

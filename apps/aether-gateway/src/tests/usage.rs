@@ -178,4 +178,5 @@ pub(super) fn sample_local_openai_key() -> StoredProviderCatalogKey {
 
 mod direct;
 mod local;
+mod pricing;
 mod wallet;

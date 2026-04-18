@@ -5,6 +5,10 @@ pub struct CanonicalUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub total_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub cache_creation_ephemeral_5m_tokens: u64,
+    pub cache_creation_ephemeral_1h_tokens: u64,
+    pub cache_read_tokens: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -78,14 +82,43 @@ pub fn canonical_usage_from_openai_usage(value: Option<&Value>) -> Option<Canoni
         .or_else(|| usage.get("completion_tokens"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    let total_tokens = usage
-        .get("total_tokens")
+    let cache_creation_tokens = usage
+        .get("cache_creation_input_tokens")
         .and_then(Value::as_u64)
-        .unwrap_or(input_tokens + output_tokens);
+        .or_else(|| {
+            usage
+                .get("input_tokens_details")
+                .or_else(|| usage.get("prompt_tokens_details"))
+                .and_then(Value::as_object)
+                .and_then(|details| details.get("cached_creation_tokens"))
+                .and_then(Value::as_u64)
+        })
+        .unwrap_or(0);
+    let cache_read_tokens = usage
+        .get("cache_read_input_tokens")
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            usage
+                .get("input_tokens_details")
+                .or_else(|| usage.get("prompt_tokens_details"))
+                .and_then(Value::as_object)
+                .and_then(|details| details.get("cached_tokens"))
+                .and_then(Value::as_u64)
+        })
+        .unwrap_or(0);
+    let total_tokens = usage.get("total_tokens").and_then(Value::as_u64).unwrap_or(
+        input_tokens
+            .saturating_add(output_tokens)
+            .saturating_add(cache_creation_tokens)
+            .saturating_add(cache_read_tokens),
+    );
     Some(CanonicalUsage {
         input_tokens,
         output_tokens,
         total_tokens,
+        cache_creation_tokens,
+        cache_read_tokens,
+        ..CanonicalUsage::default()
     })
 }
 
@@ -99,10 +132,39 @@ pub fn canonical_usage_from_claude_usage(value: Option<&Value>) -> Option<Canoni
         .get("output_tokens")
         .and_then(Value::as_u64)
         .unwrap_or(0);
+    let cache_creation_ephemeral_5m_tokens = usage
+        .get("cache_creation")
+        .and_then(Value::as_object)
+        .and_then(|value| value.get("ephemeral_5m_input_tokens"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let cache_creation_ephemeral_1h_tokens = usage
+        .get("cache_creation")
+        .and_then(Value::as_object)
+        .and_then(|value| value.get("ephemeral_1h_input_tokens"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let cache_creation_tokens = usage
+        .get("cache_creation_input_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(
+            cache_creation_ephemeral_5m_tokens.saturating_add(cache_creation_ephemeral_1h_tokens),
+        );
+    let cache_read_tokens = usage
+        .get("cache_read_input_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     Some(CanonicalUsage {
         input_tokens,
         output_tokens,
-        total_tokens: input_tokens + output_tokens,
+        total_tokens: input_tokens
+            .saturating_add(output_tokens)
+            .saturating_add(cache_creation_tokens)
+            .saturating_add(cache_read_tokens),
+        cache_creation_tokens,
+        cache_creation_ephemeral_5m_tokens,
+        cache_creation_ephemeral_1h_tokens,
+        cache_read_tokens,
     })
 }
 
@@ -116,14 +178,24 @@ pub fn canonical_usage_from_gemini_usage(value: Option<&Value>) -> Option<Canoni
         .get("candidatesTokenCount")
         .and_then(Value::as_u64)
         .unwrap_or(0);
+    let cache_read_tokens = usage
+        .get("cachedContentTokenCount")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     let total_tokens = usage
         .get("totalTokenCount")
         .and_then(Value::as_u64)
-        .unwrap_or(input_tokens + output_tokens);
+        .unwrap_or(
+            input_tokens
+                .saturating_add(output_tokens)
+                .saturating_add(cache_read_tokens),
+        );
     Some(CanonicalUsage {
         input_tokens,
         output_tokens,
         total_tokens,
+        cache_read_tokens,
+        ..CanonicalUsage::default()
     })
 }
 

@@ -67,6 +67,22 @@ fn base_mapping(api_format: &str) -> BTreeMap<String, String> {
             mapping.insert("input_tokens".to_string(), "input_tokens".to_string());
             mapping.insert("output_tokens".to_string(), "output_tokens".to_string());
             mapping.insert(
+                "cache_creation_input_tokens".to_string(),
+                "cache_creation_tokens".to_string(),
+            );
+            mapping.insert(
+                "cache_creation.ephemeral_5m_input_tokens".to_string(),
+                "cache_creation_ephemeral_5m_tokens".to_string(),
+            );
+            mapping.insert(
+                "cache_creation.ephemeral_1h_input_tokens".to_string(),
+                "cache_creation_ephemeral_1h_tokens".to_string(),
+            );
+            mapping.insert(
+                "cache_read_input_tokens".to_string(),
+                "cache_read_tokens".to_string(),
+            );
+            mapping.insert(
                 "prompt_tokens_details.cached_tokens".to_string(),
                 "cache_read_tokens".to_string(),
             );
@@ -250,6 +266,26 @@ mod tests {
         assert_eq!(usage.cache_creation_tokens, 2);
         assert_eq!(usage.cache_read_tokens, 3);
         assert_eq!(usage.reasoning_tokens, 1);
+    }
+
+    #[test]
+    fn maps_openai_responses_with_top_level_cache_fields() {
+        let usage = map_usage_from_response(
+            &serde_json::json!({
+                "usage": {
+                    "input_tokens": 6,
+                    "output_tokens": 20,
+                    "cache_creation_input_tokens": 42_262,
+                    "cache_read_input_tokens": 0
+                }
+            }),
+            "openai:chat",
+        );
+
+        assert_eq!(usage.input_tokens, 6);
+        assert_eq!(usage.output_tokens, 20);
+        assert_eq!(usage.cache_creation_tokens, 42_262);
+        assert_eq!(usage.cache_read_tokens, 0);
     }
 
     #[test]

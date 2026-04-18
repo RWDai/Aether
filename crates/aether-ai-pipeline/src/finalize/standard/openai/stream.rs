@@ -1764,6 +1764,7 @@ mod tests {
                     input_tokens: 1,
                     output_tokens: 2,
                     total_tokens: 3,
+                    ..CanonicalUsage::default()
                 }),
             },
         };
@@ -1902,6 +1903,7 @@ mod tests {
                     input_tokens: 1,
                     output_tokens: 2,
                     total_tokens: 3,
+                    ..
                 }),
             } if reason == "tool_calls"
         )));
@@ -1961,6 +1963,7 @@ mod tests {
                             input_tokens: 1,
                             output_tokens: 2,
                             total_tokens: 3,
+                            ..CanonicalUsage::default()
                         }),
                     },
                 })
@@ -2043,6 +2046,7 @@ mod tests {
                     input_tokens: 1,
                     output_tokens: 2,
                     total_tokens: 3,
+                    ..
                 }),
             } if reason == "stop"
         )));
@@ -2078,6 +2082,7 @@ mod tests {
                             input_tokens: 1,
                             output_tokens: 2,
                             total_tokens: 3,
+                            ..CanonicalUsage::default()
                         }),
                     },
                 })

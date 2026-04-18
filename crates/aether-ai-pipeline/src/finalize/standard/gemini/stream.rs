@@ -514,6 +514,7 @@ mod tests {
                             input_tokens: 1,
                             output_tokens: 2,
                             total_tokens: 3,
+                            ..CanonicalUsage::default()
                         }),
                     },
                 })

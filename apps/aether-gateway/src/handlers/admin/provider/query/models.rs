@@ -992,9 +992,8 @@ async fn provider_query_execute_standard_test_candidate(
     };
 
     let oauth_auth = match provider_api_format {
-        "openai:chat" | "openai:cli" | "claude:chat" | "claude:cli" => {
-            state.resolve_local_oauth_header_auth(&transport).await?
-        }
+        "openai:chat" | "openai:cli" | "claude:chat" | "claude:cli" | "gemini:chat"
+        | "gemini:cli" => state.resolve_local_oauth_header_auth(&transport).await?,
         _ => None,
     };
     let auth = match provider_api_format {
@@ -1005,7 +1004,7 @@ async fn provider_query_execute_standard_test_candidate(
         "claude:chat" | "claude:cli" => {
             crate::provider_transport::auth::resolve_local_standard_auth(&transport).or(oauth_auth)
         }
-        "gemini:chat" | "gemini:cli" => state.resolve_local_gemini_auth(&transport),
+        "gemini:chat" | "gemini:cli" => state.resolve_local_gemini_auth(&transport).or(oauth_auth),
         _ => None,
     };
     let Some((auth_header, auth_value)) = auth else {
@@ -1124,13 +1123,15 @@ async fn provider_query_execute_standard_test_candidate(
                 Some("application/json"),
             )
         }
-        "openai:cli" => crate::provider_transport::auth::build_openai_passthrough_headers(
-            &parts.headers,
-            &auth_header,
-            &auth_value,
-            &BTreeMap::new(),
-            Some("application/json"),
-        ),
+        "openai:cli" => {
+            crate::provider_transport::auth::build_complete_passthrough_headers_with_auth(
+                &parts.headers,
+                &auth_header,
+                &auth_value,
+                &BTreeMap::new(),
+                Some("application/json"),
+            )
+        }
         _ => state.build_passthrough_headers_with_auth(
             &parts.headers,
             &auth_header,

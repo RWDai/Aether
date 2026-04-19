@@ -49,6 +49,157 @@ fn tagged_reason(reason: Option<&str>, prefix: &str) -> Option<String> {
     })
 }
 
+fn oauth_invalid_reason_is_account_block(reason: Option<&str>) -> bool {
+    reason
+        .map(str::trim)
+        .is_some_and(|value| value.starts_with(OAUTH_ACCOUNT_BLOCK_PREFIX))
+}
+
+fn normalize_local_oauth_refresh_error_message(
+    status_code: Option<u16>,
+    body_excerpt: Option<&str>,
+) -> String {
+    let mut message = None::<String>;
+    let mut error_code = None::<String>;
+    let mut error_type = None::<String>;
+
+    if let Some(body_excerpt) = body_excerpt {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(body_excerpt) {
+            if let Some(object) = value.as_object() {
+                if let Some(error_object) =
+                    object.get("error").and_then(serde_json::Value::as_object)
+                {
+                    message = error_object
+                        .get("message")
+                        .or_else(|| error_object.get("error_description"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(ToOwned::to_owned);
+                    error_code = error_object
+                        .get("code")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(|value| value.to_ascii_lowercase());
+                    error_type = error_object
+                        .get("type")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(|value| value.to_ascii_lowercase());
+                }
+                if message.is_none() {
+                    message = object
+                        .get("message")
+                        .or_else(|| object.get("error_description"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(ToOwned::to_owned);
+                }
+                if error_code.is_none() {
+                    error_code = object
+                        .get("code")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(|value| value.to_ascii_lowercase());
+                }
+                if error_type.is_none() {
+                    error_type = object
+                        .get("type")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(|value| value.to_ascii_lowercase());
+                }
+            }
+        }
+    }
+
+    let message = message
+        .or_else(|| {
+            body_excerpt
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|value| value.chars().take(300).collect::<String>())
+        })
+        .unwrap_or_default();
+    let lowered = message.to_ascii_lowercase();
+    let error_code = error_code.unwrap_or_default();
+    let error_type = error_type.unwrap_or_default();
+
+    if error_code == "refresh_token_reused"
+        || lowered.contains("already been used to generate a new access token")
+    {
+        return "refresh_token 已被使用并轮换，请重新登录授权".to_string();
+    }
+    if error_code == "invalid_grant"
+        || error_code == "invalid_refresh_token"
+        || (lowered.contains("refresh token")
+            && ["expired", "revoked", "invalid"]
+                .iter()
+                .any(|keyword| lowered.contains(keyword)))
+    {
+        return "refresh_token 无效、已过期或已撤销，请重新登录授权".to_string();
+    }
+    if error_type == "invalid_request_error" && !message.is_empty() {
+        return message;
+    }
+    if !message.is_empty() {
+        return message;
+    }
+    status_code
+        .map(|status_code| format!("HTTP {status_code}"))
+        .unwrap_or_else(|| "未知错误".to_string())
+}
+
+fn merge_local_oauth_refresh_failure_reason(
+    current_reason: Option<&str>,
+    refresh_reason: &str,
+) -> Option<String> {
+    let current_reason = current_reason.map(str::trim).unwrap_or_default();
+    let refresh_reason = refresh_reason.trim();
+    if refresh_reason.is_empty() {
+        return (!current_reason.is_empty()).then(|| current_reason.to_string());
+    }
+    if current_reason.is_empty() {
+        return Some(refresh_reason.to_string());
+    }
+    if current_reason.starts_with(OAUTH_EXPIRED_PREFIX) {
+        return None;
+    }
+    if current_reason.starts_with(OAUTH_ACCOUNT_BLOCK_PREFIX) {
+        if let Some((head, _)) = current_reason.split_once("[REFRESH_FAILED]") {
+            return Some(
+                format!("{}\n{}", head.trim_end(), refresh_reason)
+                    .trim()
+                    .to_string(),
+            );
+        }
+        return Some(format!("{current_reason}\n{refresh_reason}"));
+    }
+    Some(refresh_reason.to_string())
+}
+
+fn local_oauth_refresh_success_invalid_state(
+    key: &StoredProviderCatalogKey,
+) -> (Option<u64>, Option<String>) {
+    let current_reason = key
+        .oauth_invalid_reason
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or_default();
+    if oauth_invalid_reason_is_account_block(Some(current_reason)) {
+        return (
+            key.oauth_invalid_at_unix_secs,
+            Some(current_reason.to_string()),
+        );
+    }
+    (None, None)
+}
+
 fn default_oauth_status_snapshot_value() -> Value {
     default_provider_key_status_snapshot()
         .get("oauth")
@@ -557,7 +708,7 @@ impl AppState {
         let executor = GatewayLocalOAuthHttpExecutor { state: self };
 
         for _ in 0..2 {
-            let resolution = self
+            let resolution = match self
                 .oauth_refresh
                 .resolve_with_result(
                     &executor,
@@ -566,7 +717,32 @@ impl AppState {
                     Some(lock_owner.as_str()),
                 )
                 .await
-                .map_err(|err| GatewayError::Internal(err.to_string()))?;
+            {
+                Ok(resolution) => resolution,
+                Err(provider_transport::LocalOAuthRefreshError::HttpStatus {
+                    status_code,
+                    body_excerpt,
+                    ..
+                }) if matches!(status_code, 400 | 401 | 403) => {
+                    if let Err(err) = self
+                        .persist_local_oauth_refresh_failure_state(
+                            &current_transport,
+                            status_code,
+                            body_excerpt.as_str(),
+                        )
+                        .await
+                    {
+                        tracing::warn!(
+                            key_id = %current_transport.key.id,
+                            provider_type = %current_transport.provider.provider_type,
+                            error = ?err,
+                            "gateway local oauth refresh failure persistence failed"
+                        );
+                    }
+                    return Ok(None);
+                }
+                Err(err) => return Err(GatewayError::Internal(err.to_string())),
+            };
 
             if resolution
                 .as_ref()
@@ -790,8 +966,10 @@ impl AppState {
         latest_key.encrypted_auth_config = encrypted_auth_config;
         latest_key.is_active = true;
         latest_key.expires_at_unix_secs = entry.expires_at_unix_secs;
-        latest_key.oauth_invalid_at_unix_secs = None;
-        latest_key.oauth_invalid_reason = None;
+        let (oauth_invalid_at_unix_secs, oauth_invalid_reason) =
+            local_oauth_refresh_success_invalid_state(&latest_key);
+        latest_key.oauth_invalid_at_unix_secs = oauth_invalid_at_unix_secs;
+        latest_key.oauth_invalid_reason = oauth_invalid_reason;
         latest_key.updated_at_unix_secs = Some(
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -804,6 +982,72 @@ impl AppState {
             sync_provider_key_oauth_status_snapshot(current_status_snapshot, &latest_key);
         self.update_provider_catalog_key(&latest_key).await?;
         Ok(())
+    }
+
+    async fn persist_local_oauth_refresh_failure_state(
+        &self,
+        transport: &provider_transport::GatewayProviderTransportSnapshot,
+        status_code: u16,
+        body_excerpt: &str,
+    ) -> Result<bool, GatewayError> {
+        let key_id = transport.key.id.trim();
+        if key_id.is_empty() {
+            return Ok(false);
+        }
+
+        let Some(mut latest_key) = self
+            .data
+            .list_provider_catalog_keys_by_ids(&[key_id.to_string()])
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))?
+            .into_iter()
+            .next()
+        else {
+            return Ok(false);
+        };
+
+        if !provider_key_is_oauth_managed(&latest_key, transport.provider.provider_type.as_str()) {
+            return Ok(false);
+        }
+
+        let refresh_reason = format!(
+            "{OAUTH_REFRESH_FAILED_PREFIX}Token 续期失败 ({status_code}): {}",
+            normalize_local_oauth_refresh_error_message(Some(status_code), Some(body_excerpt))
+        );
+        let Some(merged_reason) = merge_local_oauth_refresh_failure_reason(
+            latest_key.oauth_invalid_reason.as_deref(),
+            &refresh_reason,
+        ) else {
+            return Ok(false);
+        };
+        if latest_key.oauth_invalid_reason.as_deref() == Some(merged_reason.as_str())
+            && latest_key.oauth_invalid_at_unix_secs.is_some()
+        {
+            return Ok(false);
+        }
+
+        let now_unix_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .map(|duration| duration.as_secs())
+            .unwrap_or(0);
+        latest_key.oauth_invalid_at_unix_secs = latest_key
+            .oauth_invalid_at_unix_secs
+            .or(Some(now_unix_secs));
+        latest_key.oauth_invalid_reason = Some(merged_reason);
+        latest_key.updated_at_unix_secs = Some(now_unix_secs);
+        let current_status_snapshot = latest_key.status_snapshot.take();
+        latest_key.status_snapshot =
+            sync_provider_key_oauth_status_snapshot(current_status_snapshot, &latest_key);
+
+        let updated = self
+            .update_provider_catalog_key(&latest_key)
+            .await?
+            .is_some();
+        if updated {
+            let _ = self.invalidate_local_oauth_refresh_entry(key_id).await;
+        }
+        Ok(updated)
     }
 
     async fn execute_local_oauth_http_request(

@@ -692,6 +692,76 @@ async fn gateway_handles_admin_pool_list_keys_locally_with_trusted_admin_princip
 }
 
 #[tokio::test]
+async fn gateway_marks_account_blocked_pool_key_in_list_keys_response() {
+    let mut provider = sample_provider("provider-codex", "codex", 10).with_transport_fields(
+        true,
+        false,
+        true,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(json!({
+            "pool_advanced": {
+                "enabled": true
+            }
+        })),
+    );
+    provider.provider_type = "codex".to_string();
+
+    let mut key = sample_key(
+        "key-codex-blocked",
+        "provider-codex",
+        "openai:cli",
+        "oauth-placeholder",
+    );
+    key.name = "blocked-codex".to_string();
+    key.auth_type = "oauth".to_string();
+    key.oauth_invalid_reason = Some("[ACCOUNT_BLOCK] account has been deactivated".to_string());
+    key.oauth_invalid_at_unix_secs = Some(1_700_000_000);
+
+    let provider_catalog_repository = Arc::new(InMemoryProviderCatalogReadRepository::seed(
+        vec![provider],
+        Vec::new(),
+        vec![key],
+    ));
+    let state = AppState::new()
+        .expect("gateway should build")
+        .with_data_state_for_tests(GatewayDataState::with_provider_catalog_reader_for_tests(
+            provider_catalog_repository,
+        ));
+
+    let response = local_admin_pool_response(
+        &state,
+        http::Method::GET,
+        "/api/admin/pool/provider-codex/keys?page=1&page_size=50&status=all",
+        None,
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: serde_json::Value = serde_json::from_slice(
+        &to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body should read"),
+    )
+    .expect("json body should parse");
+    let keys = payload["keys"].as_array().expect("keys should be array");
+
+    assert_eq!(keys.len(), 1);
+    assert_eq!(keys[0]["account_status_code"], json!("account_disabled"));
+    assert_eq!(keys[0]["account_status_blocked"], json!(true));
+    assert_eq!(keys[0]["scheduling_status"], json!("blocked"));
+    assert_eq!(keys[0]["scheduling_reason"], json!("account_blocked"));
+    assert_eq!(keys[0]["scheduling_label"], json!("账号停用"));
+    assert_eq!(
+        keys[0]["status_snapshot"]["account"]["source"],
+        json!("oauth_invalid")
+    );
+}
+
+#[tokio::test]
 async fn gateway_handles_admin_pool_list_keys_with_quota_compatibility_fields() {
     let upstream_hits = Arc::new(Mutex::new(0usize));
     let upstream_hits_clone = Arc::clone(&upstream_hits);

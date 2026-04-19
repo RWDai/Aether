@@ -22,6 +22,7 @@ pub(super) struct CandidateRuntimeSelectionSnapshot {
     pub(super) provider_key_rpm_states: BTreeMap<String, StoredProviderCatalogKey>,
     provider_quota_blocks_requests: BTreeMap<String, bool>,
     key_account_quota_exhausted: BTreeMap<String, bool>,
+    key_oauth_invalid: BTreeMap<String, bool>,
     provider_key_rpm_reset_ats: BTreeMap<String, Option<u64>>,
 }
 
@@ -40,6 +41,8 @@ pub(super) async fn read_candidate_runtime_selection_snapshot(
         &provider_key_rpm_states,
         &provider_skip_exhausted_accounts,
     );
+    let key_oauth_invalid =
+        read_key_oauth_invalid_map(candidates, &provider_key_rpm_states, now_unix_secs);
     let provider_quota_blocks_requests =
         read_provider_quota_block_map(state, candidates, now_unix_secs).await?;
     let provider_key_rpm_reset_ats =
@@ -51,6 +54,7 @@ pub(super) async fn read_candidate_runtime_selection_snapshot(
         provider_key_rpm_states,
         provider_quota_blocks_requests,
         key_account_quota_exhausted,
+        key_oauth_invalid,
         provider_key_rpm_reset_ats,
     })
 }
@@ -104,6 +108,11 @@ pub(super) fn is_candidate_selectable(
             .get(candidate.key_id.as_str())
             .copied()
             .unwrap_or(false),
+        oauth_invalid: snapshot
+            .key_oauth_invalid
+            .get(candidate.key_id.as_str())
+            .copied()
+            .unwrap_or(false),
         rpm_reset_at: snapshot
             .provider_key_rpm_reset_ats
             .get(candidate.key_id.as_str())
@@ -139,6 +148,11 @@ pub(super) fn current_candidate_runtime_skip_reason(
         provider_quota_blocks_requests,
         account_quota_exhausted: snapshot
             .key_account_quota_exhausted
+            .get(candidate.key_id.as_str())
+            .copied()
+            .unwrap_or(false),
+        oauth_invalid: snapshot
+            .key_oauth_invalid
             .get(candidate.key_id.as_str())
             .copied()
             .unwrap_or(false),
@@ -268,6 +282,40 @@ fn read_key_account_quota_exhaustion_map(
             (candidate.key_id.clone(), exhausted)
         })
         .collect()
+}
+
+fn read_key_oauth_invalid_map(
+    candidates: &[SchedulerMinimalCandidateSelectionCandidate],
+    provider_key_rpm_states: &BTreeMap<String, StoredProviderCatalogKey>,
+    now_unix_secs: u64,
+) -> BTreeMap<String, bool> {
+    candidates
+        .iter()
+        .map(|candidate| {
+            let oauth_invalid = provider_key_rpm_states
+                .get(candidate.key_id.as_str())
+                .is_some_and(|key| key_requires_oauth_reauth(key, now_unix_secs));
+            (candidate.key_id.clone(), oauth_invalid)
+        })
+        .collect()
+}
+
+fn key_requires_oauth_reauth(key: &StoredProviderCatalogKey, now_unix_secs: u64) -> bool {
+    if !key.auth_type.trim().eq_ignore_ascii_case("oauth") {
+        return false;
+    }
+
+    let invalid_reason = key
+        .oauth_invalid_reason
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or_default();
+    if !invalid_reason.is_empty() {
+        return !invalid_reason.starts_with("[REQUEST_FAILED]");
+    }
+
+    key.expires_at_unix_secs
+        .is_some_and(|value| value > 0 && value <= now_unix_secs)
 }
 
 fn read_provider_key_rpm_reset_at_map(

@@ -373,6 +373,7 @@ pub struct CandidateRuntimeSelectabilityInput<'a> {
     pub cached_affinity_target: Option<&'a crate::SchedulerAffinityTarget>,
     pub provider_quota_blocks_requests: bool,
     pub account_quota_exhausted: bool,
+    pub oauth_invalid: bool,
     pub rpm_reset_at: Option<u64>,
 }
 
@@ -394,6 +395,7 @@ pub fn candidate_runtime_skip_reason_with_state(
         cached_affinity_target,
         provider_quota_blocks_requests,
         account_quota_exhausted,
+        oauth_invalid,
         rpm_reset_at,
     } = input;
 
@@ -402,6 +404,9 @@ pub fn candidate_runtime_skip_reason_with_state(
     }
     if account_quota_exhausted {
         return Some("account_quota_exhausted");
+    }
+    if oauth_invalid {
+        return Some("oauth_invalid");
     }
     if crate::is_candidate_in_recent_failure_cooldown(
         recent_candidates,
@@ -816,6 +821,7 @@ mod tests {
                 cached_affinity_target: None,
                 provider_quota_blocks_requests: false,
                 account_quota_exhausted: false,
+                oauth_invalid: false,
                 rpm_reset_at: None,
             },
         ));
@@ -835,6 +841,7 @@ mod tests {
                 cached_affinity_target: None,
                 provider_quota_blocks_requests: false,
                 account_quota_exhausted: false,
+                oauth_invalid: false,
                 rpm_reset_at: None,
             },
         ));
@@ -848,6 +855,7 @@ mod tests {
                 cached_affinity_target: None,
                 provider_quota_blocks_requests: true,
                 account_quota_exhausted: false,
+                oauth_invalid: false,
                 rpm_reset_at: None,
             },
         ));
@@ -865,6 +873,25 @@ mod tests {
                 cached_affinity_target: None,
                 provider_quota_blocks_requests: false,
                 account_quota_exhausted: true,
+                oauth_invalid: false,
+                rpm_reset_at: None,
+            },
+        ));
+    }
+
+    #[test]
+    fn candidate_selectability_rejects_oauth_invalid_keys() {
+        assert!(!candidate_is_selectable_with_runtime_state(
+            CandidateRuntimeSelectabilityInput {
+                candidate: &sample_candidate("1", None),
+                recent_candidates: &[],
+                provider_concurrent_limits: &BTreeMap::new(),
+                provider_key_rpm_states: &BTreeMap::new(),
+                now_unix_secs: 100,
+                cached_affinity_target: None,
+                provider_quota_blocks_requests: false,
+                account_quota_exhausted: false,
+                oauth_invalid: true,
                 rpm_reset_at: None,
             },
         ));

@@ -2,6 +2,7 @@ use crate::handlers::shared::{json_string_list, unix_secs_to_rfc3339};
 use crate::provider_key_auth::provider_key_auth_semantics;
 use crate::AppState;
 use aether_admin::provider::quota as admin_provider_quota_pure;
+use aether_admin::provider::status as admin_provider_status_pure;
 #[cfg(test)]
 use aether_crypto::DEVELOPMENT_ENCRYPTION_KEY;
 use aether_crypto::{decrypt_python_fernet_ciphertext, encrypt_python_fernet_plaintext};
@@ -151,6 +152,25 @@ pub(crate) fn default_provider_key_status_snapshot() -> serde_json::Value {
             "reset_seconds": serde_json::Value::Null,
             "plan_type": serde_json::Value::Null,
         }
+    })
+}
+
+fn build_provider_key_account_status_snapshot(
+    key: &StoredProviderCatalogKey,
+    provider_type: &str,
+) -> Value {
+    let snapshot = admin_provider_status_pure::resolve_account_status_snapshot(
+        Some(provider_type),
+        key.upstream_metadata.as_ref(),
+        key.oauth_invalid_reason.as_deref(),
+    );
+    json!({
+        "code": snapshot.code,
+        "label": snapshot.label,
+        "reason": snapshot.reason,
+        "blocked": snapshot.blocked,
+        "source": snapshot.source,
+        "recoverable": snapshot.recoverable,
     })
 }
 
@@ -817,20 +837,29 @@ pub(crate) fn provider_key_status_snapshot_payload(
         .and_then(|snapshot| snapshot.get("quota"))
         .and_then(Value::as_object);
 
-    if quota_snapshot_has_materialized_data(quota_snapshot, provider_type) {
-        return status_snapshot
+    let payload = if quota_snapshot_has_materialized_data(quota_snapshot, provider_type) {
+        status_snapshot
             .cloned()
-            .unwrap_or_else(default_provider_key_status_snapshot);
-    }
+            .unwrap_or_else(default_provider_key_status_snapshot)
+    } else {
+        sync_provider_key_quota_status_snapshot(
+            status_snapshot,
+            provider_type,
+            key.upstream_metadata.as_ref(),
+            "catalog_fallback",
+        )
+        .or_else(|| status_snapshot.cloned())
+        .unwrap_or_else(default_provider_key_status_snapshot)
+    };
 
-    sync_provider_key_quota_status_snapshot(
-        status_snapshot,
-        provider_type,
-        key.upstream_metadata.as_ref(),
-        "catalog_fallback",
-    )
-    .or_else(|| status_snapshot.cloned())
-    .unwrap_or_else(default_provider_key_status_snapshot)
+    let mut snapshot = provider_key_status_snapshot_object(Some(&payload))
+        .or_else(|| default_provider_key_status_snapshot().as_object().cloned())
+        .unwrap_or_default();
+    snapshot.insert(
+        "account".to_string(),
+        build_provider_key_account_status_snapshot(key, provider_type),
+    );
+    Value::Object(snapshot)
 }
 
 pub(crate) fn provider_key_health_summary(
@@ -1539,5 +1568,48 @@ mod tests {
             quota.get("windows").and_then(Value::as_array).map(Vec::len),
             Some(2usize)
         );
+    }
+
+    #[test]
+    fn provider_key_status_snapshot_payload_backfills_account_block_from_oauth_invalid_reason() {
+        let mut key = sample_catalog_key();
+        key.oauth_invalid_reason = Some("[ACCOUNT_BLOCK] account has been deactivated".to_string());
+
+        let payload = provider_key_status_snapshot_payload(&key, "codex");
+        let account = payload
+            .get("account")
+            .and_then(Value::as_object)
+            .expect("account snapshot should be object");
+
+        assert_eq!(account.get("code"), Some(&json!("account_disabled")));
+        assert_eq!(account.get("label"), Some(&json!("账号停用")));
+        assert_eq!(
+            account.get("reason"),
+            Some(&json!("account has been deactivated"))
+        );
+        assert_eq!(account.get("blocked"), Some(&json!(true)));
+        assert_eq!(account.get("source"), Some(&json!("oauth_invalid")));
+    }
+
+    #[test]
+    fn provider_key_status_snapshot_payload_backfills_workspace_deactivated_from_metadata() {
+        let mut key = sample_catalog_key();
+        key.upstream_metadata = Some(json!({
+            "codex": {
+                "account_disabled": true,
+                "reason": "deactivated_workspace"
+            }
+        }));
+
+        let payload = provider_key_status_snapshot_payload(&key, "codex");
+        let account = payload
+            .get("account")
+            .and_then(Value::as_object)
+            .expect("account snapshot should be object");
+
+        assert_eq!(account.get("code"), Some(&json!("workspace_deactivated")));
+        assert_eq!(account.get("label"), Some(&json!("工作区停用")));
+        assert_eq!(account.get("blocked"), Some(&json!(true)));
+        assert_eq!(account.get("source"), Some(&json!("metadata")));
     }
 }

@@ -2738,6 +2738,138 @@ async fn gateway_starts_admin_provider_oauth_kiro_batch_import_task_locally_with
 }
 
 #[tokio::test]
+async fn gateway_marks_lazy_codex_oauth_refresh_failures_as_invalid() {
+    let token_hits = Arc::new(Mutex::new(0usize));
+    let token_hits_clone = Arc::clone(&token_hits);
+    let token_server = Router::new().route(
+        "/oauth/token",
+        post(move |_request: Request| {
+            let token_hits_inner = Arc::clone(&token_hits_clone);
+            async move {
+                *token_hits_inner.lock().expect("mutex should lock") += 1;
+                (
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({
+                        "error": {
+                            "message": "Your refresh token has already been used to generate a new access token. Please try signing in again.",
+                            "type": "invalid_request_error",
+                            "param": serde_json::Value::Null,
+                            "code": "refresh_token_reused"
+                        }
+                    })),
+                )
+            }
+        }),
+    );
+
+    let mut provider = sample_provider("provider-codex", "codex", 10);
+    provider.provider_type = "codex".to_string();
+    let endpoint = sample_endpoint(
+        "endpoint-codex-cli",
+        "provider-codex",
+        "openai:cli",
+        "https://chatgpt.com/backend-api/codex",
+    );
+
+    let mut key = sample_key(
+        "key-codex-oauth-lazy",
+        "provider-codex",
+        "openai:cli",
+        "stale-codex-access-token",
+    );
+    key.auth_type = "oauth".to_string();
+    key.expires_at_unix_secs = Some(1);
+    key.encrypted_auth_config = Some(
+        encrypt_python_fernet_plaintext(
+            DEVELOPMENT_ENCRYPTION_KEY,
+            r#"{"provider_type":"codex","refresh_token":"used-refresh-token","email":"alice@example.com","account_id":"acct-codex-123","plan_type":"plus","expires_at":1}"#,
+        )
+        .expect("auth config ciphertext should build"),
+    );
+
+    let provider_catalog_repository = Arc::new(InMemoryProviderCatalogReadRepository::seed(
+        vec![provider],
+        vec![endpoint],
+        vec![key],
+    ));
+
+    let (token_url, token_handle) = start_server(token_server).await;
+    let oauth_refresh =
+        crate::provider_transport::LocalOAuthRefreshCoordinator::with_adapters_for_tests(vec![
+            Arc::new(
+                crate::provider_transport::oauth_refresh::GenericOAuthRefreshAdapter::default()
+                    .with_token_url_for_tests("codex", format!("{token_url}/oauth/token")),
+            ),
+        ]);
+    let state = AppState::new()
+        .expect("state should build")
+        .with_data_state_for_tests(
+            GatewayDataState::with_provider_catalog_repository_for_tests(
+                provider_catalog_repository.clone(),
+            )
+            .with_encryption_key_for_tests(DEVELOPMENT_ENCRYPTION_KEY),
+        )
+        .with_oauth_refresh_coordinator_for_tests(oauth_refresh);
+
+    let transport = state
+        .read_provider_transport_snapshot(
+            "provider-codex",
+            "endpoint-codex-cli",
+            "key-codex-oauth-lazy",
+        )
+        .await
+        .expect("transport snapshot should load")
+        .expect("transport snapshot should exist");
+    let resolved = state
+        .resolve_local_oauth_request_auth(&transport)
+        .await
+        .expect("refresh-token reuse should degrade into oauth-unavailable");
+
+    assert_eq!(resolved, None);
+    assert_eq!(*token_hits.lock().expect("mutex should lock"), 1);
+
+    let stored_key = provider_catalog_repository
+        .list_keys_by_ids(&["key-codex-oauth-lazy".to_string()])
+        .await
+        .expect("keys should list")
+        .into_iter()
+        .next()
+        .expect("oauth key should exist");
+    assert!(stored_key.oauth_invalid_at_unix_secs.is_some());
+    assert_eq!(
+        stored_key.oauth_invalid_reason.as_deref(),
+        Some("[REFRESH_FAILED] Token 续期失败 (401): refresh_token 已被使用并轮换，请重新登录授权")
+    );
+    let oauth_snapshot = stored_key
+        .status_snapshot
+        .as_ref()
+        .and_then(serde_json::Value::as_object)
+        .and_then(|snapshot| snapshot.get("oauth"))
+        .and_then(serde_json::Value::as_object)
+        .expect("oauth status snapshot should exist");
+    assert_eq!(
+        oauth_snapshot
+            .get("code")
+            .and_then(serde_json::Value::as_str),
+        Some("invalid")
+    );
+    assert_eq!(
+        oauth_snapshot
+            .get("source")
+            .and_then(serde_json::Value::as_str),
+        Some("oauth_refresh")
+    );
+    assert_eq!(
+        oauth_snapshot
+            .get("requires_reauth")
+            .and_then(serde_json::Value::as_bool),
+        Some(true)
+    );
+
+    token_handle.abort();
+}
+
+#[tokio::test]
 async fn gateway_refreshes_admin_provider_oauth_key_locally_with_trusted_admin_principal() {
     let upstream_hits = Arc::new(Mutex::new(0usize));
     let upstream_hits_clone = Arc::clone(&upstream_hits);

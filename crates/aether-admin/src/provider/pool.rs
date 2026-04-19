@@ -6,6 +6,8 @@ use chrono::{TimeZone, Utc};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
+use super::status as provider_status;
+
 #[derive(Debug, Default, Clone, serde::Deserialize)]
 pub struct AdminPoolResolveSelectionRequest {
     #[serde(default)]
@@ -461,40 +463,17 @@ pub fn admin_pool_matches_search(
 }
 
 pub fn admin_pool_key_is_known_banned(key: &StoredProviderCatalogKey) -> bool {
-    if key
-        .oauth_invalid_reason
-        .as_deref()
-        .is_some_and(admin_pool_reason_indicates_ban)
-    {
+    let state = provider_status::resolve_pool_account_state(
+        None,
+        key.upstream_metadata.as_ref(),
+        key.oauth_invalid_reason.as_deref(),
+    );
+    if provider_status::account_state_indicates_known_ban(&state) {
         return true;
     }
-
-    let Some(account) = key
-        .status_snapshot
-        .as_ref()
-        .and_then(Value::as_object)
-        .and_then(|snapshot| snapshot.get("account"))
-        .and_then(Value::as_object)
-    else {
-        return false;
-    };
-
-    if !account
-        .get("blocked")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        return false;
-    }
-
-    account
-        .get("code")
-        .and_then(Value::as_str)
+    key.oauth_invalid_reason
+        .as_deref()
         .is_some_and(admin_pool_reason_indicates_ban)
-        || account
-            .get("reason")
-            .and_then(Value::as_str)
-            .is_some_and(admin_pool_reason_indicates_ban)
 }
 
 pub fn admin_pool_sort_keys(keys: &mut [StoredProviderCatalogKey]) {
@@ -665,7 +644,7 @@ pub fn build_admin_pool_selection_payload(keys: &[StoredProviderCatalogKey]) -> 
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
-    use super::admin_pool_key_account_quota_exhausted;
+    use super::{admin_pool_key_account_quota_exhausted, admin_pool_key_is_known_banned};
     use aether_data_contracts::repository::provider_catalog::StoredProviderCatalogKey;
     use serde_json::json;
 
@@ -789,6 +768,18 @@ mod tests {
             &sample_key(None),
             "kiro",
         ));
+    }
+
+    #[test]
+    fn known_banned_detects_provider_bucket_account_blocks_without_provider_type() {
+        let key = sample_key(Some(json!({
+            "codex": {
+                "account_disabled": true,
+                "reason": "deactivated_workspace"
+            }
+        })));
+
+        assert!(admin_pool_key_is_known_banned(&key));
     }
 }
 

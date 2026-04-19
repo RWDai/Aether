@@ -3,6 +3,8 @@ use aether_data_contracts::repository::provider_catalog::StoredProviderCatalogKe
 use serde_json::json;
 use std::collections::BTreeMap;
 
+use super::status as provider_status;
+
 const OAUTH_ACCOUNT_BLOCK_PREFIX: &str = "[ACCOUNT_BLOCK] ";
 const OAUTH_REFRESH_FAILED_PREFIX: &str = "[REFRESH_FAILED] ";
 const OAUTH_EXPIRED_PREFIX: &str = "[OAUTH_EXPIRED] ";
@@ -18,9 +20,9 @@ pub fn provider_auto_remove_banned_keys(config: Option<&serde_json::Value>) -> b
 }
 
 pub fn should_auto_remove_structured_reason(reason: Option<&str>) -> bool {
-    reason
-        .map(str::trim)
-        .is_some_and(|value| value.starts_with(OAUTH_ACCOUNT_BLOCK_PREFIX))
+    provider_status::should_auto_remove_account_state(&provider_status::resolve_pool_account_state(
+        None, None, reason,
+    ))
 }
 
 pub fn normalize_string_id_list(values: Option<Vec<String>>) -> Option<Vec<String>> {

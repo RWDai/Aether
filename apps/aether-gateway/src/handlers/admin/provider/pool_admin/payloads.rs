@@ -674,6 +674,11 @@ fn admin_pool_scheduling_payload(
     cooldown_ttl_seconds: Option<u64>,
     health_score: f64,
     circuit_breaker_open: bool,
+    account_blocked: bool,
+    account_status_code: Option<&str>,
+    account_status_label: Option<&str>,
+    account_status_reason: Option<&str>,
+    account_status_source: Option<&str>,
     account_quota_exhausted: bool,
 ) -> (String, String, String, Vec<serde_json::Value>) {
     if !key.is_active {
@@ -688,6 +693,21 @@ fn admin_pool_scheduling_payload(
                 "source": "manual",
                 "ttl_seconds": serde_json::Value::Null,
                 "detail": serde_json::Value::Null,
+            })],
+        );
+    }
+    if account_blocked {
+        return (
+            "blocked".to_string(),
+            "account_blocked".to_string(),
+            account_status_label.unwrap_or("账号异常").to_string(),
+            vec![json!({
+                "code": account_status_code.unwrap_or("account_blocked"),
+                "label": account_status_label.unwrap_or("账号异常"),
+                "blocking": true,
+                "source": account_status_source,
+                "ttl_seconds": serde_json::Value::Null,
+                "detail": account_status_reason,
             })],
         );
     }
@@ -776,15 +796,6 @@ pub(super) fn build_admin_pool_key_payload(
         .as_ref()
         .is_some_and(|config| config.skip_exhausted_accounts)
         && admin_provider_pool_pure::admin_pool_key_account_quota_exhausted(key, provider_type);
-    let (scheduling_status, scheduling_reason, scheduling_label, scheduling_reasons) =
-        admin_pool_scheduling_payload(
-            key,
-            cooldown_reason.as_deref(),
-            cooldown_ttl_seconds,
-            health_score,
-            circuit_breaker_open,
-            account_quota_exhausted,
-        );
     let auth_config = state.parse_catalog_auth_config_json(key);
     let oauth_expires_at =
         admin_pool_derive_oauth_expires_at(provider_type, key, auth_config.as_ref());
@@ -841,6 +852,20 @@ pub(super) fn build_admin_pool_key_payload(
         .unwrap_or(false);
     let account_status_source =
         admin_pool_trimmed_string(account_snapshot.and_then(|item| item.get("source")));
+    let (scheduling_status, scheduling_reason, scheduling_label, scheduling_reasons) =
+        admin_pool_scheduling_payload(
+            key,
+            cooldown_reason.as_deref(),
+            cooldown_ttl_seconds,
+            health_score,
+            circuit_breaker_open,
+            account_status_blocked,
+            account_status_code.as_deref(),
+            account_status_label.as_deref(),
+            account_status_reason.as_deref(),
+            account_status_source.as_deref(),
+            account_quota_exhausted,
+        );
 
     let mut payload = serde_json::Map::new();
     payload.insert("key_id".to_string(), json!(key.id));

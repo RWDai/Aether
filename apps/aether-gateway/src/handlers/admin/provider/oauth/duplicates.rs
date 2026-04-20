@@ -1,6 +1,7 @@
 use crate::handlers::admin::request::AdminAppState;
 use crate::provider_key_auth::provider_key_is_oauth_managed;
 use aether_data_contracts::repository::provider_catalog::StoredProviderCatalogKey;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 fn normalize_codex_plan_group_for_provider_oauth(
     plan_type: Option<&serde_json::Value>,
@@ -123,6 +124,40 @@ fn is_codex_cross_plan_group_non_duplicate(
     )
 }
 
+fn provider_oauth_invalid_reason_allows_replace(reason: &str) -> bool {
+    reason.lines().map(str::trim).any(|line| {
+        line.starts_with("[OAUTH_EXPIRED] ")
+            || line.starts_with("[REFRESH_FAILED] ")
+            || line.contains("Token 无效或已过期")
+            || line.contains("refresh_token 无效、已过期或已撤销")
+    })
+}
+
+fn existing_provider_oauth_key_is_replaceable(existing_key: &StoredProviderCatalogKey) -> bool {
+    if !existing_key.is_active {
+        return true;
+    }
+
+    let now_unix_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    if existing_key
+        .expires_at_unix_secs
+        .is_some_and(|expires_at| expires_at <= now_unix_secs)
+    {
+        return true;
+    }
+
+    existing_key
+        .oauth_invalid_reason
+        .as_deref()
+        .map(str::trim)
+        .filter(|reason| !reason.is_empty())
+        .is_some_and(provider_oauth_invalid_reason_allows_replace)
+}
+
 pub(crate) async fn find_duplicate_provider_oauth_key(
     state: &AdminAppState<'_>,
     provider_id: &str,
@@ -210,7 +245,7 @@ pub(crate) async fn find_duplicate_provider_oauth_key(
         if !is_duplicate {
             continue;
         }
-        if !existing_key.is_active {
+        if existing_provider_oauth_key_is_replaceable(&existing_key) {
             return Ok(Some(existing_key));
         }
         let identifier =

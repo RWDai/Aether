@@ -717,6 +717,51 @@ function getImportTaskStatusText(status: OAuthBatchImportTaskStatus): string {
   }
 }
 
+function getOAuthSuccessMessage(
+  action: '授权' | '导入',
+  options?: { email?: string | null; replaced?: boolean }
+): string {
+  const email = typeof options?.email === 'string' ? options.email.trim() : ''
+  const replaced = options?.replaced === true
+  if (email) {
+    return replaced
+      ? `${action}成功: ${email}（已替换旧账号）`
+      : `${action}成功: ${email}`
+  }
+  return replaced
+    ? `${action}成功，已替换旧账号`
+    : `${action}成功，账号已添加`
+}
+
+function getBatchImportSuccessMessage(task: OAuthBatchImportTaskStatusResponse): string {
+  const replacedCount = Math.max(task.replaced_count ?? 0, 0)
+  const createdCount = Math.max(task.created_count ?? task.success - replacedCount, 0)
+  const parts: string[] = []
+
+  if (createdCount > 0) {
+    parts.push(`新增 ${createdCount} 个`)
+  }
+  if (replacedCount > 0) {
+    parts.push(`替换 ${replacedCount} 个`)
+  }
+  if (task.failed > 0) {
+    parts.push(`失败 ${task.failed} 个`)
+  }
+
+  if (parts.length === 0) {
+    return task.failed > 0 ? `批量导入完成：失败 ${task.failed} 个` : '批量导入完成'
+  }
+  if (task.failed === 0 && createdCount > 0 && replacedCount === 0) {
+    return `批量导入成功：${createdCount} 个账号已添加`
+  }
+  if (task.failed === 0 && createdCount === 0 && replacedCount > 0) {
+    return `批量导入成功：已替换 ${replacedCount} 个旧账号`
+  }
+
+  const prefix = task.failed > 0 ? '批量导入完成' : '批量导入成功'
+  return `${prefix}：${parts.join('，')}`
+}
+
 function scheduleImportPoll(taskId: string, delayMs = 1200) {
   stopImportPolling()
   importPollTimer = setTimeout(() => {
@@ -736,11 +781,7 @@ async function pollImportTaskStatus(taskId: string) {
       stopImportPolling()
       importing.value = false
       if (task.success > 0) {
-        if (task.failed > 0) {
-          success(`批量导入完成：成功 ${task.success} 个，失败 ${task.failed} 个`)
-        } else {
-          success(`批量导入成功：${task.success} 个账号已添加`)
-        }
+        success(getBatchImportSuccessMessage(task))
         emit('saved')
         handleClose()
       } else {
@@ -863,12 +904,12 @@ async function handleCompleteOAuth() {
   const requestId = ++oauthCompleteRequestId
   oauth.value.completing = true
   try {
-    await completeProviderLevelOAuth(props.providerId, {
+    const result = await completeProviderLevelOAuth(props.providerId, {
       callback_url: oauth.value.callback_url.trim(),
       proxy_node_id: selectedProxyNodeId.value || undefined,
     })
     if (requestId !== oauthCompleteRequestId) return
-    success('授权成功，账号已添加')
+    success(getOAuthSuccessMessage('授权', result))
     emit('saved')
     handleClose()
   } catch (err: unknown) {
@@ -966,6 +1007,8 @@ async function handleImport() {
         processed: task.processed,
         success: task.success,
         failed: task.failed,
+        created_count: task.created_count ?? 0,
+        replaced_count: task.replaced_count ?? 0,
         progress_percent: task.progress_percent,
         message: task.message || null,
         error: null,
@@ -984,11 +1027,11 @@ async function handleImport() {
         showError('无法解析输入内容，请检查格式', '格式错误')
         return
       }
-      await importProviderRefreshToken(props.providerId, {
+      const result = await importProviderRefreshToken(props.providerId, {
         ...parsed,
         proxy_node_id: proxyNodeId,
       })
-      success('导入成功，账号已添加')
+      success(getOAuthSuccessMessage('导入', result))
       emit('saved')
       handleClose()
     }
@@ -1073,7 +1116,7 @@ async function pollDevice() {
         stopDevicePolling()
         totp.stop()
         device.value.status = 'authorized'
-        success(result.email ? `授权成功: ${result.email}` : '授权成功，账号已添加')
+        success(getOAuthSuccessMessage('授权', result))
         emit('saved')
         handleClose()
         return

@@ -1176,6 +1176,8 @@ async fn gateway_handles_admin_provider_oauth_batch_import_task_status_locally_w
                     "processed": 2,
                     "success": 1,
                     "failed": 1,
+                    "created_count": 0,
+                    "replaced_count": 1,
                     "progress_percent": 100,
                     "message": "导入完成：成功 1，失败 1",
                     "error": null,
@@ -1216,6 +1218,8 @@ async fn gateway_handles_admin_provider_oauth_batch_import_task_status_locally_w
     assert_eq!(payload["processed"], 2);
     assert_eq!(payload["success"], 1);
     assert_eq!(payload["failed"], 1);
+    assert_eq!(payload["created_count"], 0);
+    assert_eq!(payload["replaced_count"], 1);
     assert_eq!(payload["progress_percent"], 100);
     assert_eq!(payload["error_samples"].as_array().map(Vec::len), Some(1));
     assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
@@ -1595,6 +1599,8 @@ async fn gateway_starts_admin_provider_oauth_batch_import_task_locally_with_trus
     assert_eq!(status_payload["processed"], 1);
     assert_eq!(status_payload["success"], 1);
     assert_eq!(status_payload["failed"], 0);
+    assert_eq!(status_payload["created_count"], 1);
+    assert_eq!(status_payload["replaced_count"], 0);
     assert_eq!(status_payload["progress_percent"], 100);
     assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
     assert_eq!(*token_hits.lock().expect("mutex should lock"), 1);
@@ -2114,6 +2120,183 @@ async fn gateway_imports_admin_provider_oauth_refresh_token_locally_with_trusted
         serde_json::from_str(&decrypted_auth_config).expect("auth config json should parse");
     assert_eq!(auth_config["provider_type"], "codex");
     assert_eq!(auth_config["refresh_token"], "imported-codex-refresh-token");
+    assert_eq!(auth_config["email"], "alice@example.com");
+    assert_eq!(auth_config["account_id"], "acct-codex-123");
+    assert_eq!(auth_config["plan_type"], "plus");
+
+    gateway_handle.abort();
+    token_handle.abort();
+    upstream_handle.abort();
+}
+
+#[tokio::test]
+async fn gateway_imports_admin_provider_oauth_refresh_token_over_active_expired_duplicate() {
+    #[derive(Debug, Clone)]
+    struct SeenTokenRequest {
+        content_type: String,
+        body: String,
+    }
+
+    let upstream_hits = Arc::new(Mutex::new(0usize));
+    let upstream_hits_clone = Arc::clone(&upstream_hits);
+    let upstream = Router::new().fallback(any(move |_request: Request| {
+        let upstream_hits_inner = Arc::clone(&upstream_hits_clone);
+        async move {
+            *upstream_hits_inner.lock().expect("mutex should lock") += 1;
+            (StatusCode::OK, Body::from("unexpected upstream hit"))
+        }
+    }));
+
+    let token_hits = Arc::new(Mutex::new(0usize));
+    let token_hits_clone = Arc::clone(&token_hits);
+    let seen_token = Arc::new(Mutex::new(None::<SeenTokenRequest>));
+    let seen_token_clone = Arc::clone(&seen_token);
+    let token_server = Router::new().route(
+        "/oauth/token",
+        post(move |headers: HeaderMap, body: Bytes| {
+            let token_hits_inner = Arc::clone(&token_hits_clone);
+            let seen_token_inner = Arc::clone(&seen_token_clone);
+            async move {
+                *token_hits_inner.lock().expect("mutex should lock") += 1;
+                *seen_token_inner.lock().expect("mutex should lock") = Some(SeenTokenRequest {
+                    content_type: headers
+                        .get(http::header::CONTENT_TYPE)
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or_default()
+                        .to_string(),
+                    body: String::from_utf8(body.to_vec()).unwrap_or_default(),
+                });
+                Json(json!({
+                    "access_token": "imported-expired-codex-access-token",
+                    "refresh_token": "imported-expired-codex-refresh-token",
+                    "token_type": "Bearer",
+                    "expires_in": 1800,
+                    "scope": "openid email profile offline_access",
+                    "email": "alice@example.com",
+                    "account_id": "acct-codex-123",
+                    "plan_type": "plus",
+                }))
+            }
+        }),
+    );
+
+    let mut provider = sample_provider("provider-codex", "codex", 10);
+    provider.provider_type = "codex".to_string();
+    let endpoint = sample_endpoint(
+        "endpoint-codex-chat",
+        "provider-codex",
+        "openai:chat",
+        "https://chatgpt.com/backend-api/codex",
+    );
+
+    let mut existing_key = sample_key(
+        "key-codex-import-expired-duplicate",
+        "provider-codex",
+        "openai:chat",
+        "stale-imported-access-token",
+    );
+    existing_key.auth_type = "oauth".to_string();
+    existing_key.is_active = true;
+    existing_key.expires_at_unix_secs = Some(1);
+    existing_key.oauth_invalid_at_unix_secs = Some(1_700_000_000);
+    existing_key.oauth_invalid_reason =
+        Some("[REFRESH_FAILED] refresh_token 无效、已过期或已撤销，请重新登录授权".to_string());
+    existing_key.encrypted_auth_config = Some(
+        encrypt_python_fernet_plaintext(
+            DEVELOPMENT_ENCRYPTION_KEY,
+            r#"{"provider_type":"codex","email":"alice@example.com","account_id":"acct-codex-123","plan_type":"plus","refresh_token":"old-refresh-token","expires_at":1}"#,
+        )
+        .expect("auth config ciphertext should build"),
+    );
+
+    let provider_catalog_repository = Arc::new(InMemoryProviderCatalogReadRepository::seed(
+        vec![provider],
+        vec![endpoint],
+        vec![existing_key],
+    ));
+
+    let (upstream_url, upstream_handle) = start_server(upstream).await;
+    let (token_url, token_handle) = start_server(token_server).await;
+    let gateway = build_router_with_state(
+        AppState::new()
+            .expect("gateway should build")
+            .with_data_state_for_tests(
+                GatewayDataState::with_provider_catalog_repository_for_tests(
+                    provider_catalog_repository.clone(),
+                )
+                .with_encryption_key_for_tests(DEVELOPMENT_ENCRYPTION_KEY),
+            )
+            .with_provider_oauth_token_url_for_tests("codex", format!("{token_url}/oauth/token")),
+    );
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+
+    let response = reqwest::Client::new()
+        .post(format!(
+            "{gateway_url}/api/admin/provider-oauth/providers/provider-codex/import-refresh-token"
+        ))
+        .header(crate::constants::GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .json(&json!({
+            "refresh_token": "provider-import-refresh-token",
+            "proxy_node_id": "proxy-node-codex-import",
+            "name": "should-not-override-active-expired-name"
+        }))
+        .send()
+        .await
+        .expect("request should succeed");
+
+    let status = response.status();
+    let payload: serde_json::Value = response.json().await.expect("json body should parse");
+    assert_eq!(status, StatusCode::OK, "payload={payload}");
+    assert_eq!(payload["key_id"], "key-codex-import-expired-duplicate");
+    assert_eq!(payload["provider_type"], "codex");
+    assert_eq!(payload["has_refresh_token"], true);
+    assert_eq!(payload["email"], "alice@example.com");
+    assert_eq!(payload["replaced"], true);
+    assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
+    assert_eq!(*token_hits.lock().expect("mutex should lock"), 1);
+
+    let seen_token = seen_token
+        .lock()
+        .expect("mutex should lock")
+        .clone()
+        .expect("token request should be recorded");
+    assert_eq!(seen_token.content_type, "application/x-www-form-urlencoded");
+    assert!(seen_token.body.contains("grant_type=refresh_token"));
+    assert!(seen_token
+        .body
+        .contains("refresh_token=provider-import-refresh-token"));
+
+    let reloaded = provider_catalog_repository
+        .list_keys_by_ids(&["key-codex-import-expired-duplicate".to_string()])
+        .await
+        .expect("keys should load");
+    let persisted = reloaded.first().expect("persisted key should exist");
+    assert!(persisted.is_active);
+    assert_eq!(persisted.proxy, None);
+    assert_eq!(persisted.oauth_invalid_at_unix_secs, None);
+    assert_eq!(persisted.oauth_invalid_reason, None);
+    let decrypted_api_key =
+        decrypt_python_fernet_ciphertext(DEVELOPMENT_ENCRYPTION_KEY, &persisted.encrypted_api_key)
+            .expect("api key should decrypt");
+    assert_eq!(decrypted_api_key, "imported-expired-codex-access-token");
+    let decrypted_auth_config = decrypt_python_fernet_ciphertext(
+        DEVELOPMENT_ENCRYPTION_KEY,
+        persisted
+            .encrypted_auth_config
+            .as_deref()
+            .expect("auth config should be stored"),
+    )
+    .expect("auth config should decrypt");
+    let auth_config: serde_json::Value =
+        serde_json::from_str(&decrypted_auth_config).expect("auth config json should parse");
+    assert_eq!(auth_config["provider_type"], "codex");
+    assert_eq!(
+        auth_config["refresh_token"],
+        "imported-expired-codex-refresh-token"
+    );
     assert_eq!(auth_config["email"], "alice@example.com");
     assert_eq!(auth_config["account_id"], "acct-codex-123");
     assert_eq!(auth_config["plan_type"], "plus");
@@ -2739,6 +2922,152 @@ async fn gateway_batch_imports_admin_provider_oauth_kiro_locally_with_trusted_ad
     assert_eq!(auth_config["auth_method"], "social");
     assert_eq!(auth_config["email"], "kiro-batch@example.com");
     assert_eq!(auth_config["refresh_token"], "kiro-batch-refresh-token-new");
+
+    gateway_handle.abort();
+    refresh_handle.abort();
+    upstream_handle.abort();
+}
+
+#[tokio::test]
+async fn gateway_batch_imports_admin_provider_oauth_kiro_over_active_expired_duplicate() {
+    let upstream_hits = Arc::new(Mutex::new(0usize));
+    let upstream_hits_clone = Arc::clone(&upstream_hits);
+    let upstream = Router::new().fallback(any(move |_request: Request| {
+        let upstream_hits_inner = Arc::clone(&upstream_hits_clone);
+        async move {
+            *upstream_hits_inner.lock().expect("mutex should lock") += 1;
+            (StatusCode::OK, Body::from("unexpected upstream hit"))
+        }
+    }));
+
+    let refresh_hits = Arc::new(Mutex::new(0usize));
+    let refresh_hits_clone = Arc::clone(&refresh_hits);
+    let refresh_server = Router::new().route(
+        "/refreshToken",
+        post(move |_request: Request| {
+            let refresh_hits_inner = Arc::clone(&refresh_hits_clone);
+            async move {
+                *refresh_hits_inner.lock().expect("mutex should lock") += 1;
+                Json(json!({
+                    "accessToken": sample_kiro_device_access_token("kiro-batch@example.com"),
+                    "refreshToken": "kiro-batch-refresh-token-replaced",
+                    "expiresIn": 1800,
+                }))
+            }
+        }),
+    );
+
+    let mut provider = sample_provider("provider-kiro", "kiro", 10);
+    provider.provider_type = "kiro".to_string();
+    let endpoint = sample_endpoint(
+        "endpoint-kiro-chat",
+        "provider-kiro",
+        "kiro:generateAssistantResponse",
+        "https://service.kiro.dev",
+    );
+
+    let mut existing_key = sample_key(
+        "key-kiro-batch-expired-duplicate",
+        "provider-kiro",
+        "kiro:generateAssistantResponse",
+        "stale-kiro-access-token",
+    );
+    existing_key.auth_type = "oauth".to_string();
+    existing_key.is_active = true;
+    existing_key.oauth_invalid_at_unix_secs = Some(1_700_000_000);
+    existing_key.oauth_invalid_reason = Some("Kiro Token 无效或已过期".to_string());
+    existing_key.encrypted_auth_config = Some(
+        encrypt_python_fernet_plaintext(
+            DEVELOPMENT_ENCRYPTION_KEY,
+            r#"{"provider_type":"kiro","auth_method":"social","email":"kiro-batch@example.com","refresh_token":"kiro-batch-refresh-old"}"#,
+        )
+        .expect("auth config ciphertext should build"),
+    );
+
+    let provider_catalog_repository = Arc::new(InMemoryProviderCatalogReadRepository::seed(
+        vec![provider],
+        vec![endpoint],
+        vec![existing_key],
+    ));
+
+    let (upstream_url, upstream_handle) = start_server(upstream).await;
+    let (refresh_url, refresh_handle) = start_server(refresh_server).await;
+    let gateway = build_router_with_state(
+        AppState::new()
+            .expect("gateway should build")
+            .with_data_state_for_tests(
+                GatewayDataState::with_provider_catalog_repository_for_tests(
+                    provider_catalog_repository.clone(),
+                )
+                .with_encryption_key_for_tests(DEVELOPMENT_ENCRYPTION_KEY),
+            )
+            .with_provider_oauth_token_url_for_tests(
+                "kiro_social_refresh",
+                refresh_url.to_string(),
+            ),
+    );
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+
+    let response = reqwest::Client::new()
+        .post(format!(
+            "{gateway_url}/api/admin/provider-oauth/providers/provider-kiro/batch-import"
+        ))
+        .header(crate::constants::GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .json(&json!({
+            "credentials": "kiro-batch-refresh-token",
+            "proxy_node_id": "proxy-node-kiro-batch"
+        }))
+        .send()
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: serde_json::Value = response.json().await.expect("payload should parse");
+    assert_eq!(payload["total"], 1);
+    assert_eq!(payload["success"], 1);
+    assert_eq!(payload["failed"], 0);
+    let results = payload["results"]
+        .as_array()
+        .expect("results should be array");
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["status"], "success");
+    assert_eq!(results[0]["key_id"], "key-kiro-batch-expired-duplicate");
+    assert_eq!(results[0]["auth_method"], "social");
+    assert_eq!(results[0]["replaced"], true);
+    assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
+    assert_eq!(*refresh_hits.lock().expect("mutex should lock"), 1);
+
+    let stored_key = provider_catalog_repository
+        .list_keys_by_ids(&["key-kiro-batch-expired-duplicate".to_string()])
+        .await
+        .expect("keys should load")
+        .into_iter()
+        .next()
+        .expect("persisted key should exist");
+    assert!(stored_key.is_active);
+    assert_eq!(stored_key.proxy, None);
+    assert_eq!(stored_key.oauth_invalid_at_unix_secs, None);
+    assert_eq!(stored_key.oauth_invalid_reason, None);
+    let decrypted_auth_config = decrypt_python_fernet_ciphertext(
+        DEVELOPMENT_ENCRYPTION_KEY,
+        stored_key
+            .encrypted_auth_config
+            .as_deref()
+            .expect("auth config should exist"),
+    )
+    .expect("auth config should decrypt");
+    let auth_config: serde_json::Value =
+        serde_json::from_str(&decrypted_auth_config).expect("auth config should parse");
+    assert_eq!(auth_config["provider_type"], "kiro");
+    assert_eq!(auth_config["auth_method"], "social");
+    assert_eq!(auth_config["email"], "kiro-batch@example.com");
+    assert_eq!(
+        auth_config["refresh_token"],
+        "kiro-batch-refresh-token-replaced"
+    );
 
     gateway_handle.abort();
     refresh_handle.abort();
@@ -3463,39 +3792,263 @@ async fn gateway_refreshes_admin_provider_oauth_key_locally_with_trusted_admin_p
         .and_then(serde_json::Value::as_object)
         .expect("oauth snapshot should exist");
     assert_eq!(
-        oauth_snapshot
-            .get("code")
-            .and_then(serde_json::Value::as_str),
-        Some("expiring")
-    );
-    assert_eq!(
-        oauth_snapshot
-            .get("label")
-            .and_then(serde_json::Value::as_str),
-        Some("即将过期")
-    );
-    assert_eq!(
         oauth_snapshot.get("expires_at"),
         auth_config.get("expires_at")
     );
-    assert_eq!(oauth_snapshot.get("reason"), Some(&serde_json::Value::Null));
-    assert_eq!(
-        oauth_snapshot
-            .get("requires_reauth")
-            .and_then(serde_json::Value::as_bool),
-        Some(false)
-    );
-    assert_eq!(
-        oauth_snapshot
-            .get("expiring_soon")
-            .and_then(serde_json::Value::as_bool),
-        Some(true)
-    );
+    if stored_key.oauth_invalid_reason.is_some() {
+        assert_eq!(
+            oauth_snapshot
+                .get("code")
+                .and_then(serde_json::Value::as_str),
+            Some("invalid")
+        );
+        assert_eq!(
+            oauth_snapshot
+                .get("label")
+                .and_then(serde_json::Value::as_str),
+            Some("已失效")
+        );
+        assert_eq!(
+            oauth_snapshot.get("reason"),
+            Some(&json!("Codex Token 无效或已过期 (401)"))
+        );
+        assert_eq!(
+            oauth_snapshot
+                .get("requires_reauth")
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            oauth_snapshot
+                .get("expiring_soon")
+                .and_then(serde_json::Value::as_bool),
+            Some(false)
+        );
+    } else {
+        assert_eq!(
+            oauth_snapshot
+                .get("code")
+                .and_then(serde_json::Value::as_str),
+            Some("expiring")
+        );
+        assert_eq!(
+            oauth_snapshot
+                .get("label")
+                .and_then(serde_json::Value::as_str),
+            Some("即将过期")
+        );
+        assert_eq!(oauth_snapshot.get("reason"), Some(&serde_json::Value::Null));
+        assert_eq!(
+            oauth_snapshot
+                .get("requires_reauth")
+                .and_then(serde_json::Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            oauth_snapshot
+                .get("expiring_soon")
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+    }
 
     gateway_handle.abort();
     execution_runtime_handle.abort();
     token_handle.abort();
     upstream_handle.abort();
+}
+
+#[tokio::test]
+async fn gateway_marks_manual_oauth_refresh_failures_as_invalid_in_pool_payload() {
+    let token_hits = Arc::new(Mutex::new(0usize));
+    let token_hits_clone = Arc::clone(&token_hits);
+    let token_server = Router::new().route(
+        "/oauth/token",
+        post(move |_request: Request| {
+            let token_hits_inner = Arc::clone(&token_hits_clone);
+            async move {
+                *token_hits_inner.lock().expect("mutex should lock") += 1;
+                (
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({
+                        "error": {
+                            "message": "Your refresh token has already been used to generate a new access token. Please try signing in again.",
+                            "type": "invalid_request_error",
+                            "param": serde_json::Value::Null,
+                            "code": "refresh_token_reused"
+                        }
+                    })),
+                )
+            }
+        }),
+    );
+
+    let mut provider = sample_provider("provider-codex", "codex", 10).with_transport_fields(
+        true,
+        false,
+        true,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(json!({
+            "pool_advanced": {
+                "enabled": true
+            }
+        })),
+    );
+    provider.provider_type = "codex".to_string();
+    let endpoint = sample_endpoint(
+        "endpoint-codex-cli",
+        "provider-codex",
+        "openai:cli",
+        "https://chatgpt.com/backend-api/codex",
+    );
+
+    let mut key = sample_key(
+        "key-codex-oauth-refresh-invalid",
+        "provider-codex",
+        "openai:cli",
+        "stale-codex-access-token",
+    );
+    key.auth_type = "oauth".to_string();
+    key.expires_at_unix_secs = Some(1_900_000_000);
+    key.status_snapshot = Some(json!({
+        "oauth": {
+            "code": "valid",
+            "label": "有效",
+            "reason": serde_json::Value::Null,
+            "expires_at": 1_900_000_000u64,
+            "invalid_at": serde_json::Value::Null,
+            "source": "expires_at",
+            "requires_reauth": false,
+            "expiring_soon": false
+        },
+        "account": {
+            "code": "ok",
+            "label": serde_json::Value::Null,
+            "reason": serde_json::Value::Null,
+            "blocked": false,
+            "source": serde_json::Value::Null,
+            "recoverable": false
+        },
+        "quota": {
+            "code": "unknown",
+            "label": serde_json::Value::Null,
+            "reason": serde_json::Value::Null,
+            "exhausted": false,
+            "usage_ratio": serde_json::Value::Null,
+            "updated_at": serde_json::Value::Null,
+            "reset_seconds": serde_json::Value::Null,
+            "plan_type": serde_json::Value::Null
+        }
+    }));
+    key.encrypted_auth_config = Some(
+        encrypt_python_fernet_plaintext(
+            DEVELOPMENT_ENCRYPTION_KEY,
+            r#"{"provider_type":"codex","refresh_token":"used-refresh-token","email":"alice@example.com","account_id":"acct-codex-123","plan_type":"plus","expires_at":1900000000}"#,
+        )
+        .expect("auth config ciphertext should build"),
+    );
+
+    let provider_catalog_repository = Arc::new(InMemoryProviderCatalogReadRepository::seed(
+        vec![provider],
+        vec![endpoint],
+        vec![key],
+    ));
+
+    let (token_url, token_handle) = start_server(token_server).await;
+    let oauth_refresh =
+        crate::provider_transport::LocalOAuthRefreshCoordinator::with_adapters_for_tests(vec![
+            Arc::new(
+                crate::provider_transport::oauth_refresh::GenericOAuthRefreshAdapter::default()
+                    .with_token_url_for_tests("codex", format!("{token_url}/oauth/token")),
+            ),
+        ]);
+    let gateway = build_router_with_state(
+        AppState::new()
+            .expect("gateway should build")
+            .with_data_state_for_tests(
+                GatewayDataState::with_provider_catalog_repository_for_tests(
+                    provider_catalog_repository,
+                )
+                .with_encryption_key_for_tests(DEVELOPMENT_ENCRYPTION_KEY),
+            )
+            .with_oauth_refresh_coordinator_for_tests(oauth_refresh),
+    );
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+
+    let client = reqwest::Client::new();
+    let refresh_response = client
+        .post(format!(
+            "{gateway_url}/api/admin/provider-oauth/keys/key-codex-oauth-refresh-invalid/refresh"
+        ))
+        .header(crate::constants::GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .send()
+        .await
+        .expect("refresh request should succeed");
+
+    assert_eq!(refresh_response.status(), StatusCode::BAD_REQUEST);
+    let refresh_payload: serde_json::Value = refresh_response
+        .json()
+        .await
+        .expect("refresh payload should parse");
+    assert_eq!(
+        refresh_payload["detail"],
+        json!("Token 刷新失败：refresh_token 已被使用并轮换，请重新登录授权")
+    );
+    assert_eq!(*token_hits.lock().expect("mutex should lock"), 1);
+
+    let pool_response = client
+        .get(format!(
+            "{gateway_url}/api/admin/pool/provider-codex/keys?page=1&page_size=50&status=all"
+        ))
+        .header(crate::constants::GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .send()
+        .await
+        .expect("pool request should succeed");
+
+    assert_eq!(pool_response.status(), StatusCode::OK);
+    let pool_payload: serde_json::Value = pool_response
+        .json()
+        .await
+        .expect("pool payload should parse");
+    let keys = pool_payload["keys"]
+        .as_array()
+        .expect("keys should be array");
+    assert_eq!(keys.len(), 1);
+    assert_eq!(
+        keys[0]["oauth_invalid_reason"],
+        json!(
+            "[REFRESH_FAILED] Token 续期失败 (401): refresh_token 已被使用并轮换，请重新登录授权"
+        )
+    );
+    assert_eq!(
+        keys[0]["status_snapshot"]["oauth"]["code"],
+        json!("invalid")
+    );
+    assert_eq!(
+        keys[0]["status_snapshot"]["oauth"]["reason"],
+        json!("Token 续期失败 (401): refresh_token 已被使用并轮换，请重新登录授权")
+    );
+    assert_eq!(
+        keys[0]["status_snapshot"]["oauth"]["source"],
+        json!("oauth_refresh")
+    );
+    assert_eq!(
+        keys[0]["status_snapshot"]["oauth"]["requires_reauth"],
+        json!(true)
+    );
+
+    gateway_handle.abort();
+    token_handle.abort();
 }
 
 #[tokio::test]

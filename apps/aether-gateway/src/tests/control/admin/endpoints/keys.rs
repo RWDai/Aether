@@ -548,8 +548,40 @@ async fn gateway_clears_admin_provider_key_oauth_invalid_locally_with_trusted_ad
         "openai:chat",
         "sk-test-a",
     );
+    key.auth_type = "oauth".to_string();
     key.oauth_invalid_at_unix_secs = Some(1_710_000_000);
     key.oauth_invalid_reason = Some("token expired".to_string());
+    key.expires_at_unix_secs = Some(1_900_000_000);
+    key.status_snapshot = Some(json!({
+        "oauth": {
+            "code": "invalid",
+            "label": "已失效",
+            "reason": "token expired",
+            "expires_at": 1_900_000_000u64,
+            "invalid_at": 1_710_000_000u64,
+            "source": "oauth_invalid",
+            "requires_reauth": true,
+            "expiring_soon": false
+        },
+        "account": {
+            "code": "ok",
+            "label": serde_json::Value::Null,
+            "reason": serde_json::Value::Null,
+            "blocked": false,
+            "source": serde_json::Value::Null,
+            "recoverable": false
+        },
+        "quota": {
+            "code": "unknown",
+            "label": serde_json::Value::Null,
+            "reason": serde_json::Value::Null,
+            "exhausted": false,
+            "usage_ratio": serde_json::Value::Null,
+            "updated_at": serde_json::Value::Null,
+            "reset_seconds": serde_json::Value::Null,
+            "plan_type": serde_json::Value::Null
+        }
+    }));
 
     let provider_catalog_repository = Arc::new(InMemoryProviderCatalogReadRepository::seed(
         vec![sample_provider("provider-openai", "openai", 10)],
@@ -594,6 +626,22 @@ async fn gateway_clears_admin_provider_key_oauth_invalid_locally_with_trusted_ad
     assert_eq!(reloaded.len(), 1);
     assert_eq!(reloaded[0].oauth_invalid_at_unix_secs, None);
     assert_eq!(reloaded[0].oauth_invalid_reason, None);
+    let oauth_snapshot = reloaded[0]
+        .status_snapshot
+        .as_ref()
+        .and_then(serde_json::Value::as_object)
+        .and_then(|snapshot| snapshot.get("oauth"))
+        .and_then(serde_json::Value::as_object)
+        .expect("oauth snapshot should exist");
+    assert_eq!(oauth_snapshot.get("code"), Some(&json!("valid")));
+    assert_eq!(oauth_snapshot.get("label"), Some(&json!("有效")));
+    assert_eq!(oauth_snapshot.get("reason"), Some(&serde_json::Value::Null));
+    assert_eq!(
+        oauth_snapshot.get("invalid_at"),
+        Some(&serde_json::Value::Null)
+    );
+    assert_eq!(oauth_snapshot.get("source"), Some(&json!("expires_at")));
+    assert_eq!(oauth_snapshot.get("requires_reauth"), Some(&json!(false)));
 
     gateway_handle.abort();
     upstream_handle.abort();

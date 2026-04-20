@@ -95,6 +95,8 @@ pub(in super::super) async fn handle_admin_provider_oauth_start_batch_import_tas
         0,
         0,
         0,
+        0,
+        0,
         Some("任务已提交，等待执行"),
         None,
         Vec::new(),
@@ -134,6 +136,8 @@ pub(in super::super) async fn handle_admin_provider_oauth_start_batch_import_tas
             0,
             0,
             0,
+            0,
+            0,
             Some("任务开始执行"),
             None,
             Vec::new(),
@@ -169,6 +173,16 @@ pub(in super::super) async fn handle_admin_provider_oauth_start_batch_import_tas
                     .take(PROVIDER_OAUTH_BATCH_TASK_MAX_ERROR_SAMPLES)
                     .cloned()
                     .collect::<Vec<_>>();
+                let replaced_count = outcome
+                    .results
+                    .iter()
+                    .filter(|item| {
+                        item.get("status").and_then(serde_json::Value::as_str) == Some("success")
+                            && item.get("replaced").and_then(serde_json::Value::as_bool)
+                                == Some(true)
+                    })
+                    .count();
+                let created_count = outcome.success.saturating_sub(replaced_count);
                 let message = format!(
                     "导入完成：成功 {}，失败 {}",
                     outcome.success, outcome.failed
@@ -182,6 +196,8 @@ pub(in super::super) async fn handle_admin_provider_oauth_start_batch_import_tas
                     outcome.total,
                     outcome.success,
                     outcome.failed,
+                    created_count,
+                    replaced_count,
                     Some(message.as_str()),
                     None,
                     error_samples,
@@ -206,6 +222,8 @@ pub(in super::super) async fn handle_admin_provider_oauth_start_batch_import_tas
                     &provider_type_for_worker,
                     "failed",
                     total,
+                    0,
+                    0,
                     0,
                     0,
                     0,
@@ -235,6 +253,8 @@ pub(in super::super) async fn handle_admin_provider_oauth_start_batch_import_tas
         &provider_type,
         "submitted",
         total,
+        0,
+        0,
         0,
         0,
         0,

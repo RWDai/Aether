@@ -8,6 +8,12 @@ use aether_crypto::DEVELOPMENT_ENCRYPTION_KEY;
 use aether_crypto::{decrypt_python_fernet_ciphertext, encrypt_python_fernet_plaintext};
 use aether_data_contracts::repository::provider_catalog::StoredProviderCatalogKey;
 use serde_json::{json, Map, Value};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+const OAUTH_ACCOUNT_BLOCK_PREFIX: &str = "[ACCOUNT_BLOCK] ";
+const OAUTH_EXPIRED_PREFIX: &str = "[OAUTH_EXPIRED] ";
+const OAUTH_REFRESH_FAILED_PREFIX: &str = "[REFRESH_FAILED] ";
+const OAUTH_REQUEST_FAILED_PREFIX: &str = "[REQUEST_FAILED] ";
 
 pub(crate) fn provider_catalog_key_supports_format(
     key: &StoredProviderCatalogKey,
@@ -153,6 +159,159 @@ pub(crate) fn default_provider_key_status_snapshot() -> serde_json::Value {
             "plan_type": serde_json::Value::Null,
         }
     })
+}
+
+fn default_oauth_status_snapshot_value() -> Value {
+    default_provider_key_status_snapshot()
+        .get("oauth")
+        .cloned()
+        .unwrap_or_else(|| {
+            json!({
+                "code": "none",
+                "label": Value::Null,
+                "reason": Value::Null,
+                "expires_at": Value::Null,
+                "invalid_at": Value::Null,
+                "source": Value::Null,
+                "requires_reauth": false,
+                "expiring_soon": false,
+            })
+        })
+}
+
+fn trimmed_oauth_invalid_reason(reason: Option<&str>) -> Option<String> {
+    reason
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn tagged_oauth_invalid_reason(reason: Option<&str>, prefix: &str) -> Option<String> {
+    reason.and_then(|value| {
+        value
+            .lines()
+            .map(str::trim)
+            .find_map(|line| line.strip_prefix(prefix))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    })
+}
+
+fn build_provider_key_oauth_status_snapshot(key: &StoredProviderCatalogKey) -> Value {
+    if !key.auth_type.trim().eq_ignore_ascii_case("oauth") {
+        return default_oauth_status_snapshot_value();
+    }
+
+    let now_unix_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let expires_at_unix_secs = key.expires_at_unix_secs;
+    let invalid_at_unix_secs = key.oauth_invalid_at_unix_secs;
+    let invalid_reason = trimmed_oauth_invalid_reason(key.oauth_invalid_reason.as_deref());
+
+    if let Some(reason) =
+        tagged_oauth_invalid_reason(invalid_reason.as_deref(), OAUTH_EXPIRED_PREFIX)
+    {
+        return json!({
+            "code": "invalid",
+            "label": "已失效",
+            "reason": reason,
+            "expires_at": expires_at_unix_secs,
+            "invalid_at": invalid_at_unix_secs,
+            "source": "oauth_invalid",
+            "requires_reauth": true,
+            "expiring_soon": false,
+        });
+    }
+    if let Some(reason) =
+        tagged_oauth_invalid_reason(invalid_reason.as_deref(), OAUTH_REFRESH_FAILED_PREFIX)
+    {
+        return json!({
+            "code": "invalid",
+            "label": "已失效",
+            "reason": reason,
+            "expires_at": expires_at_unix_secs,
+            "invalid_at": invalid_at_unix_secs,
+            "source": "oauth_refresh",
+            "requires_reauth": true,
+            "expiring_soon": false,
+        });
+    }
+    if let Some(reason) =
+        tagged_oauth_invalid_reason(invalid_reason.as_deref(), OAUTH_REQUEST_FAILED_PREFIX)
+    {
+        return json!({
+            "code": "check_failed",
+            "label": "检查失败",
+            "reason": reason,
+            "expires_at": expires_at_unix_secs,
+            "invalid_at": Value::Null,
+            "source": "oauth_request",
+            "requires_reauth": false,
+            "expiring_soon": false,
+        });
+    }
+    if invalid_reason
+        .as_deref()
+        .is_some_and(|reason| !reason.starts_with(OAUTH_ACCOUNT_BLOCK_PREFIX))
+        || invalid_at_unix_secs.is_some()
+    {
+        return json!({
+            "code": "invalid",
+            "label": "已失效",
+            "reason": invalid_reason,
+            "expires_at": expires_at_unix_secs,
+            "invalid_at": invalid_at_unix_secs,
+            "source": "oauth_invalid",
+            "requires_reauth": true,
+            "expiring_soon": false,
+        });
+    }
+
+    let Some(expires_at_unix_secs) = expires_at_unix_secs else {
+        return default_oauth_status_snapshot_value();
+    };
+    if expires_at_unix_secs <= now_unix_secs {
+        return json!({
+            "code": "expired",
+            "label": "已过期",
+            "reason": "Token 已过期，请重新授权",
+            "expires_at": expires_at_unix_secs,
+            "invalid_at": Value::Null,
+            "source": "expires_at",
+            "requires_reauth": true,
+            "expiring_soon": false,
+        });
+    }
+
+    let expiring_soon = expires_at_unix_secs.saturating_sub(now_unix_secs) < 24 * 60 * 60;
+    json!({
+        "code": if expiring_soon { "expiring" } else { "valid" },
+        "label": if expiring_soon { "即将过期" } else { "有效" },
+        "reason": Value::Null,
+        "expires_at": expires_at_unix_secs,
+        "invalid_at": Value::Null,
+        "source": "expires_at",
+        "requires_reauth": false,
+        "expiring_soon": expiring_soon,
+    })
+}
+
+pub(crate) fn sync_provider_key_oauth_status_snapshot(
+    status_snapshot: Option<&Value>,
+    key: &StoredProviderCatalogKey,
+) -> Option<Value> {
+    let mut snapshot = provider_key_status_snapshot_object(status_snapshot)
+        .or_else(|| default_provider_key_status_snapshot().as_object().cloned())
+        .unwrap_or_default();
+    snapshot.insert(
+        "oauth".to_string(),
+        build_provider_key_oauth_status_snapshot(key),
+    );
+    Some(Value::Object(snapshot))
 }
 
 fn build_provider_key_account_status_snapshot(

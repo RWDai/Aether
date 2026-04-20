@@ -39,7 +39,13 @@ pub(super) async fn maybe_handle(
     else {
         return Ok(Some(not_found_response(format!("Key {key_id} 不存在"))));
     };
-    if key.oauth_invalid_at_unix_secs.is_none() {
+    let has_invalid_marker = key.oauth_invalid_at_unix_secs.is_some()
+        || key
+            .oauth_invalid_reason
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty());
+    if !has_invalid_marker {
         return Ok(Some(
             Json(json!({
                 "message": "该 Key 当前无失效标记，无需清除"

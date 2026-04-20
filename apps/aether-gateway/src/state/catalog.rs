@@ -1,5 +1,7 @@
 use super::{AppState, GatewayError, LocalMutationOutcome, LocalProviderDeleteTaskState};
+use crate::handlers::shared::sync_provider_key_oauth_status_snapshot;
 use aether_data_contracts::repository::{candidates, global_models, provider_catalog};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 impl AppState {
     pub fn has_provider_catalog_data_reader(&self) -> bool {
@@ -633,10 +635,29 @@ impl AppState {
         &self,
         key_id: &str,
     ) -> Result<bool, GatewayError> {
-        self.data
-            .clear_provider_catalog_key_oauth_invalid_marker(key_id)
+        let Some(mut key) = self
+            .data
+            .list_provider_catalog_keys_by_ids(&[key_id.to_string()])
             .await
-            .map_err(|err| GatewayError::Internal(err.to_string()))
+            .map_err(|err| GatewayError::Internal(err.to_string()))?
+            .into_iter()
+            .next()
+        else {
+            return Ok(false);
+        };
+
+        key.oauth_invalid_at_unix_secs = None;
+        key.oauth_invalid_reason = None;
+        key.status_snapshot =
+            sync_provider_key_oauth_status_snapshot(key.status_snapshot.as_ref(), &key);
+        key.updated_at_unix_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .map(|duration| duration.as_secs());
+
+        self.update_provider_catalog_key(&key)
+            .await
+            .map(|updated| updated.is_some())
     }
 
     pub(crate) fn put_provider_delete_task(&self, task: LocalProviderDeleteTaskState) {

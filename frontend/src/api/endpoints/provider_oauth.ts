@@ -28,6 +28,7 @@ export interface ProviderOAuthCompleteResponseWithKey {
   expires_at?: number | null
   has_refresh_token: boolean
   email?: string | null
+  replaced?: boolean
 }
 
 export interface OAuthBatchImportResultItem {
@@ -49,6 +50,8 @@ export interface OAuthBatchImportTaskStartResponse {
   processed: number
   success: number
   failed: number
+  created_count?: number
+  replaced_count?: number
   progress_percent: number
   message?: string | null
 }
@@ -62,6 +65,8 @@ export interface OAuthBatchImportTaskStatusResponse {
   processed: number
   success: number
   failed: number
+  created_count?: number
+  replaced_count?: number
   progress_percent: number
   message?: string | null
   error?: string | null

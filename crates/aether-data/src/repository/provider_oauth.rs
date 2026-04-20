@@ -87,6 +87,14 @@ pub fn build_provider_oauth_batch_task_status_payload(
         "processed": state.get("processed").and_then(serde_json::Value::as_i64).unwrap_or(0),
         "success": state.get("success").and_then(serde_json::Value::as_i64).unwrap_or(0),
         "failed": state.get("failed").and_then(serde_json::Value::as_i64).unwrap_or(0),
+        "created_count": state
+            .get("created_count")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0),
+        "replaced_count": state
+            .get("replaced_count")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0),
         "progress_percent": state
             .get("progress_percent")
             .and_then(serde_json::Value::as_i64)
@@ -154,6 +162,8 @@ mod tests {
             "processed": 2,
             "success": 1,
             "failed": 1,
+            "created_count": 0,
+            "replaced_count": 1,
             "progress_percent": 999,
             "error_samples": [
                 {"detail": "x"},
@@ -179,6 +189,14 @@ mod tests {
         assert_eq!(
             payload.get("progress_percent").and_then(|v| v.as_i64()),
             Some(100)
+        );
+        assert_eq!(
+            payload.get("created_count").and_then(|v| v.as_i64()),
+            Some(0)
+        );
+        assert_eq!(
+            payload.get("replaced_count").and_then(|v| v.as_i64()),
+            Some(1)
         );
         assert_eq!(
             payload

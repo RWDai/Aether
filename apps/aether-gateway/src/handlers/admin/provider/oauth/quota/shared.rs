@@ -2,7 +2,9 @@ use crate::handlers::admin::provider::shared::payloads::{
     OAUTH_ACCOUNT_BLOCK_PREFIX, OAUTH_REFRESH_FAILED_PREFIX,
 };
 use crate::handlers::admin::request::{AdminAppState, AdminGatewayProviderTransportSnapshot};
-use crate::handlers::shared::sync_provider_key_quota_status_snapshot;
+use crate::handlers::shared::{
+    sync_provider_key_oauth_status_snapshot, sync_provider_key_quota_status_snapshot,
+};
 use crate::GatewayError;
 use aether_admin::provider::quota as admin_provider_quota_pure;
 use aether_contracts::{ExecutionPlan, ExecutionResult, ExecutionTimeouts, ProxySnapshot};
@@ -146,6 +148,8 @@ pub(crate) async fn persist_provider_quota_refresh_state(
             "refresh_api",
         );
     }
+    latest_key.status_snapshot =
+        sync_provider_key_oauth_status_snapshot(latest_key.status_snapshot.as_ref(), &latest_key);
     latest_key.updated_at_unix_secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .ok()

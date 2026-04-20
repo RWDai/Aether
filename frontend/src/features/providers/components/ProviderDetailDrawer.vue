@@ -315,12 +315,12 @@
                             </Badge>
                             <!-- Kiro 订阅类型标签 -->
                             <Badge
-                              v-if="provider.provider_type === 'kiro' && getKiroSubscriptionTitle(key)"
+                              v-if="shouldShowKiroSubscriptionBadge(key)"
                               variant="outline"
                               class="text-[10px] px-1.5 py-0 shrink-0"
-                              :class="getOAuthPlanTypeClass(formatKiroSubscription(getKiroSubscriptionTitle(key)))"
+                              :class="getOAuthPlanTypeClass(getKiroSubscriptionBadgeLabel(key))"
                             >
-                              {{ formatKiroSubscription(getKiroSubscriptionTitle(key)) }}
+                              {{ getKiroSubscriptionBadgeLabel(key) }}
                             </Badge>
                           </div>
                           <div class="flex items-center gap-1">
@@ -2072,6 +2072,22 @@ function formatKiroSubscription(title: string | undefined): string {
 
 function getKiroSubscriptionTitle(key: EndpointAPIKey): string | undefined {
   return getKiroQuotaDisplay(key)?.subscription_title
+}
+
+function getKiroSubscriptionBadgeLabel(key: EndpointAPIKey): string {
+  return formatKiroSubscription(getKiroSubscriptionTitle(key))
+}
+
+function shouldShowKiroSubscriptionBadge(key: EndpointAPIKey): boolean {
+  if (provider.value?.provider_type !== 'kiro') return false
+
+  const kiroLabel = getKiroSubscriptionBadgeLabel(key)
+  if (!kiroLabel) return false
+
+  const oauthPlanLabel = formatOAuthPlanType(key.oauth_plan_type)
+  if (!oauthPlanLabel) return true
+
+  return oauthPlanLabel.trim().toLowerCase() !== kiroLabel.trim().toLowerCase()
 }
 
 function shouldAutoRefreshCodexQuota(): boolean {

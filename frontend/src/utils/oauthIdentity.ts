@@ -26,6 +26,10 @@ function formatOAuthAccountBadge(accountId: string): string {
   return accountId.slice(0, 8)
 }
 
+function formatOAuthAccountUserBadge(accountUserId: string): string {
+  return formatOAuthIdentityShort(accountUserId, 8, 6)
+}
+
 function getPrimaryOAuthOrganization(
   value: OAuthIdentityDisplayValue,
 ): { id: string; title: string } | null {
@@ -61,10 +65,14 @@ export function getOAuthOrgBadge(
   const accountName = readStr(value?.oauth_account_name)
   const accountUserId = readStr(value?.oauth_account_user_id)
 
-  const badgeId = accountId || org?.id || ''
-  const label = accountName
-    || (accountId ? formatOAuthAccountBadge(accountId) : '')
-    || (org?.id ? `org:${formatOAuthIdentityShort(org.id, 6, 4)}` : '')
+  const badgeId = org?.id || accountId || accountUserId || ''
+  const label = org?.id
+    ? `org:${formatOAuthIdentityShort(org.id, 6, 4)}`
+    : accountId
+      ? formatOAuthAccountBadge(accountId)
+      : accountUserId
+        ? formatOAuthAccountUserBadge(accountUserId)
+        : ''
   if (!badgeId || !label) return null
 
   const titleParts = [

@@ -308,7 +308,11 @@ fn provider_query_transport_supports_standard_test_execution(
             )
         }
         "gemini:chat" | "gemini:cli" => {
-            state.supports_local_gemini_transport_with_network(transport, api_format)
+            if crate::provider_transport::is_vertex_api_key_transport_context(transport) {
+                aether_provider_transport::vertex::supports_local_vertex_api_key_gemini_transport_with_network(transport)
+            } else {
+                state.supports_local_gemini_transport_with_network(transport, api_format)
+            }
         }
         _ => false,
     }
@@ -1018,6 +1022,13 @@ async fn provider_query_execute_standard_test_candidate(
         }
     };
 
+    let uses_vertex_query_auth =
+        crate::provider_transport::uses_vertex_api_key_query_auth(&transport, provider_api_format);
+    let vertex_query_auth = if uses_vertex_query_auth {
+        aether_provider_transport::vertex::resolve_local_vertex_api_key_query_auth(&transport)
+    } else {
+        None
+    };
     let oauth_auth = match provider_api_format {
         "openai:chat" | "openai:cli" | "claude:chat" | "claude:cli" | "gemini:chat"
         | "gemini:cli" => state.resolve_local_oauth_header_auth(&transport).await?,
@@ -1031,14 +1042,24 @@ async fn provider_query_execute_standard_test_candidate(
         "claude:chat" | "claude:cli" => {
             crate::provider_transport::auth::resolve_local_standard_auth(&transport).or(oauth_auth)
         }
-        "gemini:chat" | "gemini:cli" => state.resolve_local_gemini_auth(&transport).or(oauth_auth),
+        "gemini:chat" | "gemini:cli" => {
+            if uses_vertex_query_auth {
+                oauth_auth
+            } else {
+                state.resolve_local_gemini_auth(&transport).or(oauth_auth)
+            }
+        }
         _ => None,
     };
-    let Some((auth_header, auth_value)) = auth else {
-        return Ok(provider_query_skipped_execution_outcome(
-            provider_request_body,
-            format!("Provider auth is unavailable for {provider_api_format}"),
-        ));
+    let (auth_header, auth_value) = match auth {
+        Some((auth_header, auth_value)) => (Some(auth_header), Some(auth_value)),
+        None if uses_vertex_query_auth && vertex_query_auth.is_some() => (None, None),
+        None => {
+            return Ok(provider_query_skipped_execution_outcome(
+                provider_request_body,
+                format!("Provider auth is unavailable for {provider_api_format}"),
+            ));
+        }
     };
 
     let mut synthetic_request = http::Request::builder()
@@ -1048,91 +1069,16 @@ async fn provider_query_execute_standard_test_candidate(
     *synthetic_request.headers_mut() = provider_query_extract_request_headers(payload);
     let (parts, _) = synthetic_request.into_parts();
 
-    let request_url = match provider_api_format {
-        "openai:chat" => {
-            let custom_path = transport
-                .endpoint
-                .custom_path
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty());
-            match custom_path {
-                Some(path) => state.build_passthrough_path_url(
-                    &transport.endpoint.base_url,
-                    path,
-                    parts.uri.query(),
-                    &[],
-                ),
-                None => Some(
-                    state.build_openai_chat_url(&transport.endpoint.base_url, parts.uri.query()),
-                ),
-            }
-        }
-        "claude:chat" | "claude:cli" => {
-            let custom_path = transport
-                .endpoint
-                .custom_path
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty());
-            match custom_path {
-                Some(path) => state.build_passthrough_path_url(
-                    &transport.endpoint.base_url,
-                    path,
-                    parts.uri.query(),
-                    &[],
-                ),
-                None => Some(
-                    state
-                        .build_claude_messages_url(&transport.endpoint.base_url, parts.uri.query()),
-                ),
-            }
-        }
-        "gemini:chat" | "gemini:cli" => {
-            let custom_path = transport
-                .endpoint
-                .custom_path
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty());
-            match custom_path {
-                Some(path) => state.build_passthrough_path_url(
-                    &transport.endpoint.base_url,
-                    path,
-                    parts.uri.query(),
-                    &["key"],
-                ),
-                None => state.build_gemini_content_url(
-                    &transport.endpoint.base_url,
-                    &candidate.effective_model,
-                    false,
-                    parts.uri.query(),
-                ),
-            }
-        }
-        "openai:cli" => {
-            let custom_path = transport
-                .endpoint
-                .custom_path
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty());
-            match custom_path {
-                Some(path) => state.build_passthrough_path_url(
-                    &transport.endpoint.base_url,
-                    path,
-                    parts.uri.query(),
-                    &[],
-                ),
-                None => Some(build_openai_cli_url(
-                    &transport.endpoint.base_url,
-                    parts.uri.query(),
-                    false,
-                )),
-            }
-        }
-        _ => None,
-    };
+    let request_url = crate::provider_transport::build_transport_request_url(
+        &transport,
+        crate::provider_transport::TransportRequestUrlParams {
+            provider_api_format,
+            mapped_model: Some(candidate.effective_model.as_str()),
+            upstream_is_stream: false,
+            request_query: parts.uri.query(),
+            kiro_api_region: None,
+        },
+    );
     let Some(request_url) = request_url else {
         return Ok(provider_query_skipped_execution_outcome(
             provider_request_body,
@@ -1144,8 +1090,8 @@ async fn provider_query_execute_standard_test_candidate(
         "claude:chat" | "claude:cli" => {
             crate::provider_transport::auth::build_claude_passthrough_headers(
                 &parts.headers,
-                &auth_header,
-                &auth_value,
+                auth_header.as_deref().unwrap_or_default(),
+                auth_value.as_deref().unwrap_or_default(),
                 &BTreeMap::new(),
                 Some("application/json"),
             )
@@ -1153,26 +1099,41 @@ async fn provider_query_execute_standard_test_candidate(
         "openai:cli" => {
             crate::provider_transport::auth::build_complete_passthrough_headers_with_auth(
                 &parts.headers,
-                &auth_header,
-                &auth_value,
+                auth_header.as_deref().unwrap_or_default(),
+                auth_value.as_deref().unwrap_or_default(),
                 &BTreeMap::new(),
                 Some("application/json"),
             )
         }
-        _ => state.build_passthrough_headers_with_auth(
-            &parts.headers,
-            &auth_header,
-            &auth_value,
-            &BTreeMap::new(),
-        ),
+        _ => match (auth_header.as_deref(), auth_value.as_deref()) {
+            (Some(auth_header), Some(auth_value)) => state.build_passthrough_headers_with_auth(
+                &parts.headers,
+                auth_header,
+                auth_value,
+                &BTreeMap::new(),
+            ),
+            _ => crate::provider_transport::auth::build_passthrough_headers(
+                &parts.headers,
+                &BTreeMap::new(),
+                Some("application/json"),
+            ),
+        },
     };
+    if uses_vertex_query_auth {
+        request_headers.remove("x-goog-api-key");
+    }
     request_headers
         .entry("content-type".to_string())
         .or_insert_with(|| "application/json".to_string());
+    let protected_headers = if uses_vertex_query_auth {
+        vec!["content-type"]
+    } else {
+        vec![auth_header.as_deref().unwrap_or_default(), "content-type"]
+    };
     if !state.apply_local_header_rules(
         &mut request_headers,
         transport.endpoint.header_rules.as_ref(),
-        &[auth_header.as_str(), "content-type"],
+        &protected_headers,
         &provider_request_body,
         Some(&request_body),
     ) {
@@ -1200,11 +1161,17 @@ async fn provider_query_execute_standard_test_candidate(
             transport.key.decrypted_auth_config.as_deref(),
         );
     }
-    crate::provider_transport::ensure_upstream_auth_header(
-        &mut request_headers,
-        &auth_header,
-        &auth_value,
-    );
+    if !uses_vertex_query_auth {
+        if let (Some(auth_header), Some(auth_value)) =
+            (auth_header.as_deref(), auth_value.as_deref())
+        {
+            crate::provider_transport::ensure_upstream_auth_header(
+                &mut request_headers,
+                auth_header,
+                auth_value,
+            );
+        }
+    }
 
     let plan = ExecutionPlan {
         request_id: trace_id.to_string(),

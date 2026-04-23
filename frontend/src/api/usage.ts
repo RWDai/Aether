@@ -307,6 +307,8 @@ export const usageApi = {
       rate_multiplier?: number | null
       response_time_ms: number | null
       first_byte_time_ms: number | null
+      status_code?: number | null
+      error_message?: string | null
       provider?: string | null
       api_key_name?: string | null
       provider_key_name?: string | null

@@ -520,6 +520,7 @@ interface NodeGroup {
 
 // 用量数据类型
 interface UsageData {
+  status?: string | null
   tokens: {
     input: number
     output: number
@@ -547,6 +548,8 @@ const props = defineProps<{
   requestId?: string | null
   /** 外部传入的状态码，用于覆盖 trace.final_status 的判断 */
   overrideStatusCode?: number
+  /** 外部传入的请求状态，用于识别已失败/取消的终态请求 */
+  requestStatus?: string | null
   /** 请求侧 API 格式（客户端入口格式） */
   requestApiFormat?: string | null
   /** 用量和费用数据 */
@@ -577,6 +580,7 @@ const computedFinalStatus = computed(() => {
   return resolveTimelineFinalStatus({
     hasPendingCandidates: hasPending,
     statusCode: props.overrideStatusCode,
+    requestStatus: props.requestStatus ?? usageData.value?.status,
     traceFinalStatus: trace.value?.final_status,
   })
 })

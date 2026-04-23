@@ -404,6 +404,8 @@ fn build_users_me_usage_active_payload(item: &StoredRequestUsageAudit) -> serde_
         "rate_multiplier": item.settlement_rate_multiplier(),
         "response_time_ms": item.response_time_ms,
         "first_byte_time_ms": item.first_byte_time_ms,
+        "status_code": item.status_code,
+        "error_message": item.error_message,
         "api_format": item.api_format,
         "endpoint_api_format": item.endpoint_api_format,
         "is_stream": item.is_stream,
@@ -433,6 +435,24 @@ fn build_users_me_usage_active_payload(item: &StoredRequestUsageAudit) -> serde_
             .remove("target_model");
     }
     payload
+}
+
+fn users_me_usage_is_failed(item: &StoredRequestUsageAudit) -> bool {
+    let has_failure_signal = item.status_code.is_some_and(|value| value >= 400)
+        || item
+            .error_message
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty());
+    let status = item.status.trim().to_ascii_lowercase();
+    if status.is_empty() {
+        return has_failure_signal;
+    }
+    match status.as_str() {
+        "completed" | "cancelled" => false,
+        "pending" | "streaming" => has_failure_signal,
+        "failed" => true,
+        _ => false,
+    }
 }
 
 fn build_users_me_usage_summary_by_model(
@@ -997,6 +1017,15 @@ pub(super) async fn handle_users_me_usage_active_get(
         },
     };
 
+    let items = if ids.is_some() {
+        items
+    } else {
+        items
+            .into_iter()
+            .filter(|item| !users_me_usage_is_failed(item))
+            .collect::<Vec<_>>()
+    };
+
     Json(json!({
         "requests": items
             .iter()
@@ -1233,7 +1262,8 @@ mod tests {
 
     use super::{
         build_users_me_usage_active_payload, build_users_me_usage_record_payload,
-        users_me_usage_client_is_stream, users_me_usage_upstream_is_stream,
+        users_me_usage_client_is_stream, users_me_usage_is_failed,
+        users_me_usage_upstream_is_stream,
     };
 
     fn sample_usage(status: &str) -> StoredRequestUsageAudit {
@@ -1308,6 +1338,17 @@ mod tests {
         assert_eq!(payload["cache_creation_input_tokens"], 10);
         assert_eq!(payload["cache_creation_ephemeral_5m_input_tokens"], 4);
         assert_eq!(payload["cache_creation_ephemeral_1h_input_tokens"], 6);
+    }
+
+    #[test]
+    fn user_usage_active_pending_with_failure_signal_is_not_active() {
+        let item = StoredRequestUsageAudit {
+            status_code: Some(503),
+            error_message: Some("upstream failed".to_string()),
+            ..sample_usage("pending")
+        };
+
+        assert!(users_me_usage_is_failed(&item));
     }
 
     #[test]

@@ -4,8 +4,18 @@ export type TimelineFinalStatus = 'success' | 'failed' | 'streaming' | 'pending'
 
 type RequestStatusLike = RequestStatus | string | null | undefined
 
+type UsageFailureSignal = {
+  status_code?: number | null
+  error_message?: string | null
+}
+
+type UsageDisplayStatusRecord = UsageFailureSignal & {
+  status?: RequestStatusLike
+  first_byte_time_ms?: number | null
+}
+
 function hasLegacyFailureSignal(
-  record: Pick<UsageRecord, 'status_code' | 'error_message'>
+  record: UsageFailureSignal
 ): boolean {
   return (typeof record.status_code === 'number' && record.status_code >= 400) ||
     (typeof record.error_message === 'string' && record.error_message.trim().length > 0)
@@ -138,7 +148,7 @@ function usageApiFormatDefaultsToNonStream(apiFormat: string): boolean {
 }
 
 function hasTerminalSuccessStatusCode(
-  record: Pick<UsageRecord, 'status_code'>
+  record: UsageFailureSignal
 ): boolean {
   return typeof record.status_code === 'number' &&
     record.status_code >= 200 &&
@@ -150,7 +160,10 @@ export function isUsageRecordFailed(
 ): boolean {
   const status = typeof record.status === 'string' ? record.status.trim().toLowerCase() : ''
   if (status) {
-    if (status === 'pending' || status === 'streaming' || status === 'cancelled') {
+    if (status === 'pending' || status === 'streaming') {
+      return !hasTerminalSuccessStatusCode(record) && hasLegacyFailureSignal(record)
+    }
+    if (status === 'cancelled') {
       return false
     }
     if (status === 'completed') {
@@ -202,10 +215,13 @@ export function normalizeRequestStatus(status: RequestStatusLike): RequestStatus
   }
 }
 
-export function resolveDisplayRequestStatus(
-  record: Pick<UsageRecord, 'status' | 'first_byte_time_ms'>
-): RequestStatus | undefined {
+export function resolveDisplayRequestStatus(record: UsageDisplayStatusRecord): RequestStatus | undefined {
   const status = normalizeRequestStatus(record.status)
+  if ((status === 'pending' || status === 'streaming') &&
+    !hasTerminalSuccessStatusCode(record) &&
+    hasLegacyFailureSignal(record)) {
+    return 'failed'
+  }
   if (status === 'streaming' && record.first_byte_time_ms == null) {
     return 'pending'
   }
@@ -251,20 +267,28 @@ export function resolveTimelineFinalStatus(params: {
   requestStatus?: RequestStatusLike
   statusCode?: number
 }): TimelineFinalStatus {
-  if (params.hasPendingCandidates) {
-    return 'pending'
-  }
-
   if (typeof params.statusCode === 'number') {
     return params.statusCode >= 200 && params.statusCode < 400 ? 'success' : 'failed'
   }
 
   const traceStatus = normalizeTimelineFinalStatus(params.traceFinalStatus)
-  if (traceStatus) {
+  if (traceStatus === 'success' || traceStatus === 'failed' || traceStatus === 'cancelled') {
     return traceStatus
   }
 
   const requestStatus = mapRequestStatusToTimelineStatus(params.requestStatus)
+  if (requestStatus === 'success' || requestStatus === 'failed' || requestStatus === 'cancelled') {
+    return requestStatus
+  }
+
+  if (params.hasPendingCandidates) {
+    return 'pending'
+  }
+
+  if (traceStatus) {
+    return traceStatus
+  }
+
   if (requestStatus) {
     return requestStatus
   }

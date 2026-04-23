@@ -411,6 +411,7 @@
                   ref="timelineRef"
                   :request-id="detail.request_id || detail.id"
                   :override-status-code="detail.status_code"
+                  :request-status="detail.status"
                   :request-api-format="detail.api_format || null"
                   :request-metadata="traceRequestMetadata"
                 />
@@ -711,6 +712,7 @@ import { getEffectiveInputTokens } from '../token-normalization'
 import {
   formatUsageStreamLabel,
   isUsageUpstreamStream,
+  resolveDisplayRequestStatus,
   resolveUsageStreamLabelSegments,
 } from '../utils/status'
 
@@ -1766,7 +1768,8 @@ function handleClose() {
 
 function isRequestCompleted(): boolean {
   if (!detail.value?.status) return true
-  return !['pending', 'streaming'].includes(detail.value.status)
+  const displayStatus = resolveDisplayRequestStatus(detail.value)
+  return displayStatus !== 'pending' && displayStatus !== 'streaming'
 }
 
 function stopAutoRefresh() {

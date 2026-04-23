@@ -227,15 +227,21 @@ pub fn admin_usage_matches_api_format(
 }
 
 pub fn admin_usage_is_failed(item: &StoredRequestUsageAudit) -> bool {
-    let status = item.status.trim();
-    if !status.is_empty() {
-        return status.eq_ignore_ascii_case("failed");
-    }
-    item.status_code.is_some_and(|value| value >= 400)
+    let has_failure_signal = item.status_code.is_some_and(|value| value >= 400)
         || item
             .error_message
             .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
+            .is_some_and(|value| !value.trim().is_empty());
+    let status = item.status.trim().to_ascii_lowercase();
+    if !status.is_empty() {
+        return match status.as_str() {
+            "completed" | "cancelled" => false,
+            "pending" | "streaming" => has_failure_signal,
+            "failed" => true,
+            _ => false,
+        };
+    }
+    has_failure_signal
 }
 
 pub fn admin_usage_has_fallback(item: &StoredRequestUsageAudit) -> bool {
@@ -588,6 +594,8 @@ fn admin_usage_active_request_json(
         "actual_cost": round_to(item.actual_total_cost_usd, 6),
         "response_time_ms": item.response_time_ms,
         "first_byte_time_ms": item.first_byte_time_ms,
+        "status_code": item.status_code,
+        "error_message": item.error_message,
         "provider": item.provider_name,
         "api_key_name": api_key_name,
         "provider_key_name": provider_key_name,
@@ -2089,6 +2097,14 @@ mod tests {
             status: String::new(),
             ..sample_usage("completed", Some(429), Some("rate limited"))
         };
+        assert!(admin_usage_is_failed(&item));
+        assert!(admin_usage_matches_status(&item, Some("failed")));
+    }
+
+    #[test]
+    fn active_status_with_failure_signal_counts_as_failed() {
+        let item = sample_usage("pending", Some(503), Some("upstream failed"));
+
         assert!(admin_usage_is_failed(&item));
         assert!(admin_usage_matches_status(&item, Some("failed")));
     }

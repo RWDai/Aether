@@ -79,6 +79,17 @@ describe('usage status helpers', () => {
     }))).toBe('streaming')
   })
 
+  it('treats active lifecycle records with failure signals as failed for display', () => {
+    const record = buildUsageRecord({
+      status: 'pending',
+      status_code: 503,
+      error_message: 'upstream failed',
+    })
+
+    expect(resolveDisplayRequestStatus(record)).toBe('failed')
+    expect(isUsageRecordFailed(record)).toBe(true)
+  })
+
   it('treats explicit success status code as authoritative for the timeline', () => {
     expect(resolveTimelineFinalStatus({
       traceFinalStatus: 'success',
@@ -89,6 +100,13 @@ describe('usage status helpers', () => {
 
   it('falls back to request lifecycle status when status code and trace are missing', () => {
     expect(resolveTimelineFinalStatus({
+      requestStatus: 'failed',
+    })).toBe('failed')
+  })
+
+  it('does not let stale pending candidates override terminal request status', () => {
+    expect(resolveTimelineFinalStatus({
+      hasPendingCandidates: true,
       requestStatus: 'failed',
     })).toBe('failed')
   })

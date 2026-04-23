@@ -106,6 +106,7 @@ struct OpenAiImageStreamState {
     buffered: Vec<u8>,
     latest_image: Option<OpenAiImageFrame>,
     emitted_partial_count: u64,
+    saw_upstream_partial: bool,
 }
 
 #[derive(Clone)]
@@ -166,10 +167,53 @@ impl OpenAiImageStreamState {
             .or(event_name.as_deref())
             .unwrap_or_default();
         match event_type {
+            "response.image_generation_call.partial_image" => {
+                self.handle_image_generation_partial(report_context, &event)
+            }
             "response.output_item.done" => self.handle_output_item_done(report_context, &event),
             "response.completed" => self.handle_completed(report_context, &event),
             _ => Ok(Vec::new()),
         }
+    }
+
+    fn handle_image_generation_partial(
+        &mut self,
+        report_context: &Value,
+        event: &Value,
+    ) -> Result<Vec<u8>, GatewayError> {
+        if requested_partial_images(report_context) == 0 {
+            return Ok(Vec::new());
+        }
+        let Some(result) = event
+            .get("partial_image_b64")
+            .or_else(|| event.get("b64_json"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            return Ok(Vec::new());
+        };
+        let partial_image_index = event
+            .get("partial_image_index")
+            .or_else(|| event.get("output_index"))
+            .and_then(Value::as_u64)
+            .unwrap_or(self.emitted_partial_count);
+        self.emitted_partial_count = self
+            .emitted_partial_count
+            .max(partial_image_index.saturating_add(1));
+        self.saw_upstream_partial = true;
+        self.latest_image = Some(OpenAiImageFrame {
+            b64_json: result.to_string(),
+        });
+
+        encode_json_sse(
+            Some(image_partial_event_name(report_context)),
+            &serde_json::json!({
+                "type": image_partial_event_name(report_context),
+                "b64_json": result,
+                "partial_image_index": partial_image_index,
+            }),
+        )
     }
 
     fn handle_output_item_done(
@@ -193,7 +237,7 @@ impl OpenAiImageStreamState {
             b64_json: result.to_string(),
         });
 
-        if requested_partial_images(report_context) == 0 {
+        if requested_partial_images(report_context) == 0 || self.saw_upstream_partial {
             return Ok(Vec::new());
         }
 
@@ -218,6 +262,13 @@ impl OpenAiImageStreamState {
         report_context: &Value,
         event: &Value,
     ) -> Result<Vec<u8>, GatewayError> {
+        if self.latest_image.is_none() {
+            if let Some(result) = completed_response_image_result(event) {
+                self.latest_image = Some(OpenAiImageFrame {
+                    b64_json: result.to_string(),
+                });
+            }
+        }
         let Some(latest_image) = self.latest_image.clone() else {
             return Ok(Vec::new());
         };
@@ -242,6 +293,19 @@ impl OpenAiImageStreamState {
             }),
         )
     }
+}
+
+fn completed_response_image_result(event: &Value) -> Option<&str> {
+    event
+        .get("response")
+        .and_then(|value| value.get("output"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("image_generation_call"))
+        .filter_map(|item| item.get("result").and_then(Value::as_str))
+        .map(str::trim)
+        .find(|value| !value.is_empty())
 }
 
 fn requested_partial_images(report_context: &Value) -> u64 {

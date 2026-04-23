@@ -150,7 +150,8 @@ import { reconcileActiveRequestDiscovery } from '@/features/usage/utils/activeRe
 import {
   hasUsageFallback,
   isUsageRecordFailed,
-  isUsageUpstreamStream
+  isUsageUpstreamStream,
+  resolveDisplayRequestStatus,
 } from '@/features/usage/utils/status'
 import type { DateRangeParams, FilterStatusValue } from '@/features/usage/types'
 import type { UserOption } from '@/features/usage/components/UsageRecordsTable.vue'
@@ -346,7 +347,8 @@ const filteredRecords = computed(() => {
         )
       } else if (filterStatus.value === 'active') {
         records = records.filter(record =>
-          record.status === 'pending' || record.status === 'streaming'
+          resolveDisplayRequestStatus(record) === 'pending' ||
+          resolveDisplayRequestStatus(record) === 'streaming'
         )
       } else if (filterStatus.value === 'failed') {
         records = records.filter(record => isUsageRecordFailed(record))
@@ -365,7 +367,10 @@ const filteredRecords = computed(() => {
 // 获取活跃请求的 ID 列表
 const activeRequestIds = computed(() => {
   return currentRecords.value
-    .filter(record => record.status === 'pending' || record.status === 'streaming')
+    .filter((record) => {
+      const displayStatus = resolveDisplayRequestStatus(record)
+      return displayStatus === 'pending' || displayStatus === 'streaming'
+    })
     .map(record => record.id)
 })
 
@@ -424,11 +429,15 @@ async function pollActiveRequests() {
       const currentRank = record.status ? (statusPriority[record.status] ?? 0) : 0
       const newRank = update.status ? (statusPriority[update.status] ?? 0) : 0
       const shouldApply = newRank >= currentRank
+      const updateHasFailureSignal =
+        (typeof update.status_code === 'number' && update.status_code >= 400) ||
+        (typeof update.error_message === 'string' && update.error_message.trim().length > 0)
+      const shouldApplyData = shouldApply || updateHasFailureSignal
 
       if (shouldApply && record.status !== update.status) {
         record.status = update.status
       }
-      if (shouldApply) {
+      if (shouldApplyData) {
         // 进行中状态也需要持续更新（provider/key/TTFB 可能在 streaming 后才落库）
         record.input_tokens = update.input_tokens
         record.effective_input_tokens = update.effective_input_tokens ?? record.effective_input_tokens
@@ -444,6 +453,8 @@ async function pollActiveRequests() {
         record.rate_multiplier = update.rate_multiplier ?? undefined
         record.response_time_ms = update.response_time_ms ?? undefined
         record.first_byte_time_ms = update.first_byte_time_ms ?? undefined
+        record.status_code = update.status_code ?? undefined
+        record.error_message = update.error_message ?? undefined
         if (typeof update.upstream_is_stream === 'boolean') {
           record.upstream_is_stream = update.upstream_is_stream
           record.is_stream = update.upstream_is_stream

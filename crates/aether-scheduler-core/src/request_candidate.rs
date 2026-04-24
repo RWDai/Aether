@@ -302,6 +302,15 @@ pub fn build_local_request_candidate_status_record(
         .filter(|value| !value.is_empty())?;
     let metadata = parse_request_candidate_report_context(report_context)?;
     let candidate_index = metadata.candidate_index?;
+    let extra_data = build_report_candidate_extra_data(
+        metadata.client_api_format.clone(),
+        metadata.provider_api_format.clone(),
+        metadata.upstream_url.clone(),
+        metadata.mapped_model.clone(),
+        metadata.key_name.clone(),
+        metadata.proxy.clone(),
+    );
+    let created_at_unix_ms = started_at_unix_ms.or(finished_at_unix_ms);
 
     Some(UpsertRequestCandidateRecord {
         id: candidate_id.to_string(),
@@ -323,9 +332,9 @@ pub fn build_local_request_candidate_status_record(
         error_message,
         latency_ms,
         concurrent_requests: None,
-        extra_data: None,
+        extra_data,
         required_capabilities: None,
-        created_at_unix_ms: None,
+        created_at_unix_ms,
         started_at_unix_ms,
         finished_at_unix_ms,
     })
@@ -783,7 +792,12 @@ mod tests {
                     "candidate_index": 1,
                     "retry_index": 2,
                     "user_id": "user-1",
-                    "api_key_id": "api-key-1"
+                    "api_key_id": "api-key-1",
+                    "client_api_format": "openai:chat",
+                    "provider_api_format": "openai:cli",
+                    "upstream_url": "https://example.com/v1/responses",
+                    "mapped_model": "gpt-5-upstream",
+                    "key_name": "primary"
                 })),
                 status_update: SchedulerRequestCandidateStatusUpdate {
                     status: RequestCandidateStatus::Failed,
@@ -802,6 +816,21 @@ mod tests {
         assert_eq!(record.retry_index, 2);
         assert_eq!(record.user_id.as_deref(), Some("user-1"));
         assert_eq!(record.status, RequestCandidateStatus::Failed);
+        assert_eq!(record.created_at_unix_ms, Some(100));
+        assert_eq!(
+            record
+                .extra_data
+                .as_ref()
+                .and_then(|value| value.get("provider_api_format")),
+            Some(&json!("openai:cli"))
+        );
+        assert_eq!(
+            record
+                .extra_data
+                .as_ref()
+                .and_then(|value| value.get("mapped_model")),
+            Some(&json!("gpt-5-upstream"))
+        );
     }
 
     #[test]

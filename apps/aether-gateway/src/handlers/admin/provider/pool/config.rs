@@ -9,10 +9,10 @@ const POOL_ALLOWED_SCHEDULING_PRESETS: &[&str] = &[
     "load_balance",
     "single_account",
     "priority_first",
-    "free_team_first",
     "free_first",
     "team_first",
     "plus_first",
+    "pro_first",
     "health_first",
     "latency_first",
     "cost_first",
@@ -28,12 +28,12 @@ fn json_u64(value: &Value) -> Option<u64> {
 
 fn normalize_pool_preset_mode(preset: &str, raw_mode: Option<&Value>) -> Option<String> {
     match preset {
-        "free_team_first" | "free_first" | "team_first" | "plus_first" => {
+        "free_first" | "team_first" | "plus_first" | "pro_first" => {
             let default_mode = match preset {
-                "free_team_first" => "both",
                 "free_first" => "free_only",
                 "team_first" => "team_only",
                 "plus_first" => "plus_only",
+                "pro_first" => "pro_only",
                 _ => unreachable!("preset covered by outer match"),
             };
             let normalized = raw_mode
@@ -42,12 +42,10 @@ fn normalize_pool_preset_mode(preset: &str, raw_mode: Option<&Value>) -> Option<
                 .filter(|value| !value.is_empty())
                 .map(|value| value.to_ascii_lowercase())
                 .filter(|value| match preset {
-                    "free_team_first" => {
-                        matches!(value.as_str(), "both" | "free_only" | "team_only")
-                    }
                     "free_first" => value == "free_only",
                     "team_first" => value == "team_only",
                     "plus_first" => value == "plus_only",
+                    "pro_first" => value == "pro_only",
                     _ => false,
                 })
                 .unwrap_or_else(|| default_mode.to_string());
@@ -426,14 +424,15 @@ mod tests {
             "pool_advanced": {
                 "scheduling_presets": [
                     {"preset": "cache_affinity", "enabled": false},
-                    {"preset": "plus_first", "enabled": true, "mode": "plus_only"}
+                    {"preset": "plus_first", "enabled": true, "mode": "plus_only"},
+                    {"preset": "pro_first", "enabled": true, "mode": "pro_only"}
                 ]
             }
         })))
         .expect("pool config should parse");
 
         assert!(!config.lru_enabled);
-        assert_eq!(config.scheduling_presets.len(), 2);
+        assert_eq!(config.scheduling_presets.len(), 3);
         assert_eq!(config.scheduling_presets[0].preset, "cache_affinity");
         assert!(!config.scheduling_presets[0].enabled);
         assert_eq!(config.scheduling_presets[1].preset, "plus_first");
@@ -441,17 +440,22 @@ mod tests {
             config.scheduling_presets[1].mode.as_deref(),
             Some("plus_only")
         );
+        assert_eq!(config.scheduling_presets[2].preset, "pro_first");
+        assert_eq!(
+            config.scheduling_presets[2].mode.as_deref(),
+            Some("pro_only")
+        );
     }
 
     #[test]
-    fn parses_legacy_string_style_scheduling_presets_like_python() {
+    fn parses_legacy_string_style_scheduling_presets() {
         let config = admin_provider_pool_config_from_config_value(Some(&json!({
             "pool_advanced": {
                 "lru_enabled": false,
                 "scheduling_presets": [
-                    "free_team_first",
+                    "free_first",
                     "recent_refresh",
-                    "free_team_first"
+                    "free_first"
                 ]
             }
         })))
@@ -461,24 +465,24 @@ mod tests {
         assert_eq!(config.scheduling_presets.len(), 3);
         assert_eq!(config.scheduling_presets[0].preset, "lru");
         assert!(!config.scheduling_presets[0].enabled);
-        assert_eq!(config.scheduling_presets[1].preset, "free_team_first");
+        assert_eq!(config.scheduling_presets[1].preset, "free_first");
         assert_eq!(config.scheduling_presets[2].preset, "recent_refresh");
     }
 
     #[test]
-    fn invalid_free_team_first_mode_defaults_to_both() {
+    fn retired_free_team_first_preset_is_rejected() {
         let config = admin_provider_pool_config_from_config_value(Some(&json!({
             "pool_advanced": {
                 "scheduling_presets": [
-                    {"preset": "free_team_first", "enabled": true, "mode": "invalid_mode"}
+                    {"preset": "free_team_first", "enabled": true, "mode": "team_only"}
                 ]
             }
         })))
         .expect("pool config should parse");
 
         assert_eq!(config.scheduling_presets.len(), 1);
-        assert_eq!(config.scheduling_presets[0].preset, "free_team_first");
-        assert_eq!(config.scheduling_presets[0].mode.as_deref(), Some("both"));
+        assert_eq!(config.scheduling_presets[0].preset, "lru");
+        assert_eq!(config.scheduling_presets[0].mode, None);
     }
 
     #[test]

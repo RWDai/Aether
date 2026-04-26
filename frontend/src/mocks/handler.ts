@@ -141,7 +141,7 @@ function generateHealthEvents(
 // Mock 端点健康数据
 // 注意：success_rate 使用 0-1 之间的小数，前端会乘以 100 显示为百分比
 // 事件的成功/失败/跳过比例必须与 success_rate 保持一致
-// 覆盖所有 API 格式：claude, claude_cli, openai, openai_cli, gemini, gemini_cli
+// 覆盖所有 API 格式：claude, claude_cli, openai, openai_responses, gemini, gemini_cli
 const MOCK_ENDPOINT_STATUS = {
   generated_at: new Date().toISOString(),
   formats: [
@@ -216,7 +216,7 @@ const MOCK_ENDPOINT_STATUS = {
       events: generateHealthEvents(60, 0.974, 0.022, 0.004, 700, 400)
     },
     {
-      api_format: 'openai:cli',
+      api_format: 'openai:responses',
       api_path: '/v1/responses',
       total_attempts: 2340,
       success_count: 2200,
@@ -324,7 +324,7 @@ function generateMockUsageRecords(count: number = 100) {
     { id: 'demo-user-uuid-0004', username: 'Bob Zhang', email: 'bob@demo.aether.ai' }
   ]
 
-  const apiFormats = ['claude:chat', 'claude:cli', 'openai:chat', 'openai:cli', 'gemini:chat', 'gemini:cli']
+  const apiFormats = ['claude:chat', 'claude:cli', 'openai:chat', 'openai:responses', 'gemini:chat', 'gemini:cli']
   const statusOptions: Array<'completed' | 'failed' | 'streaming'> = ['completed', 'completed', 'completed', 'completed', 'failed', 'streaming']
 
   for (let i = 0; i < count; i++) {
@@ -337,7 +337,7 @@ function generateMockUsageRecords(count: number = 100) {
     if (model.provider === 'anthropic') {
       apiFormat = Math.random() > 0.3 ? 'claude:cli' : 'claude:chat'
     } else if (model.provider === 'openai') {
-      apiFormat = Math.random() > 0.3 ? 'openai:cli' : 'openai:chat'
+      apiFormat = Math.random() > 0.3 ? 'openai:responses' : 'openai:chat'
     } else {
       apiFormat = Math.random() > 0.3 ? 'gemini:cli' : 'gemini:chat'
     }
@@ -445,7 +445,7 @@ function getMockEndpointExtras(apiFormat: string) {
       accept_formats: ['openai:chat', 'claude:chat']
     }
     extras.config = { upstream_stream_policy: 'force_stream' }
-  } else if (normalizedFormat === 'openai:cli') {
+  } else if (normalizedFormat === 'openai:responses' || normalizedFormat === 'openai:cli') {
     extras.config = { upstream_stream_policy: 'force_non_stream' }
   } else if (normalizedFormat === 'gemini:chat') {
     extras.custom_path = '/v1beta/models/gemini-3-pro-preview:generateContent'

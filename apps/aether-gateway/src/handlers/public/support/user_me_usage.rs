@@ -213,6 +213,8 @@ fn users_me_usage_api_format_defaults_to_non_stream(item: &StoredRequestUsageAud
         api_format,
         Some(value)
             if value.eq_ignore_ascii_case("openai:chat")
+                || value.eq_ignore_ascii_case("openai:responses")
+                || value.eq_ignore_ascii_case("openai:responses:compact")
                 || value.eq_ignore_ascii_case("openai:cli")
                 || value.eq_ignore_ascii_case("openai:compact")
                 || value.eq_ignore_ascii_case("openai:image")
@@ -1424,10 +1426,10 @@ mod tests {
     }
 
     #[test]
-    fn user_usage_stream_defaults_to_non_stream_for_openai_cli_request_body_without_flag() {
+    fn user_usage_stream_defaults_to_non_stream_for_openai_responses_request_body_without_flag() {
         let item = StoredRequestUsageAudit {
             is_stream: true,
-            api_format: Some("openai:cli".to_string()),
+            api_format: Some("openai:responses".to_string()),
             request_body: Some(json!({
                 "model": "gpt-5.4",
                 "input": [{"role": "user", "content": "hi"}],

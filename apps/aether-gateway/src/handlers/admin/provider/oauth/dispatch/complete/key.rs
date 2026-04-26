@@ -227,10 +227,10 @@ pub(super) async fn handle_admin_provider_oauth_complete_key(
             .await?;
         if let Some(endpoint) = endpoints.into_iter().find(|endpoint| {
             endpoint.is_active
-                && endpoint
-                    .api_format
-                    .trim()
-                    .eq_ignore_ascii_case("openai:cli")
+                && matches!(
+                    endpoint.api_format.trim().to_ascii_lowercase().as_str(),
+                    "openai:responses" | "openai:cli"
+                )
         }) {
             let refreshed_key = state
                 .read_provider_catalog_keys_by_ids(std::slice::from_ref(&key_id))

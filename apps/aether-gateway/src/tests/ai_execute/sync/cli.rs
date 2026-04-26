@@ -442,6 +442,7 @@ async fn gateway_executes_openai_cli_sync_via_local_decision_gate_with_local_syn
         .await
         .expect("request should succeed");
 
+    eprintln!("codex oauth response status: {}", response.status());
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         response

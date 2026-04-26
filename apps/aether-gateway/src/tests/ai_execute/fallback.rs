@@ -534,8 +534,8 @@ async fn gateway_locally_denies_openai_responses_after_execution_runtime_miss_wi
     assert_ai_route_locally_denied_after_execution_runtime_miss(
         "/v1/responses",
         "openai",
-        "cli",
-        "openai:cli",
+        "responses",
+        "openai:responses",
         "{\"model\":\"gpt-5\",\"input\":\"hello\"}",
         "请求缺少有效的用户或 API Key 认证上下文，无法选择上游提供商",
     )
@@ -562,8 +562,8 @@ async fn gateway_locally_denies_openai_responses_stream_after_execution_runtime_
     assert_ai_route_locally_denied_after_execution_runtime_miss(
         "/v1/responses",
         "openai",
-        "cli",
-        "openai:cli",
+        "responses",
+        "openai:responses",
         "{\"model\":\"gpt-5\",\"input\":\"hello\",\"stream\":true}",
         "请求缺少有效的用户或 API Key 认证上下文，无法选择上游提供商",
     )
@@ -590,8 +590,8 @@ async fn gateway_locally_denies_openai_compact_after_execution_runtime_miss_with
     assert_ai_route_locally_denied_after_execution_runtime_miss(
         "/v1/responses/compact",
         "openai",
-        "compact",
-        "openai:compact",
+        "responses:compact",
+        "openai:responses:compact",
         "{\"model\":\"gpt-5\",\"input\":\"hello\"}",
         "请求缺少有效的用户或 API Key 认证上下文，无法选择上游提供商",
     )
@@ -604,8 +604,8 @@ async fn gateway_locally_denies_openai_compact_stream_after_execution_runtime_mi
     assert_ai_route_locally_denied_after_execution_runtime_miss(
         "/v1/responses/compact",
         "openai",
-        "compact",
-        "openai:compact",
+        "responses:compact",
+        "openai:responses:compact",
         "{\"model\":\"gpt-5\",\"input\":\"hello\",\"stream\":true}",
         "请求缺少有效的用户或 API Key 认证上下文，无法选择上游提供商",
     )

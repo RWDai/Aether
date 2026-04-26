@@ -27,7 +27,7 @@ mod tests {
     fn request_conversion_registry_supports_bidirectional_standard_matrix() {
         assert_eq!(
             request_conversion_kind("openai:chat", "openai:cli"),
-            Some(RequestConversionKind::ToOpenAIFamilyCli)
+            Some(RequestConversionKind::ToOpenAiResponses)
         );
         assert_eq!(
             request_conversion_kind("openai:chat", "claude:cli"),
@@ -76,11 +76,11 @@ mod tests {
         );
         assert_eq!(
             sync_cli_response_conversion_kind("claude:chat", "openai:cli"),
-            Some(SyncCliResponseConversionKind::ToOpenAIFamilyCli)
+            Some(SyncCliResponseConversionKind::ToOpenAiResponses)
         );
         assert_eq!(
             sync_cli_response_conversion_kind("claude:cli", "openai:compact"),
-            Some(SyncCliResponseConversionKind::ToOpenAIFamilyCli)
+            Some(SyncCliResponseConversionKind::ToOpenAiResponses)
         );
         assert_eq!(
             sync_cli_response_conversion_kind("openai:compact", "claude:cli"),
@@ -100,6 +100,7 @@ mod tests {
                 "openai:chat",
                 "claude:chat",
                 "gemini:chat",
+                "openai:responses",
                 "openai:cli",
                 "claude:cli",
                 "gemini:cli",
@@ -108,6 +109,19 @@ mod tests {
         assert_eq!(
             request_candidate_api_formats("openai:cli", false),
             vec![
+                "openai:responses",
+                "openai:cli",
+                "claude:cli",
+                "gemini:cli",
+                "openai:chat",
+                "claude:chat",
+                "gemini:chat",
+            ]
+        );
+        assert_eq!(
+            request_candidate_api_formats("openai:responses", false),
+            vec![
+                "openai:responses",
                 "openai:cli",
                 "claude:cli",
                 "gemini:cli",
@@ -120,6 +134,7 @@ mod tests {
             request_candidate_api_formats("claude:cli", false),
             vec![
                 "claude:cli",
+                "openai:responses",
                 "openai:cli",
                 "gemini:cli",
                 "claude:chat",
@@ -129,7 +144,7 @@ mod tests {
         );
         assert_eq!(
             request_candidate_api_formats("openai:compact", false),
-            vec!["openai:compact"]
+            vec!["openai:responses:compact", "openai:compact"]
         );
     }
 

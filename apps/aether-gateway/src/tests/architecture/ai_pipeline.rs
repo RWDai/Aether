@@ -479,7 +479,7 @@ fn ai_pipeline_candidate_preparation_owns_shared_auth_and_mapped_model_resolutio
 
     for path in [
         "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/chat/decision/request.rs",
-        "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/cli/decision/request.rs",
+        "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/responses/decision/request.rs",
         "apps/aether-gateway/src/ai_pipeline/planner/specialized/image/request.rs",
         "apps/aether-gateway/src/ai_pipeline/planner/standard/family/request.rs",
     ] {
@@ -555,7 +555,7 @@ fn ai_pipeline_candidate_materialization_owns_affinity_and_candidate_runtime_per
         "apps/aether-gateway/src/ai_pipeline/planner/standard/family/candidates.rs",
         "apps/aether-gateway/src/ai_pipeline/planner/passthrough/provider/family/candidates.rs",
         "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/chat/decision/support.rs",
-        "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/cli/decision/support.rs",
+        "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/responses/decision/support.rs",
         "apps/aether-gateway/src/ai_pipeline/planner/specialized/video/support.rs",
         "apps/aether-gateway/src/ai_pipeline/planner/specialized/files/support.rs",
     ] {
@@ -586,7 +586,7 @@ fn ai_pipeline_candidate_materialization_owns_affinity_and_candidate_runtime_per
         "apps/aether-gateway/src/ai_pipeline/planner/standard/family/payload.rs",
         "apps/aether-gateway/src/ai_pipeline/planner/passthrough/provider/family/payload.rs",
         "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/chat/decision/support.rs",
-        "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/cli/decision/support.rs",
+        "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/responses/decision/support.rs",
         "apps/aether-gateway/src/ai_pipeline/planner/specialized/video/support.rs",
         "apps/aether-gateway/src/ai_pipeline/planner/specialized/files/support.rs",
     ] {
@@ -611,8 +611,8 @@ fn ai_pipeline_candidate_materialization_owns_affinity_and_candidate_runtime_per
             "LocalExecutionCandidateAttempt as LocalOpenAiChatCandidateAttempt",
         ),
         (
-            "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/cli/decision/support.rs",
-            "LocalExecutionCandidateAttempt as LocalOpenAiCliCandidateAttempt",
+            "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/responses/decision/support.rs",
+            "LocalExecutionCandidateAttempt as LocalOpenAiResponsesCandidateAttempt",
         ),
         (
             "apps/aether-gateway/src/ai_pipeline/planner/specialized/video/support.rs",
@@ -649,7 +649,7 @@ fn ai_pipeline_materialization_policy_owns_local_candidate_persistence_modes() {
         "LocalCandidatePersistencePolicyKind::StandardDecision",
         "LocalCandidatePersistencePolicyKind::SameFormatProviderDecision",
         "LocalCandidatePersistencePolicyKind::OpenAiChatDecision",
-        "LocalCandidatePersistencePolicyKind::OpenAiCliDecision",
+        "LocalCandidatePersistencePolicyKind::OpenAiResponsesDecision",
         "LocalCandidatePersistencePolicyKind::GeminiFilesDecision",
         "LocalCandidatePersistencePolicyKind::VideoDecision",
     ] {
@@ -663,7 +663,7 @@ fn ai_pipeline_materialization_policy_owns_local_candidate_persistence_modes() {
         "apps/aether-gateway/src/ai_pipeline/planner/standard/family/candidates.rs",
         "apps/aether-gateway/src/ai_pipeline/planner/passthrough/provider/family/candidates.rs",
         "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/chat/decision/support.rs",
-        "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/cli/decision/support.rs",
+        "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/responses/decision/support.rs",
         "apps/aether-gateway/src/ai_pipeline/planner/specialized/video/support.rs",
         "apps/aether-gateway/src/ai_pipeline/planner/specialized/files/support.rs",
         "apps/aether-gateway/src/ai_pipeline/planner/standard/family/payload.rs",
@@ -716,7 +716,7 @@ fn ai_pipeline_candidate_metadata_owns_local_execution_candidate_extra_data_shap
     for path in [
         "apps/aether-gateway/src/ai_pipeline/planner/standard/family/candidates.rs",
         "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/chat/decision/support.rs",
-        "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/cli/decision/support.rs",
+        "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/responses/decision/support.rs",
         "apps/aether-gateway/src/ai_pipeline/planner/passthrough/provider/family/candidates.rs",
         "apps/aether-gateway/src/ai_pipeline/planner/specialized/files/support.rs",
         "apps/aether-gateway/src/ai_pipeline/planner/specialized/video/support.rs",
@@ -1116,7 +1116,7 @@ fn ai_pipeline_payload_metadata_owns_local_execution_decision_response_shape() {
         "apps/aether-gateway/src/ai_pipeline/planner/standard/family/payload.rs",
         "apps/aether-gateway/src/ai_pipeline/planner/passthrough/provider/family/payload.rs",
         "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/chat/decision/payload.rs",
-        "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/cli/decision/payload.rs",
+        "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/responses/decision/payload.rs",
         "apps/aether-gateway/src/ai_pipeline/planner/specialized/video/decision.rs",
         "apps/aether-gateway/src/ai_pipeline/planner/specialized/files/decision.rs",
     ] {
@@ -1156,7 +1156,7 @@ fn ai_pipeline_report_context_owns_local_execution_context_shape() {
         "apps/aether-gateway/src/ai_pipeline/planner/standard/family/payload.rs",
         "apps/aether-gateway/src/ai_pipeline/planner/passthrough/provider/family/payload.rs",
         "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/chat/decision/payload.rs",
-        "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/cli/decision/payload.rs",
+        "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/responses/decision/payload.rs",
         "apps/aether-gateway/src/ai_pipeline/planner/specialized/video/decision.rs",
         "apps/aether-gateway/src/ai_pipeline/planner/specialized/files/decision.rs",
     ] {
@@ -1188,13 +1188,13 @@ fn ai_pipeline_standard_attempts_consume_eligible_local_candidates_without_trans
         "openai chat attempts should reuse shared LocalExecutionCandidateAttempt"
     );
 
-    let openai_cli_support = read_workspace_file(
-        "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/cli/decision/support.rs",
+    let openai_responses_support = read_workspace_file(
+        "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/responses/decision/support.rs",
     );
     assert!(
-        openai_cli_support
-            .contains("LocalExecutionCandidateAttempt as LocalOpenAiCliCandidateAttempt"),
-        "openai cli attempts should reuse shared LocalExecutionCandidateAttempt"
+        openai_responses_support
+            .contains("LocalExecutionCandidateAttempt as LocalOpenAiResponsesCandidateAttempt"),
+        "openai responses attempts should reuse shared LocalExecutionCandidateAttempt"
     );
 
     let standard_family_mod =
@@ -1208,7 +1208,7 @@ fn ai_pipeline_standard_attempts_consume_eligible_local_candidates_without_trans
     for path in [
         "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/chat/decision.rs",
         "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/chat/decision/request.rs",
-        "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/cli/decision/request.rs",
+        "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/responses/decision/request.rs",
         "apps/aether-gateway/src/ai_pipeline/planner/standard/family/request.rs",
     ] {
         let source = read_workspace_file(path);
@@ -1266,7 +1266,7 @@ fn ai_pipeline_candidate_sources_share_cross_format_auth_filter_helper() {
 
     for path in [
         "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/chat/plans/candidates.rs",
-        "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/cli/decision/support.rs",
+        "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/responses/decision/support.rs",
         "apps/aether-gateway/src/ai_pipeline/planner/standard/family/candidates.rs",
     ] {
         let source = read_workspace_file(path);
@@ -1294,7 +1294,7 @@ fn ai_pipeline_spec_metadata_owns_family_requested_model_and_plan_builder_routin
         "pub(crate) fn requested_model_family_for_video_create(",
         "pub(crate) fn local_standard_spec_metadata(",
         "pub(crate) fn local_same_format_provider_spec_metadata(",
-        "pub(crate) fn local_openai_cli_spec_metadata(",
+        "pub(crate) fn local_openai_responses_spec_metadata(",
         "pub(crate) fn local_gemini_files_spec_metadata(",
         "pub(crate) fn local_video_create_spec_metadata(",
         "pub(crate) fn build_sync_plan_from_requested_model_family(",
@@ -1364,20 +1364,20 @@ fn ai_pipeline_spec_metadata_owns_family_requested_model_and_plan_builder_routin
             "local_gemini_files_spec_metadata(",
         ),
         (
-            "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/cli/plans.rs",
-            "local_openai_cli_spec_metadata(",
+            "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/responses/plans.rs",
+            "local_openai_responses_spec_metadata(",
         ),
         (
-            "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/cli/decision/support.rs",
-            "local_openai_cli_spec_metadata(",
+            "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/responses/decision/support.rs",
+            "local_openai_responses_spec_metadata(",
         ),
         (
-            "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/cli/decision/request.rs",
-            "local_openai_cli_spec_metadata(",
+            "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/responses/decision/request.rs",
+            "local_openai_responses_spec_metadata(",
         ),
         (
-            "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/cli/decision/payload.rs",
-            "local_openai_cli_spec_metadata(",
+            "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/responses/decision/payload.rs",
+            "local_openai_responses_spec_metadata(",
         ),
         (
             "apps/aether-gateway/src/ai_pipeline/planner/standard/family/build.rs",
@@ -1487,7 +1487,7 @@ fn ai_pipeline_decision_inputs_share_authenticated_input_helper() {
     for path in [
         "apps/aether-gateway/src/ai_pipeline/planner/standard/family/candidates.rs",
         "apps/aether-gateway/src/ai_pipeline/planner/passthrough/provider/family/candidates.rs",
-        "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/cli/decision/support.rs",
+        "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/responses/decision/support.rs",
         "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/chat/plans/resolve.rs",
         "apps/aether-gateway/src/ai_pipeline/planner/specialized/video/support.rs",
         "apps/aether-gateway/src/ai_pipeline/planner/specialized/files/support.rs",
@@ -1497,7 +1497,7 @@ fn ai_pipeline_decision_inputs_share_authenticated_input_helper() {
             source.contains("resolve_local_authenticated_decision_input("),
             "{path} should use the shared authenticated decision input helper"
         );
-        if path.ends_with("/standard/openai/cli/decision/support.rs")
+        if path.ends_with("/standard/openai/responses/decision/support.rs")
             || path.ends_with("/standard/openai/chat/plans/resolve.rs")
         {
             assert!(
@@ -1537,8 +1537,8 @@ fn ai_pipeline_decision_inputs_share_authenticated_input_helper() {
             "LocalRequestedModelDecisionInput as LocalOpenAiChatDecisionInput",
         ),
         (
-            "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/cli/decision/support.rs",
-            "LocalRequestedModelDecisionInput as LocalOpenAiCliDecisionInput",
+            "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/responses/decision/support.rs",
+            "LocalRequestedModelDecisionInput as LocalOpenAiResponsesDecisionInput",
         ),
         (
             "apps/aether-gateway/src/ai_pipeline/planner/specialized/video/support.rs",
@@ -1570,7 +1570,7 @@ fn ai_pipeline_decision_inputs_share_authenticated_input_helper() {
             "build_local_requested_model_decision_input(",
         ),
         (
-            "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/cli/decision/support.rs",
+            "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/responses/decision/support.rs",
             "build_local_requested_model_decision_input(",
         ),
         (
@@ -1596,7 +1596,7 @@ fn ai_pipeline_leaf_planner_owners_route_contract_specs_through_gateway_seams() 
         "apps/aether-gateway/src/ai_pipeline/planner/specialized/files/support.rs",
         "apps/aether-gateway/src/ai_pipeline/planner/specialized/video/support.rs",
         "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/chat/decision/support.rs",
-        "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/cli/decision/support.rs",
+        "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/responses/decision/support.rs",
     ] {
         let source = read_workspace_file(path);
         assert!(
@@ -1900,15 +1900,15 @@ fn ai_pipeline_finalize_standard_sync_response_converters_are_owned_by_pipeline_
     for (candidate_paths, symbol) in [
         (
             vec!["apps/aether-gateway/src/ai_pipeline/finalize/standard/mod.rs"],
-            "convert_openai_cli_response_to_openai_chat",
+            "convert_openai_responses_response_to_openai_chat",
         ),
         (
             vec!["apps/aether-gateway/src/ai_pipeline/finalize/standard/mod.rs"],
-            "build_openai_cli_response",
+            "build_openai_responses_response",
         ),
         (
             vec!["apps/aether-gateway/src/ai_pipeline/finalize/standard/mod.rs"],
-            "convert_openai_chat_response_to_openai_cli",
+            "convert_openai_chat_response_to_openai_responses",
         ),
         (
             vec!["apps/aether-gateway/src/ai_pipeline/finalize/standard/mod.rs"],
@@ -1920,7 +1920,7 @@ fn ai_pipeline_finalize_standard_sync_response_converters_are_owned_by_pipeline_
         ),
         (
             vec!["apps/aether-gateway/src/ai_pipeline/finalize/standard/mod.rs"],
-            "convert_claude_cli_response_to_openai_cli",
+            "convert_claude_response_to_openai_responses",
         ),
         (
             vec!["apps/aether-gateway/src/ai_pipeline/finalize/standard/mod.rs"],
@@ -1932,7 +1932,7 @@ fn ai_pipeline_finalize_standard_sync_response_converters_are_owned_by_pipeline_
         ),
         (
             vec!["apps/aether-gateway/src/ai_pipeline/finalize/standard/mod.rs"],
-            "convert_gemini_cli_response_to_openai_cli",
+            "convert_gemini_response_to_openai_responses",
         ),
     ] {
         let sources = candidate_paths
@@ -2032,14 +2032,14 @@ fn ai_pipeline_finalize_standard_sync_products_are_owned_by_pipeline_crate() {
     for expected in [
         "pub fn maybe_build_standard_cross_format_sync_product_from_normalized_payload(",
         "pub fn maybe_build_standard_same_format_sync_body_from_normalized_payload(",
-        "pub fn maybe_build_openai_cli_same_family_sync_body_from_normalized_payload(",
+        "pub fn maybe_build_openai_responses_same_family_sync_body_from_normalized_payload(",
         "pub fn maybe_build_openai_chat_cross_format_sync_product_from_normalized_payload(",
-        "pub fn maybe_build_openai_cli_cross_format_sync_product_from_normalized_payload(",
+        "pub fn maybe_build_openai_responses_cross_format_sync_product_from_normalized_payload(",
         "pub fn maybe_build_standard_sync_finalize_product_from_normalized_payload(",
         "pub fn aggregate_standard_chat_stream_sync_response(",
         "pub fn aggregate_standard_cli_stream_sync_response(",
         "pub fn aggregate_openai_chat_stream_sync_response(",
-        "pub fn aggregate_openai_cli_stream_sync_response(",
+        "pub fn aggregate_openai_responses_stream_sync_response(",
         "pub fn aggregate_claude_stream_sync_response(",
         "pub fn aggregate_gemini_stream_sync_response(",
         "pub fn convert_standard_chat_response(",
@@ -2315,7 +2315,7 @@ fn ai_pipeline_planner_standard_normalize_is_owned_by_pipeline_crate() {
         "apps/aether-gateway/src/ai_pipeline/planner/standard/normalize/chat.rs",
     );
     let gateway_normalize_cli = read_workspace_file(
-        "apps/aether-gateway/src/ai_pipeline/planner/standard/normalize/cli.rs",
+        "apps/aether-gateway/src/ai_pipeline/planner/standard/normalize/responses.rs",
     );
     assert!(
         gateway_normalize_chat.contains("crate::ai_pipeline::")
@@ -2325,7 +2325,7 @@ fn ai_pipeline_planner_standard_normalize_is_owned_by_pipeline_crate() {
 
     for forbidden in [
         "serde_json::Map::from_iter",
-        "normalize_openai_cli_request_to_openai_chat_request",
+        "normalize_openai_responses_request_to_openai_chat_request",
         "parse_openai_tool_result_content",
     ] {
         assert!(
@@ -2648,41 +2648,41 @@ fn ai_pipeline_specialized_video_specs_are_owned_by_pipeline_crate() {
 }
 
 #[test]
-fn ai_pipeline_openai_cli_specs_are_owned_by_pipeline_crate() {
+fn ai_pipeline_openai_responses_specs_are_owned_by_pipeline_crate() {
     assert!(
-        workspace_file_exists("crates/aether-ai-pipeline/src/planner/standard/openai_cli.rs"),
-        "planner/standard/openai_cli pure spec owner should live in aether-ai-pipeline"
+        workspace_file_exists("crates/aether-ai-pipeline/src/planner/standard/openai_responses.rs"),
+        "planner/standard/openai_responses pure spec owner should live in aether-ai-pipeline"
     );
 
     let decision = read_workspace_file(
-        "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/cli/decision.rs",
+        "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/responses/decision.rs",
     );
     assert!(
-        decision.contains("pub(super) use crate::ai_pipeline::LocalOpenAiCliSpec;"),
-        "gateway planner/standard/openai/cli/decision.rs should re-export pure openai-cli spec type through the ai_pipeline root seam"
+        decision.contains("pub(super) use crate::ai_pipeline::LocalOpenAiResponsesSpec;"),
+        "gateway planner/standard/openai/responses/decision.rs should re-export pure openai-responses spec type through the ai_pipeline root seam"
     );
     assert!(
-        !decision.contains("pub(super) struct LocalOpenAiCliSpec"),
-        "gateway planner/standard/openai/cli/decision.rs should not own LocalOpenAiCliSpec"
+        !decision.contains("pub(super) struct LocalOpenAiResponsesSpec"),
+        "gateway planner/standard/openai/responses/decision.rs should not own LocalOpenAiResponsesSpec"
     );
 
     let plans = read_workspace_file(
-        "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/cli/plans.rs",
+        "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/responses/plans.rs",
     );
     assert!(
         plans.contains("crate::ai_pipeline::"),
-        "gateway planner/standard/openai/cli/plans.rs should delegate openai-cli spec resolution through the ai_pipeline root seam"
+        "gateway planner/standard/openai/responses/plans.rs should delegate openai-responses spec resolution through the ai_pipeline root seam"
     );
     for forbidden in [
         "fn resolve_sync_spec(",
         "fn resolve_stream_spec(",
         "OPENAI_CLI_SYNC_PLAN_KIND",
         "OPENAI_COMPACT_STREAM_PLAN_KIND",
-        "LocalOpenAiCliSpec {",
+        "LocalOpenAiResponsesSpec {",
     ] {
         assert!(
             !plans.contains(forbidden),
-            "gateway planner/standard/openai/cli/plans.rs should not keep pure openai-cli resolver detail {forbidden}"
+            "gateway planner/standard/openai/responses/plans.rs should not keep pure openai-responses resolver detail {forbidden}"
         );
     }
 }

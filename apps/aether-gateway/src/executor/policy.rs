@@ -24,7 +24,7 @@ pub(crate) fn should_bypass_execution_runtime_decision(
         .to_ascii_lowercase();
     if !matches!(
         provider_api_format.as_str(),
-        "openai:cli" | "openai:compact"
+        "openai:responses" | "openai:cli" | "openai:compact" | "openai:responses:compact"
     ) {
         return false;
     }
@@ -42,7 +42,7 @@ pub(crate) fn should_bypass_execution_runtime_plan(plan: &ExecutionPlan) -> bool
     let provider_api_format = plan.provider_api_format.trim().to_ascii_lowercase();
     if !matches!(
         provider_api_format.as_str(),
-        "openai:cli" | "openai:compact"
+        "openai:responses" | "openai:cli" | "openai:compact" | "openai:responses:compact"
     ) {
         return false;
     }

@@ -85,6 +85,8 @@ fn is_standard_provider_api_format(api_format: &str) -> bool {
     matches!(
         api_format,
         "openai:chat"
+            | "openai:responses"
+            | "openai:responses:compact"
             | "openai:cli"
             | "openai:compact"
             | "claude:chat"
@@ -101,7 +103,12 @@ fn is_standard_chat_client_api_format(api_format: &str) -> bool {
 fn is_standard_cli_client_api_format(api_format: &str) -> bool {
     matches!(
         api_format,
-        "openai:cli" | "openai:compact" | "claude:cli" | "gemini:cli"
+        "openai:responses"
+            | "openai:responses:compact"
+            | "openai:cli"
+            | "openai:compact"
+            | "claude:cli"
+            | "gemini:cli"
     )
 }
 

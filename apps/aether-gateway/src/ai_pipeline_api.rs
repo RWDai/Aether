@@ -8,11 +8,12 @@ pub(crate) use crate::ai_pipeline::{
     build_local_image_sync_plan_and_reports_for_kind,
     build_local_openai_chat_stream_plan_and_reports_for_kind,
     build_local_openai_chat_sync_plan_and_reports_for_kind,
-    build_local_openai_cli_stream_plan_and_reports_for_kind,
-    build_local_openai_cli_sync_plan_and_reports_for_kind,
+    build_local_openai_responses_stream_plan_and_reports_for_kind,
+    build_local_openai_responses_sync_plan_and_reports_for_kind,
     build_local_same_format_stream_plan_and_reports, build_local_same_format_sync_plan_and_reports,
-    build_local_video_sync_plan_and_reports_for_kind, build_openai_cli_stream_plan_from_decision,
-    build_openai_cli_sync_plan_from_decision, build_passthrough_sync_plan_from_decision,
+    build_local_video_sync_plan_and_reports_for_kind,
+    build_openai_responses_stream_plan_from_decision,
+    build_openai_responses_sync_plan_from_decision, build_passthrough_sync_plan_from_decision,
     build_standard_family_stream_plan_and_reports, build_standard_family_sync_plan_and_reports,
     build_standard_stream_plan_from_decision, build_standard_sync_plan_from_decision,
     maybe_build_stream_decision_payload, maybe_build_stream_plan_payload,
@@ -102,8 +103,10 @@ pub(crate) fn aggregate_openai_chat_stream_sync_response(body: &[u8]) -> Option<
     aether_ai_pipeline::api::aggregate_openai_chat_stream_sync_response(body)
 }
 
-pub(crate) fn aggregate_openai_cli_stream_sync_response(body: &[u8]) -> Option<serde_json::Value> {
-    aether_ai_pipeline::api::aggregate_openai_cli_stream_sync_response(body)
+pub(crate) fn aggregate_openai_responses_stream_sync_response(
+    body: &[u8],
+) -> Option<serde_json::Value> {
+    aether_ai_pipeline::api::aggregate_openai_responses_stream_sync_response(body)
 }
 
 pub(crate) fn aggregate_claude_stream_sync_response(body: &[u8]) -> Option<serde_json::Value> {

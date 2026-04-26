@@ -136,6 +136,8 @@ function normalizeUsageStreamApiFormat(value: string | null | undefined): string
 function usageApiFormatDefaultsToNonStream(apiFormat: string): boolean {
   switch (apiFormat) {
     case 'openai:chat':
+    case 'openai:responses':
+    case 'openai:responses:compact':
     case 'openai:cli':
     case 'openai:compact':
     case 'openai:image':

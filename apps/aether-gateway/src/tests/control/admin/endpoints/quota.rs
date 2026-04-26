@@ -197,7 +197,7 @@ async fn gateway_refreshes_admin_provider_quota_locally_for_codex_with_trusted_a
     );
     assert_eq!(
         seen_execution_runtime_request.provider_api_format,
-        "openai:cli"
+        "openai:responses"
     );
     assert_eq!(seen_execution_runtime_request.total_ms, Some(30_000));
 

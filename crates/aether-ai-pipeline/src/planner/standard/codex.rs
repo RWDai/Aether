@@ -25,18 +25,23 @@ const UUID_NAMESPACE_OID_BYTES: [u8; 16] = [
     0x6b, 0xa7, 0xb8, 0x12, 0x9d, 0xad, 0x11, 0xd1, 0x80, 0xb4, 0x00, 0xc0, 0x4f, 0xd4, 0x30, 0xc8,
 ];
 
-fn is_codex_openai_cli_request(provider_type: &str, provider_api_format: &str) -> bool {
+fn is_codex_openai_responses_request(provider_type: &str, provider_api_format: &str) -> bool {
     provider_type.trim().eq_ignore_ascii_case("codex")
         && matches!(
             provider_api_format.trim().to_ascii_lowercase().as_str(),
-            "openai:cli" | "openai:compact" | "openai:image"
+            "openai:responses"
+                | "openai:responses:compact"
+                | "openai:cli"
+                | "openai:compact"
+                | "openai:image"
         )
 }
 
 fn is_openai_compact_request(provider_api_format: &str) -> bool {
-    provider_api_format
-        .trim()
-        .eq_ignore_ascii_case("openai:compact")
+    matches!(
+        provider_api_format.trim().to_ascii_lowercase().as_str(),
+        "openai:responses:compact" | "openai:compact"
+    )
 }
 
 fn is_openai_image_request(provider_api_format: &str) -> bool {
@@ -245,7 +250,7 @@ fn maybe_inject_codex_prompt_cache_key(
     provider_api_format: &str,
     user_api_key_id: Option<&str>,
 ) {
-    if !is_codex_openai_cli_request(provider_type, provider_api_format) {
+    if !is_codex_openai_responses_request(provider_type, provider_api_format) {
         return;
     }
 
@@ -273,7 +278,7 @@ fn maybe_inject_codex_prompt_cache_key(
     );
 }
 
-pub fn apply_openai_compact_special_body_edits(
+pub fn apply_openai_responses_compact_special_body_edits(
     provider_request_body: &mut Value,
     provider_api_format: &str,
 ) {
@@ -289,14 +294,25 @@ pub fn apply_openai_compact_special_body_edits(
     body_object.remove("store");
 }
 
-pub fn apply_codex_openai_cli_special_body_edits(
+#[deprecated(
+    since = "0.1.0",
+    note = "use apply_openai_responses_compact_special_body_edits"
+)]
+pub fn apply_openai_compact_special_body_edits(
+    provider_request_body: &mut Value,
+    provider_api_format: &str,
+) {
+    apply_openai_responses_compact_special_body_edits(provider_request_body, provider_api_format);
+}
+
+pub fn apply_codex_openai_responses_special_body_edits(
     provider_request_body: &mut Value,
     provider_type: &str,
     provider_api_format: &str,
     body_rules: Option<&Value>,
     user_api_key_id: Option<&str>,
 ) {
-    if !is_codex_openai_cli_request(provider_type, provider_api_format) {
+    if !is_codex_openai_responses_request(provider_type, provider_api_format) {
         return;
     }
 
@@ -347,7 +363,27 @@ pub fn apply_codex_openai_cli_special_body_edits(
     );
 }
 
-pub fn apply_codex_openai_cli_special_headers(
+#[deprecated(
+    since = "0.1.0",
+    note = "use apply_codex_openai_responses_special_body_edits"
+)]
+pub fn apply_codex_openai_cli_special_body_edits(
+    provider_request_body: &mut Value,
+    provider_type: &str,
+    provider_api_format: &str,
+    body_rules: Option<&Value>,
+    user_api_key_id: Option<&str>,
+) {
+    apply_codex_openai_responses_special_body_edits(
+        provider_request_body,
+        provider_type,
+        provider_api_format,
+        body_rules,
+        user_api_key_id,
+    );
+}
+
+pub fn apply_codex_openai_responses_special_headers(
     provider_request_headers: &mut BTreeMap<String, String>,
     provider_request_body: &Value,
     original_headers: &http::HeaderMap,
@@ -356,7 +392,7 @@ pub fn apply_codex_openai_cli_special_headers(
     request_id: Option<&str>,
     decrypted_auth_config_raw: Option<&str>,
 ) {
-    if !is_codex_openai_cli_request(provider_type, provider_api_format) {
+    if !is_codex_openai_responses_request(provider_type, provider_api_format) {
         return;
     }
 
@@ -408,10 +444,10 @@ pub fn apply_codex_openai_cli_special_headers(
         }
     }
 
-    if provider_api_format
-        .trim()
-        .eq_ignore_ascii_case("openai:cli")
-        && !header_map_has_non_empty_value(original_headers, "conversation_id")
+    if matches!(
+        provider_api_format.trim().to_ascii_lowercase().as_str(),
+        "openai:responses" | "openai:cli"
+    ) && !header_map_has_non_empty_value(original_headers, "conversation_id")
         && !btree_map_has_non_empty_value(provider_request_headers, "conversation_id")
     {
         if let Some(short_session_id) = short_session_id.as_deref() {
@@ -421,9 +457,35 @@ pub fn apply_codex_openai_cli_special_headers(
     }
 }
 
+#[deprecated(
+    since = "0.1.0",
+    note = "use apply_codex_openai_responses_special_headers"
+)]
+pub fn apply_codex_openai_cli_special_headers(
+    provider_request_headers: &mut BTreeMap<String, String>,
+    provider_request_body: &Value,
+    original_headers: &http::HeaderMap,
+    provider_type: &str,
+    provider_api_format: &str,
+    request_id: Option<&str>,
+    decrypted_auth_config_raw: Option<&str>,
+) {
+    apply_codex_openai_responses_special_headers(
+        provider_request_headers,
+        provider_request_body,
+        original_headers,
+        provider_type,
+        provider_api_format,
+        request_id,
+        decrypted_auth_config_raw,
+    );
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{apply_codex_openai_cli_special_body_edits, CODEX_OPENAI_IMAGE_INTERNAL_MODEL};
+    use super::{
+        apply_codex_openai_responses_special_body_edits, CODEX_OPENAI_IMAGE_INTERNAL_MODEL,
+    };
     use serde_json::json;
 
     #[test]
@@ -439,7 +501,7 @@ mod tests {
             "tool_choice": "auto"
         });
 
-        apply_codex_openai_cli_special_body_edits(
+        apply_codex_openai_responses_special_body_edits(
             &mut provider_request_body,
             "codex",
             "openai:image",
@@ -493,7 +555,7 @@ mod tests {
             "tool_choice": "auto"
         });
 
-        apply_codex_openai_cli_special_body_edits(
+        apply_codex_openai_responses_special_body_edits(
             &mut provider_request_body,
             "codex",
             "openai:image",

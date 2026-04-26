@@ -148,12 +148,7 @@ fn local_same_format_transport_unsupported_reason(
             Some("key_inactive")
         };
     }
-    if !transport
-        .endpoint
-        .api_format
-        .trim()
-        .eq_ignore_ascii_case(api_format.trim())
-    {
+    if !same_api_format(&transport.endpoint.api_format, api_format) {
         return Some("transport_api_format_mismatch");
     }
     if !header_rules_are_locally_supported(transport.endpoint.header_rules.as_ref()) {
@@ -202,4 +197,16 @@ fn local_same_format_transport_unsupported_reason(
     }
 
     None
+}
+
+fn same_api_format(left: &str, right: &str) -> bool {
+    normalize_api_format_alias(left) == normalize_api_format_alias(right)
+}
+
+fn normalize_api_format_alias(value: &str) -> String {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "openai:cli" => "openai:responses".to_string(),
+        "openai:compact" => "openai:responses:compact".to_string(),
+        other => other.to_string(),
+    }
 }

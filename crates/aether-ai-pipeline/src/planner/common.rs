@@ -26,9 +26,10 @@ pub fn force_upstream_streaming_for_provider(
     provider_api_format: &str,
 ) -> bool {
     provider_type.trim().eq_ignore_ascii_case("codex")
-        && provider_api_format
-            .trim()
-            .eq_ignore_ascii_case("openai:cli")
+        && matches!(
+            provider_api_format.trim().to_ascii_lowercase().as_str(),
+            "openai:responses" | "openai:cli"
+        )
 }
 
 #[cfg(test)]
@@ -57,7 +58,11 @@ mod tests {
     }
 
     #[test]
-    fn forces_streaming_for_codex_openai_cli() {
+    fn forces_streaming_for_codex_openai_responses() {
+        assert!(force_upstream_streaming_for_provider(
+            "codex",
+            "openai:responses"
+        ));
         assert!(force_upstream_streaming_for_provider("codex", "openai:cli"));
     }
 

@@ -88,10 +88,10 @@ async fn rank_local_execution_candidates(
             ordering_config,
         )
         .await;
-        let is_same_format = candidate
-            .endpoint_api_format
-            .trim()
-            .eq_ignore_ascii_case(normalized_client_api_format.as_str());
+        let is_same_format = api_format_matches(
+            &candidate.endpoint_api_format,
+            normalized_client_api_format.as_str(),
+        );
         let demote_cross_format = !is_same_format && !ordering.keep_priority_on_conversion;
         let format_preference = candidate_api_format_preference(
             normalized_client_api_format.as_str(),
@@ -142,9 +142,8 @@ pub(crate) async fn rank_eligible_local_execution_candidates(
             ordering_config,
         )
         .await;
-        let is_same_format = eligible
-            .provider_api_format
-            .eq_ignore_ascii_case(normalized_client_api_format);
+        let is_same_format =
+            api_format_matches(&eligible.provider_api_format, normalized_client_api_format);
         let demote_cross_format = !is_same_format && !ordering.keep_priority_on_conversion;
         let format_preference = candidate_api_format_preference(
             normalized_client_api_format,
@@ -174,6 +173,18 @@ pub(crate) async fn rank_eligible_local_execution_candidates(
     drop(ordering_cache);
     apply_order(&mut candidates, order);
     candidates
+}
+
+fn normalize_api_format_alias(value: &str) -> String {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "openai:cli" => "openai:responses".to_string(),
+        "openai:compact" => "openai:responses:compact".to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn api_format_matches(left: &str, right: &str) -> bool {
+    normalize_api_format_alias(left) == normalize_api_format_alias(right)
 }
 
 pub(crate) fn remember_scheduler_affinity_for_candidate(
@@ -991,14 +1002,18 @@ mod tests {
             vec![sample_provider_with_options("provider-shared", false, 0)],
             vec![
                 sample_endpoint_for_provider("provider-shared", "aaa-claude-chat", "claude:chat"),
-                sample_endpoint_for_provider("provider-shared", "zzz-openai-cli", "openai:cli"),
+                sample_endpoint_for_provider(
+                    "provider-shared",
+                    "zzz-openai-responses",
+                    "openai:responses",
+                ),
             ],
             vec![sample_key_for_provider_with_options(
                 "provider-shared",
                 "key-shared",
                 "",
                 true,
-                Some(json!(["claude:chat", "openai:cli"])),
+                Some(json!(["claude:chat", "openai:responses"])),
                 None,
             )],
         );
@@ -1023,9 +1038,9 @@ mod tests {
                 ),
                 sample_priority_candidate(
                     "provider-shared",
-                    "zzz-openai-cli",
+                    "zzz-openai-responses",
                     "key-shared",
-                    "openai:cli",
+                    "openai:responses",
                     Some(0),
                     0,
                 ),
@@ -1035,7 +1050,7 @@ mod tests {
         )
         .await;
 
-        assert_eq!(ranked[0].endpoint_id, "zzz-openai-cli");
+        assert_eq!(ranked[0].endpoint_id, "zzz-openai-responses");
         assert_eq!(ranked[1].endpoint_id, "aaa-claude-chat");
     }
 

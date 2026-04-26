@@ -208,7 +208,7 @@ pub(crate) fn provider_stream_event_api_format_for_provider_type(
     provider_type: &str,
 ) -> Option<&'static str> {
     match provider_type.trim().to_ascii_lowercase().as_str() {
-        "codex" => Some("openai:cli"),
+        "codex" => Some("openai:responses"),
         _ => None,
     }
 }
@@ -230,14 +230,14 @@ mod tests {
     use super::provider_stream_event_api_format_for_provider_type;
 
     #[test]
-    fn codex_provider_uses_openai_cli_stream_event_format() {
+    fn codex_provider_uses_openai_responses_stream_event_format() {
         assert_eq!(
             provider_stream_event_api_format_for_provider_type("codex"),
-            Some("openai:cli")
+            Some("openai:responses")
         );
         assert_eq!(
             provider_stream_event_api_format_for_provider_type("CODEX"),
-            Some("openai:cli")
+            Some("openai:responses")
         );
     }
 

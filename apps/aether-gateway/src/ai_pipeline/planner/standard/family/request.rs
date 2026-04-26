@@ -9,7 +9,7 @@ use crate::ai_pipeline::planner::candidate_preparation::{
 use crate::ai_pipeline::planner::common::force_upstream_streaming_for_provider;
 use crate::ai_pipeline::planner::spec_metadata::local_standard_spec_metadata;
 use crate::ai_pipeline::planner::standard::{
-    apply_codex_openai_cli_special_headers, request_body_build_failure_extra_data,
+    apply_codex_openai_responses_special_headers, request_body_build_failure_extra_data,
 };
 use crate::ai_pipeline::transport::apply_local_header_rules;
 use crate::ai_pipeline::transport::auth::{
@@ -314,7 +314,7 @@ pub(crate) async fn resolve_local_standard_candidate_payload_parts(
         .await;
         return None;
     }
-    apply_codex_openai_cli_special_headers(
+    apply_codex_openai_responses_special_headers(
         &mut provider_request_headers,
         &provider_request_body,
         &parts.headers,

@@ -36,9 +36,10 @@ pub(crate) use self::passthrough::{
 };
 pub(crate) use self::plan_builders::{
     build_gemini_stream_plan_from_decision, build_gemini_sync_plan_from_decision,
-    build_openai_cli_stream_plan_from_decision, build_openai_cli_sync_plan_from_decision,
-    build_passthrough_sync_plan_from_decision, build_standard_stream_plan_from_decision,
-    build_standard_sync_plan_from_decision, LocalStreamPlanAndReport, LocalSyncPlanAndReport,
+    build_openai_responses_stream_plan_from_decision,
+    build_openai_responses_sync_plan_from_decision, build_passthrough_sync_plan_from_decision,
+    build_standard_stream_plan_from_decision, build_standard_sync_plan_from_decision,
+    LocalStreamPlanAndReport, LocalSyncPlanAndReport,
 };
 pub(crate) use self::route::is_matching_stream_request as planner_is_matching_stream_request;
 pub(crate) use self::specialized::{
@@ -51,8 +52,8 @@ pub(crate) use self::specialized::{
 pub(crate) use self::standard::{
     build_local_openai_chat_stream_plan_and_reports_for_kind,
     build_local_openai_chat_sync_plan_and_reports_for_kind,
-    build_local_openai_cli_stream_plan_and_reports_for_kind,
-    build_local_openai_cli_sync_plan_and_reports_for_kind,
+    build_local_openai_responses_stream_plan_and_reports_for_kind,
+    build_local_openai_responses_sync_plan_and_reports_for_kind,
     build_local_stream_plan_and_reports as build_standard_family_stream_plan_and_reports,
     build_local_sync_plan_and_reports as build_standard_family_sync_plan_and_reports,
     set_local_openai_chat_execution_exhausted_diagnostic,

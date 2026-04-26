@@ -687,7 +687,7 @@ interface ApiFormatGroup {
 
 const STANDARD_ROUTING_API_FORMATS = [
   'openai:chat',
-  'openai:cli',
+  'openai:responses',
   'claude:chat',
   'claude:cli',
   'gemini:chat',
@@ -704,6 +704,8 @@ function apiDataFormatId(apiFormat: string): string | null {
       return 'gemini'
     case 'openai:chat':
       return 'openai_chat'
+    case 'openai:responses':
+    case 'openai:responses:compact':
     case 'openai:cli':
     case 'openai:compact':
       return 'openai_responses'
@@ -723,8 +725,10 @@ function requestConversionKind(clientApiFormat: string, providerApiFormat: strin
   switch (provider) {
     case 'openai:chat':
       return 'to_openai_chat'
+    case 'openai:responses':
+      return 'to_openai_responses'
     case 'openai:cli':
-      return 'to_openai_cli'
+      return 'to_openai_responses'
     case 'claude:chat':
     case 'claude:cli':
       return 'to_claude'

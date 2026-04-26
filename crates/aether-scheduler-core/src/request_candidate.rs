@@ -732,7 +732,7 @@ mod tests {
             "endpoint_id": "endpoint-1",
             "key_id": "catalog-key-1",
             "client_api_format": "openai:chat",
-            "provider_api_format": "openai:cli",
+            "provider_api_format": "openai:responses",
             "header_rules": [
                 {"op": "set", "name": "x-test", "value": "1"}
             ],
@@ -878,7 +878,7 @@ mod tests {
                     "user_id": "user-1",
                     "api_key_id": "api-key-1",
                     "client_api_format": "openai:chat",
-                    "provider_api_format": "openai:cli",
+                    "provider_api_format": "openai:responses",
                     "upstream_url": "https://example.com/v1/responses",
                     "mapped_model": "gpt-5-upstream",
                     "key_name": "primary"
@@ -906,7 +906,7 @@ mod tests {
                 .extra_data
                 .as_ref()
                 .and_then(|value| value.get("provider_api_format")),
-            Some(&json!("openai:cli"))
+            Some(&json!("openai:responses"))
         );
         assert_eq!(
             record

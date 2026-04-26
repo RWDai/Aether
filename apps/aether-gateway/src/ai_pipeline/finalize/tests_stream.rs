@@ -59,7 +59,7 @@ fn standard_sync_bridge_converts_openai_chat_sync_json_to_openai_chat_sse() {
 }
 
 #[test]
-fn standard_sync_bridge_converts_claude_sync_json_to_openai_cli_sse() {
+fn standard_sync_bridge_converts_claude_sync_json_to_openai_responses_sse() {
     let report_context = json!({
         "mapped_model": "claude-sonnet-4-5",
     });
@@ -80,7 +80,7 @@ fn standard_sync_bridge_converts_claude_sync_json_to_openai_cli_sse() {
             }
         }),
         "claude:chat",
-        "openai:cli",
+        "openai:responses",
         Some(&report_context),
     )
     .expect("bridge should succeed")
@@ -327,10 +327,10 @@ fn gemini_cli_v1internal_stream_rewriter_unwraps_response_object() {
 }
 
 #[test]
-fn openai_chat_error_to_openai_cli_stream_rewriter_converts_to_response_failed() {
+fn openai_chat_error_to_openai_responses_stream_rewriter_converts_to_response_failed() {
     let report_context = json!({
         "provider_api_format": "openai:chat",
-        "client_api_format": "openai:cli",
+        "client_api_format": "openai:responses",
         "needs_conversion": true,
         "mapped_model": "gpt-5.4",
     });
@@ -351,10 +351,10 @@ fn openai_chat_error_to_openai_cli_stream_rewriter_converts_to_response_failed()
 }
 
 #[test]
-fn claude_error_to_openai_cli_stream_rewriter_converts_to_response_failed() {
+fn claude_error_to_openai_responses_stream_rewriter_converts_to_response_failed() {
     let report_context = json!({
         "provider_api_format": "claude:chat",
-        "client_api_format": "openai:cli",
+        "client_api_format": "openai:responses",
         "needs_conversion": true,
         "mapped_model": "claude-sonnet-4-5",
     });
@@ -379,10 +379,10 @@ fn claude_error_to_openai_cli_stream_rewriter_converts_to_response_failed() {
 }
 
 #[test]
-fn gemini_error_to_openai_cli_stream_rewriter_converts_to_response_failed() {
+fn gemini_error_to_openai_responses_stream_rewriter_converts_to_response_failed() {
     let report_context = json!({
         "provider_api_format": "gemini:cli",
-        "client_api_format": "openai:cli",
+        "client_api_format": "openai:responses",
         "needs_conversion": true,
         "mapped_model": "gemini-2.5-pro",
     });
@@ -584,9 +584,9 @@ fn gemini_to_openai_chat_stream_rewriter_buffers_and_converts_function_call() {
 }
 
 #[test]
-fn openai_cli_to_openai_chat_stream_rewriter_converts_text_deltas_immediately() {
+fn openai_responses_to_openai_chat_stream_rewriter_converts_text_deltas_immediately() {
     let report_context = json!({
-        "provider_api_format": "openai:cli",
+        "provider_api_format": "openai:responses",
         "client_api_format": "openai:chat",
         "needs_conversion": true,
         "mapped_model": "gpt-5.4",
@@ -653,9 +653,9 @@ fn openai_cli_to_openai_chat_stream_rewriter_converts_text_deltas_immediately() 
 }
 
 #[test]
-fn openai_cli_to_openai_chat_stream_rewriter_converts_completed_event_without_buffering() {
+fn openai_responses_to_openai_chat_stream_rewriter_converts_completed_event_without_buffering() {
     let report_context = json!({
-        "provider_api_format": "openai:cli",
+        "provider_api_format": "openai:responses",
         "client_api_format": "openai:chat",
         "needs_conversion": true,
         "mapped_model": "gpt-5.4",
@@ -715,10 +715,10 @@ fn antigravity_gemini_to_openai_chat_stream_rewriter_unwraps_and_converts_functi
 }
 
 #[test]
-fn antigravity_gemini_to_openai_cli_stream_rewriter_unwraps_and_converts_function_call() {
+fn antigravity_gemini_to_openai_responses_stream_rewriter_unwraps_and_converts_function_call() {
     let report_context = json!({
         "provider_api_format": "gemini:cli",
-        "client_api_format": "openai:cli",
+        "client_api_format": "openai:responses",
         "needs_conversion": true,
         "envelope_name": "antigravity:v1internal",
         "mapped_model": "claude-sonnet-4-5",
@@ -742,10 +742,10 @@ fn antigravity_gemini_to_openai_cli_stream_rewriter_unwraps_and_converts_functio
 }
 
 #[test]
-fn gemini_to_openai_cli_stream_rewriter_buffers_and_converts_to_completed_event() {
+fn gemini_to_openai_responses_stream_rewriter_buffers_and_converts_to_completed_event() {
     let report_context = json!({
         "provider_api_format": "gemini:cli",
-        "client_api_format": "openai:cli",
+        "client_api_format": "openai:responses",
         "needs_conversion": true,
         "mapped_model": "gemini-2.5-pro",
     });
@@ -777,10 +777,10 @@ fn gemini_to_openai_cli_stream_rewriter_buffers_and_converts_to_completed_event(
 }
 
 #[test]
-fn claude_to_openai_cli_stream_rewriter_buffers_and_converts_to_completed_event() {
+fn claude_to_openai_responses_stream_rewriter_buffers_and_converts_to_completed_event() {
     let report_context = json!({
         "provider_api_format": "claude:cli",
-        "client_api_format": "openai:cli",
+        "client_api_format": "openai:responses",
         "needs_conversion": true,
         "mapped_model": "claude-sonnet-4-5",
     });
@@ -815,10 +815,10 @@ fn claude_to_openai_cli_stream_rewriter_buffers_and_converts_to_completed_event(
 }
 
 #[test]
-fn claude_to_openai_cli_stream_rewriter_converts_tool_use_to_function_call() {
+fn claude_to_openai_responses_stream_rewriter_converts_tool_use_to_function_call() {
     let report_context = json!({
         "provider_api_format": "claude:cli",
-        "client_api_format": "openai:cli",
+        "client_api_format": "openai:responses",
         "needs_conversion": true,
         "mapped_model": "claude-sonnet-4-5",
     });
@@ -861,10 +861,10 @@ fn claude_to_openai_cli_stream_rewriter_converts_tool_use_to_function_call() {
 }
 
 #[test]
-fn gemini_to_openai_cli_stream_rewriter_converts_function_call_to_completed_event() {
+fn gemini_to_openai_responses_stream_rewriter_converts_function_call_to_completed_event() {
     let report_context = json!({
         "provider_api_format": "gemini:cli",
-        "client_api_format": "openai:cli",
+        "client_api_format": "openai:responses",
         "needs_conversion": true,
         "mapped_model": "gemini-2.5-pro",
     });
@@ -891,7 +891,7 @@ fn gemini_to_openai_cli_stream_rewriter_converts_function_call_to_completed_even
 fn gemini_to_openai_compact_stream_rewriter_converts_function_call_to_completed_event() {
     let report_context = json!({
         "provider_api_format": "gemini:cli",
-        "client_api_format": "openai:compact",
+        "client_api_format": "openai:responses:compact",
         "needs_conversion": true,
         "mapped_model": "gemini-2.5-pro",
     });

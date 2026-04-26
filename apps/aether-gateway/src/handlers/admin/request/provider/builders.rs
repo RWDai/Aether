@@ -312,7 +312,16 @@ impl<'a> AdminAppState<'a> {
             )?;
 
         let provider_type = provider.provider_type.trim().to_ascii_lowercase();
-        if provider_type == "codex" && existing_endpoint.api_format == "openai:cli" {
+        if provider_type == "codex"
+            && matches!(
+                existing_endpoint
+                    .api_format
+                    .trim()
+                    .to_ascii_lowercase()
+                    .as_str(),
+                "openai:responses" | "openai:cli"
+            )
+        {
             let has_config_in_payload = fields.contains("config");
             let config_payload = if has_config_in_payload {
                 updated
@@ -334,7 +343,7 @@ impl<'a> AdminAppState<'a> {
                 && requested.is_some()
                 && !admin_requested_force_stream(requested.expect("checked above"))
             {
-                return Err("Codex OpenAI CLI 端点固定为强制流式，不允许修改".to_string());
+                return Err("Codex OpenAI Responses 端点固定为强制流式，不允许修改".to_string());
             }
             config.remove("upstreamStreamPolicy");
             config.remove("upstream_stream");

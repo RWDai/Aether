@@ -38,8 +38,8 @@ pub(crate) fn resolve_same_format_provider_transport_unsupported_reason_for_trac
 ) -> Option<&'static str> {
     let provider_api_format = match provider_api_format.trim().to_ascii_lowercase().as_str() {
         "openai:chat" => "openai:chat",
-        "openai:cli" => "openai:cli",
-        "openai:compact" => "openai:compact",
+        "openai:responses" | "openai:cli" => "openai:responses",
+        "openai:responses:compact" | "openai:compact" => "openai:responses:compact",
         "claude:chat" => "claude:chat",
         "claude:cli" => "claude:cli",
         "gemini:chat" => "gemini:chat",

@@ -106,6 +106,8 @@ pub(crate) fn should_fallback_to_control_sync(
             | "openai_video_remix_sync"
             | "gemini_video_create_sync"
             | "openai_chat_sync"
+            | "openai_responses_sync"
+            | "openai_responses_compact_sync"
             | "openai_cli_sync"
             | "openai_compact_sync"
             | "claude_chat_sync"
@@ -151,6 +153,8 @@ pub(crate) fn resolve_core_sync_error_finalize_report_kind(
 
     let report_kind = match plan_kind {
         "openai_chat_sync" => "openai_chat_sync_finalize",
+        "openai_responses_sync" => "openai_responses_sync_finalize",
+        "openai_responses_compact_sync" => "openai_responses_compact_sync_finalize",
         "openai_cli_sync" => "openai_cli_sync_finalize",
         "openai_compact_sync" => "openai_compact_sync_finalize",
         "claude_chat_sync" => "claude_chat_sync_finalize",
@@ -277,6 +281,8 @@ pub(crate) fn should_fallback_to_control_stream(
         "openai_chat_stream"
             | "claude_chat_stream"
             | "gemini_chat_stream"
+            | "openai_responses_stream"
+            | "openai_responses_compact_stream"
             | "openai_cli_stream"
             | "openai_compact_stream"
             | "claude_cli_stream"
@@ -296,6 +302,8 @@ pub(crate) fn resolve_core_stream_error_finalize_report_kind(
         "openai_chat_stream" => "openai_chat_sync_finalize",
         "claude_chat_stream" => "claude_chat_sync_finalize",
         "gemini_chat_stream" => "gemini_chat_sync_finalize",
+        "openai_responses_stream" => "openai_responses_sync_finalize",
+        "openai_responses_compact_stream" => "openai_responses_compact_sync_finalize",
         "openai_cli_stream" => "openai_cli_sync_finalize",
         "openai_compact_stream" => "openai_compact_sync_finalize",
         "claude_cli_stream" => "claude_cli_sync_finalize",
@@ -312,6 +320,8 @@ pub(crate) fn resolve_core_stream_direct_finalize_report_kind(plan_kind: &str) -
         "openai_image_stream" => "openai_image_sync_finalize",
         "claude_chat_stream" => "claude_chat_sync_finalize",
         "gemini_chat_stream" => "gemini_chat_sync_finalize",
+        "openai_responses_stream" => "openai_responses_sync_finalize",
+        "openai_responses_compact_stream" => "openai_responses_compact_sync_finalize",
         "openai_cli_stream" => "openai_cli_sync_finalize",
         "openai_compact_stream" => "openai_compact_sync_finalize",
         "claude_cli_stream" => "claude_cli_sync_finalize",

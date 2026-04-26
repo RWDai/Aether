@@ -1336,7 +1336,7 @@ function getDefaultPath(apiFormat: string, baseUrl?: string): string {
   const isCodex = providerType
     ? providerType === 'codex'
     : (!!baseUrl && isCodexUrl(baseUrl))
-  if (apiFormat === 'openai:cli' && isCodex) {
+  if ((apiFormat === 'openai:responses' || apiFormat === 'openai:cli') && isCodex) {
     return '/responses'
   }
   return defaultPath
@@ -2381,7 +2381,7 @@ function getCurrentUpstreamStreamPolicy(endpoint: ProviderEndpoint): string {
 
 function isUpstreamStreamPolicyLocked(endpoint: ProviderEndpoint): boolean {
   return (props.provider?.provider_type || '').toLowerCase() === 'codex'
-    && endpoint.api_format === 'openai:cli'
+    && (endpoint.api_format === 'openai:responses' || endpoint.api_format === 'openai:cli')
 }
 
 // 获取上游流式按钮的样式类
@@ -2398,7 +2398,7 @@ function getUpstreamStreamButtonClass(endpoint: ProviderEndpoint): string {
 
 // 获取上游流式按钮的提示文字
 function getUpstreamStreamTooltip(endpoint: ProviderEndpoint): string {
-  if (isUpstreamStreamPolicyLocked(endpoint)) return '固定流式（Codex OpenAI CLI，已锁定）'
+  if (isUpstreamStreamPolicyLocked(endpoint)) return '固定流式（Codex OpenAI Responses，已锁定）'
   const policy = getCurrentUpstreamStreamPolicy(endpoint)
   if (policy === 'force_stream') return '固定流式（点击切换为固定非流）'
   if (policy === 'force_non_stream') return '固定非流（点击切换为跟随请求）'

@@ -329,16 +329,17 @@ async fn gateway_handles_admin_provider_query_models_with_openai_responses_endpo
 
     assert_eq!(response.status(), StatusCode::OK);
     let payload: serde_json::Value = response.json().await.expect("json body should parse");
-    assert_eq!(payload["success"], json!(false));
-    assert_eq!(
-        payload["data"]["error"],
-        json!("No active endpoints found for this provider")
-    );
+    assert_eq!(payload["success"], json!(true));
+    assert_eq!(payload["data"]["error"], serde_json::Value::Null);
     assert_eq!(payload["data"]["from_cache"], json!(false));
-    assert_eq!(payload["data"]["models"], json!([]));
+    assert_eq!(payload["data"]["models"][0]["id"], json!("gpt-4.1"));
+    assert_eq!(
+        payload["data"]["models"][0]["api_formats"],
+        json!(["openai:responses"])
+    );
     assert_eq!(
         *execution_runtime_hits.lock().expect("mutex should lock"),
-        0
+        1
     );
 
     gateway_handle.abort();
@@ -465,7 +466,7 @@ async fn gateway_handles_admin_provider_query_models_respecting_key_api_formats(
     assert_eq!(payload["data"]["from_cache"], json!(false));
     assert_eq!(
         payload["data"]["models"][0]["api_formats"],
-        json!(["openai:cli"])
+        json!(["openai:responses"])
     );
     assert_eq!(
         *execution_runtime_hits.lock().expect("mutex should lock"),
@@ -1596,7 +1597,7 @@ async fn gateway_handles_openai_cli_test_model_locally() {
                         "choices": [{
                             "message": {
                                 "role": "assistant",
-                                "content": "Hello from OpenAI CLI"
+                                "content": "Hello from OpenAI Responses"
                             }
                         }]
                     }
@@ -1660,7 +1661,7 @@ async fn gateway_handles_openai_cli_test_model_locally() {
     assert_eq!(payload["success"], json!(true));
     assert_eq!(
         payload["data"]["response"]["choices"][0]["message"]["content"],
-        json!("Hello from OpenAI CLI")
+        json!("Hello from OpenAI Responses")
     );
 
     gateway_handle.abort();
@@ -2236,7 +2237,7 @@ async fn gateway_handles_openai_cli_test_model_failover_locally() {
                         "choices": [{
                             "message": {
                                 "role": "assistant",
-                                "content": "OpenAI CLI failover path succeeded"
+                                "content": "OpenAI Responses failover path succeeded"
                             }
                         }]
                     }
@@ -2299,7 +2300,7 @@ async fn gateway_handles_openai_cli_test_model_failover_locally() {
     assert_eq!(payload["total_attempts"], json!(1));
     assert_eq!(
         payload["data"]["response"]["choices"][0]["message"]["content"],
-        json!("OpenAI CLI failover path succeeded")
+        json!("OpenAI Responses failover path succeeded")
     );
 
     gateway_handle.abort();

@@ -47,13 +47,13 @@ fn diagnose_request_body_build_failure(
         return Some(diagnostic("$", "请求体必须是 JSON object"));
     }
 
-    if client_api_format == "openai:cli" {
-        if let Some(diagnostic) = diagnose_openai_cli_request(body_json) {
+    if is_openai_responses_client_format(client_api_format) {
+        if let Some(diagnostic) = diagnose_openai_responses_request(body_json) {
             return Some(diagnostic);
         }
         return Some(diagnostic(
             "$",
-            "OpenAI CLI 请求体初步结构检查通过；失败可能发生在后续跨格式转换或 Body 规则应用",
+            "OpenAI Responses 请求体初步结构检查通过；失败可能发生在后续跨格式转换或 Body 规则应用",
         ));
     }
 
@@ -68,6 +68,14 @@ fn diagnose_request_body_build_failure(
         "$",
         "请求体转换失败；当前转换器未返回更细的字段路径",
     ))
+}
+
+fn is_openai_responses_client_format(client_api_format: &str) -> bool {
+    let normalized = client_api_format.trim().to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "openai:responses" | "openai:responses:compact" | "openai:cli" | "openai:compact"
+    )
 }
 
 fn diagnose_same_format_provider_request_body_failure(
@@ -176,25 +184,26 @@ fn diagnose_openai_chat_cross_format_request(
     diagnose_openai_tool_choice(request.get("tool_choice"))
 }
 
-fn diagnose_openai_cli_request(body_json: &Value) -> Option<RequestBodyBuildDiagnostic> {
+fn diagnose_openai_responses_request(body_json: &Value) -> Option<RequestBodyBuildDiagnostic> {
     let request = body_json.as_object()?;
 
-    if let Some(diagnostic) =
-        diagnose_openai_cli_text_content(request.get("instructions"), "$.instructions".to_string())
-    {
+    if let Some(diagnostic) = diagnose_openai_responses_text_content(
+        request.get("instructions"),
+        "$.instructions".to_string(),
+    ) {
         return Some(diagnostic);
     }
 
-    if let Some(diagnostic) = diagnose_openai_cli_input(request.get("input")) {
+    if let Some(diagnostic) = diagnose_openai_responses_input(request.get("input")) {
         return Some(diagnostic);
     }
-    if let Some(diagnostic) = diagnose_openai_cli_tools(request.get("tools")) {
+    if let Some(diagnostic) = diagnose_openai_responses_tools(request.get("tools")) {
         return Some(diagnostic);
     }
-    diagnose_openai_cli_tool_choice(request.get("tool_choice"))
+    diagnose_openai_responses_tool_choice(request.get("tool_choice"))
 }
 
-fn diagnose_openai_cli_input(input: Option<&Value>) -> Option<RequestBodyBuildDiagnostic> {
+fn diagnose_openai_responses_input(input: Option<&Value>) -> Option<RequestBodyBuildDiagnostic> {
     let Some(input) = input else {
         return None;
     };
@@ -209,7 +218,7 @@ fn diagnose_openai_cli_input(input: Option<&Value>) -> Option<RequestBodyBuildDi
                 let Some(item_object) = item.as_object() else {
                     return Some(diagnostic(
                         item_path,
-                        "OpenAI CLI input 数组项必须是 string 或 object",
+                        "OpenAI Responses input 数组项必须是 string 或 object",
                     ));
                 };
                 let item_type = item_object
@@ -227,13 +236,13 @@ fn diagnose_openai_cli_input(input: Option<&Value>) -> Option<RequestBodyBuildDi
                             .trim()
                             .to_ascii_lowercase();
                         if role == "system" || role == "developer" {
-                            if let Some(diagnostic) = diagnose_openai_cli_text_content(
+                            if let Some(diagnostic) = diagnose_openai_responses_text_content(
                                 item_object.get("content"),
                                 format!("{item_path}.content"),
                             ) {
                                 return Some(diagnostic);
                             }
-                        } else if let Some(diagnostic) = diagnose_openai_cli_message_content(
+                        } else if let Some(diagnostic) = diagnose_openai_responses_message_content(
                             item_object.get("content"),
                             format!("{item_path}.content"),
                         ) {
@@ -260,12 +269,12 @@ fn diagnose_openai_cli_input(input: Option<&Value>) -> Option<RequestBodyBuildDi
         }
         _ => Some(diagnostic(
             "$.input",
-            "OpenAI CLI input 必须是 string、array 或 null",
+            "OpenAI Responses input 必须是 string、array 或 null",
         )),
     }
 }
 
-fn diagnose_openai_cli_text_content(
+fn diagnose_openai_responses_text_content(
     content: Option<&Value>,
     path: String,
 ) -> Option<RequestBodyBuildDiagnostic> {
@@ -289,7 +298,7 @@ fn diagnose_openai_cli_text_content(
     }
 }
 
-fn diagnose_openai_cli_message_content(
+fn diagnose_openai_responses_message_content(
     content: Option<&Value>,
     path: String,
 ) -> Option<RequestBodyBuildDiagnostic> {
@@ -464,7 +473,7 @@ fn diagnose_openai_tools(
     None
 }
 
-fn diagnose_openai_cli_tools(tools: Option<&Value>) -> Option<RequestBodyBuildDiagnostic> {
+fn diagnose_openai_responses_tools(tools: Option<&Value>) -> Option<RequestBodyBuildDiagnostic> {
     let Some(tools) = tools else {
         return None;
     };
@@ -474,7 +483,7 @@ fn diagnose_openai_cli_tools(tools: Option<&Value>) -> Option<RequestBodyBuildDi
     for (tool_index, tool) in tool_values.iter().enumerate() {
         let tool_path = format!("$.tools[{tool_index}]");
         let Some(tool_object) = tool.as_object() else {
-            return Some(diagnostic(tool_path, "OpenAI CLI tool 必须是 object"));
+            return Some(diagnostic(tool_path, "OpenAI Responses tool 必须是 object"));
         };
         let tool_type = tool_object
             .get("type")
@@ -496,14 +505,14 @@ fn diagnose_openai_cli_tools(tools: Option<&Value>) -> Option<RequestBodyBuildDi
         if !valid_name {
             return Some(diagnostic(
                 format!("{tool_path}.name"),
-                "OpenAI CLI function tool 必须包含非空 name",
+                "OpenAI Responses function tool 必须包含非空 name",
             ));
         }
     }
     None
 }
 
-fn diagnose_openai_cli_tool_choice(
+fn diagnose_openai_responses_tool_choice(
     tool_choice: Option<&Value>,
 ) -> Option<RequestBodyBuildDiagnostic> {
     let Some(Value::Object(object)) = tool_choice else {
@@ -527,7 +536,7 @@ fn diagnose_openai_cli_tool_choice(
     } else {
         Some(diagnostic(
             "$.tool_choice.name",
-            "OpenAI CLI tool_choice 指定 function 时必须包含非空 name",
+            "OpenAI Responses tool_choice 指定 function 时必须包含非空 name",
         ))
     }
 }
@@ -666,7 +675,7 @@ mod tests {
     }
 
     #[test]
-    fn openai_cli_reports_invalid_function_call_name() {
+    fn openai_responses_reports_invalid_function_call_name() {
         let body = json!({
             "model": "gpt-5.4",
             "input": [{
@@ -675,8 +684,9 @@ mod tests {
             }]
         });
 
-        let diagnostic = request_body_build_failure_extra_data(&body, "openai:cli", "claude:chat")
-            .expect("diagnostic");
+        let diagnostic =
+            request_body_build_failure_extra_data(&body, "openai:responses", "claude:chat")
+                .expect("diagnostic");
 
         assert_eq!(
             diagnostic["request_body_build_error"]["path"],
@@ -685,15 +695,16 @@ mod tests {
     }
 
     #[test]
-    fn openai_cli_reports_invalid_tool_choice_name() {
+    fn openai_responses_reports_invalid_tool_choice_name() {
         let body = json!({
             "model": "gpt-5.4",
             "input": "hello",
             "tool_choice": { "type": "function" }
         });
 
-        let diagnostic = request_body_build_failure_extra_data(&body, "openai:cli", "gemini:chat")
-            .expect("diagnostic");
+        let diagnostic =
+            request_body_build_failure_extra_data(&body, "openai:responses", "gemini:chat")
+                .expect("diagnostic");
 
         assert_eq!(
             diagnostic["request_body_build_error"]["path"],

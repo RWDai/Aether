@@ -223,6 +223,7 @@ fn current_local_execution_candidate_common_skip_reason_with_transport(
         .endpoint_api_format
         .trim()
         .eq_ignore_ascii_case(endpoint_api_format)
+        && !api_format_matches(&candidate.endpoint_api_format, endpoint_api_format)
     {
         return Some("endpoint_api_format_changed");
     }
@@ -242,7 +243,7 @@ fn candidate_is_ineligible_due_to_disabled_format_conversion(
     normalized_client_api_format: &str,
 ) -> bool {
     let endpoint_api_format = transport.endpoint.api_format.trim();
-    if endpoint_api_format.eq_ignore_ascii_case(normalized_client_api_format) {
+    if api_format_matches(endpoint_api_format, normalized_client_api_format) {
         return false;
     }
 
@@ -277,7 +278,7 @@ fn current_local_execution_candidate_skip_reason_with_transport(
     }
 
     let endpoint_api_format = transport.endpoint.api_format.trim();
-    if endpoint_api_format.eq_ignore_ascii_case(normalized_client_api_format) {
+    if api_format_matches(endpoint_api_format, normalized_client_api_format) {
         return None;
     }
 
@@ -316,8 +317,20 @@ fn transport_key_supports_api_format(
         None => true,
         Some(formats) => formats
             .iter()
-            .any(|value| value.trim().eq_ignore_ascii_case(endpoint_api_format)),
+            .any(|value| api_format_matches(value, endpoint_api_format)),
     }
+}
+
+fn normalize_api_format_alias(value: &str) -> String {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "openai:cli" => "openai:responses".to_string(),
+        "openai:compact" => "openai:responses:compact".to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn api_format_matches(left: &str, right: &str) -> bool {
+    normalize_api_format_alias(left) == normalize_api_format_alias(right)
 }
 
 fn transport_key_allows_candidate_model(

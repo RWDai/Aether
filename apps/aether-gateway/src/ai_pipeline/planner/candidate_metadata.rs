@@ -391,7 +391,7 @@ mod tests {
             provider_type: "codex".to_string(),
             provider_priority: 22,
             endpoint_id: "endpoint-1".to_string(),
-            endpoint_api_format: "openai:cli".to_string(),
+            endpoint_api_format: "openai:responses".to_string(),
             key_id: "key-1".to_string(),
             key_name: "codex".to_string(),
             key_auth_type: "oauth".to_string(),
@@ -426,7 +426,7 @@ mod tests {
             endpoint: GatewayProviderTransportEndpoint {
                 id: "endpoint-1".to_string(),
                 provider_id: "provider-1".to_string(),
-                api_format: "openai:cli".to_string(),
+                api_format: "openai:responses".to_string(),
                 api_family: None,
                 endpoint_kind: None,
                 is_active: true,
@@ -523,12 +523,12 @@ mod tests {
         let metadata = build_local_execution_candidate_contract_metadata_for_candidate(
             &sample_candidate(),
             Some(&sample_transport()),
-            "openai:cli",
+            "openai:responses",
             "claude:cli",
             serde_json::Map::new(),
             ExecutionStrategy::LocalCrossFormat,
             ConversionMode::Bidirectional,
-            "openai:cli",
+            "openai:responses",
         );
 
         assert_eq!(metadata["transport_diagnostics"]["provider_type"], "codex");
@@ -555,8 +555,8 @@ mod tests {
         let metadata = build_local_execution_candidate_metadata_for_candidate(
             &sample_candidate(),
             None,
-            "openai:cli",
-            "openai:cli",
+            "openai:responses",
+            "openai:responses",
             serde_json::Map::new(),
         );
 

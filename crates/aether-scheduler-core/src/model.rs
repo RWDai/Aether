@@ -253,7 +253,11 @@ pub fn extract_global_priority_for_format(
 }
 
 pub fn normalize_api_format(value: &str) -> String {
-    value.trim().to_ascii_lowercase()
+    match value.trim().to_ascii_lowercase().as_str() {
+        "openai:cli" => "openai:responses".to_string(),
+        "openai:compact" => "openai:responses:compact".to_string(),
+        other => other.to_string(),
+    }
 }
 
 fn row_has_candidate_model_name(
@@ -273,7 +277,7 @@ fn row_has_candidate_model_name(
 }
 
 fn api_format_matches(left: &str, right: &str) -> bool {
-    left.trim().eq_ignore_ascii_case(right.trim())
+    normalize_api_format(left) == normalize_api_format(right)
 }
 
 #[cfg(test)]

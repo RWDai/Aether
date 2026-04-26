@@ -10,7 +10,7 @@ use crate::ai_pipeline::planner::candidate_preparation::{
 };
 use crate::ai_pipeline::planner::common::OPENAI_CHAT_STREAM_PLAN_KIND;
 use crate::ai_pipeline::planner::standard::{
-    apply_codex_openai_cli_special_headers, build_cross_format_openai_chat_request_body,
+    apply_codex_openai_responses_special_headers, build_cross_format_openai_chat_request_body,
     build_cross_format_openai_chat_upstream_url, build_local_openai_chat_request_body,
     build_local_openai_chat_upstream_url, request_body_build_failure_extra_data,
 };
@@ -190,7 +190,7 @@ pub(crate) async fn resolve_local_openai_chat_candidate_payload_parts(
             .await;
             return None;
         }
-        apply_codex_openai_cli_special_headers(
+        apply_codex_openai_responses_special_headers(
             &mut provider_request_headers,
             &provider_request_body,
             &parts.headers,
@@ -476,7 +476,7 @@ pub(crate) async fn resolve_local_openai_chat_candidate_payload_parts(
         .await;
         return None;
     }
-    apply_codex_openai_cli_special_headers(
+    apply_codex_openai_responses_special_headers(
         &mut provider_request_headers,
         &provider_request_body,
         &parts.headers,

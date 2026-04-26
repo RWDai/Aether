@@ -281,6 +281,9 @@ fn merge_stream_terminal_summary(
         current_summary.model = observed.model;
     }
     current_summary.observed_finish |= observed.observed_finish;
+    current_summary.unknown_event_count = current_summary
+        .unknown_event_count
+        .saturating_add(observed.unknown_event_count);
     if current_summary.parser_error.is_none() {
         current_summary.parser_error = observed.parser_error;
     }
@@ -2270,12 +2273,14 @@ mod tests {
             Some(ExecutionStreamTerminalSummary {
                 standardized_usage: Some(runtime_usage),
                 model: Some("gpt-5.5".to_string()),
+                unknown_event_count: 1,
                 ..ExecutionStreamTerminalSummary::default()
             }),
             Some(ExecutionStreamTerminalSummary {
                 standardized_usage: Some(observed_usage),
                 response_id: Some("resp_123".to_string()),
                 observed_finish: true,
+                unknown_event_count: 2,
                 ..ExecutionStreamTerminalSummary::default()
             }),
         )
@@ -2289,6 +2294,7 @@ mod tests {
         assert_eq!(merged.model.as_deref(), Some("gpt-5.5"));
         assert_eq!(merged.response_id.as_deref(), Some("resp_123"));
         assert!(merged.observed_finish);
+        assert_eq!(merged.unknown_event_count, 3);
     }
 
     #[test]
@@ -2431,8 +2437,8 @@ mod tests {
                 "stream": true
             })),
             stream: true,
-            client_api_format: "openai:cli".into(),
-            provider_api_format: "openai:cli".into(),
+            client_api_format: "openai:responses".into(),
+            provider_api_format: "openai:responses".into(),
             model_name: Some("gpt-5.4".into()),
             proxy: None,
             tls_profile: None,
@@ -2447,7 +2453,7 @@ mod tests {
             Some("ai_public".to_string()),
             Some("openai".to_string()),
             Some("cli".to_string()),
-            Some("openai:cli".to_string()),
+            Some("openai:responses".to_string()),
         )
         .with_execution_runtime_candidate(true);
 
@@ -2456,11 +2462,11 @@ mod tests {
             plan,
             "trace-live-stream-first-data",
             &decision,
-            "openai_cli_stream",
+            "openai_responses_stream",
             None,
             Some(json!({
-                "provider_api_format": "openai:cli",
-                "client_api_format": "openai:cli",
+                "provider_api_format": "openai:responses",
+                "client_api_format": "openai:responses",
             })),
         )
         .await
@@ -2552,8 +2558,8 @@ mod tests {
                 "stream": true
             })),
             stream: true,
-            client_api_format: "openai:cli".into(),
-            provider_api_format: "openai:cli".into(),
+            client_api_format: "openai:responses".into(),
+            provider_api_format: "openai:responses".into(),
             model_name: Some("gpt-5.4".into()),
             proxy: None,
             tls_profile: None,
@@ -2568,7 +2574,7 @@ mod tests {
             Some("ai_public".to_string()),
             Some("openai".to_string()),
             Some("cli".to_string()),
-            Some("openai:cli".to_string()),
+            Some("openai:responses".to_string()),
         )
         .with_execution_runtime_candidate(true);
 
@@ -2577,11 +2583,11 @@ mod tests {
             plan,
             "trace-remote-runtime-sync-json-stream",
             &decision,
-            "openai_cli_stream",
+            "openai_responses_stream",
             None,
             Some(json!({
-                "provider_api_format": "openai:cli",
-                "client_api_format": "openai:cli",
+                "provider_api_format": "openai:responses",
+                "client_api_format": "openai:responses",
             })),
         )
         .await

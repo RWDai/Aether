@@ -1,22 +1,23 @@
 use std::borrow::Cow;
 
+use aether_ai_formats::registry::{convert_request, FormatContext};
 use aether_provider_transport::{
     apply_local_body_rules, build_transport_request_url, GatewayProviderTransportSnapshot,
     TransportRequestUrlParams,
 };
 use serde_json::Value;
 
+use super::{
+    apply_openai_responses_compact_special_body_edits,
+    codex::apply_codex_openai_responses_special_body_edits,
+    normalize::build_local_openai_chat_request_body,
+};
 use crate::conversion::request::{
     convert_openai_chat_request_to_claude_request, convert_openai_chat_request_to_gemini_request,
-    convert_openai_chat_request_to_openai_cli_request,
+    convert_openai_chat_request_to_openai_responses_request,
     normalize_claude_request_to_openai_chat_request,
     normalize_gemini_request_to_openai_chat_request,
-    normalize_openai_cli_request_to_openai_chat_request,
-};
-
-use super::{
-    apply_openai_compact_special_body_edits, codex::apply_codex_openai_cli_special_body_edits,
-    normalize::build_local_openai_chat_request_body,
+    normalize_openai_responses_request_to_openai_chat_request,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -31,29 +32,32 @@ pub fn build_standard_request_body(
     body_rules: Option<&Value>,
     user_api_key_id: Option<&str>,
 ) -> Option<Value> {
-    let canonical_request = normalize_standard_request_to_openai_chat_request_cow(
-        body_json,
+    let format_context = FormatContext::default()
+        .with_mapped_model(mapped_model)
+        .with_request_path(request_path)
+        .with_upstream_stream(upstream_is_stream);
+    let mut provider_request_body = convert_request(
         client_api_format,
-        request_path,
-    )?;
-    let mut provider_request_body = build_standard_request_body_from_canonical(
-        canonical_request.as_ref(),
-        mapped_model,
         provider_api_format,
-        upstream_is_stream,
-    )?;
+        body_json,
+        &format_context,
+    )
+    .ok()?;
 
     if !apply_local_body_rules(&mut provider_request_body, body_rules, Some(body_json)) {
         return None;
     }
-    apply_codex_openai_cli_special_body_edits(
+    apply_codex_openai_responses_special_body_edits(
         &mut provider_request_body,
         provider_type,
         provider_api_format,
         body_rules,
         user_api_key_id,
     );
-    apply_openai_compact_special_body_edits(&mut provider_request_body, provider_api_format);
+    apply_openai_responses_compact_special_body_edits(
+        &mut provider_request_body,
+        provider_api_format,
+    );
     Some(provider_request_body)
 }
 
@@ -69,18 +73,22 @@ pub fn build_standard_request_body_from_canonical(
             mapped_model,
             upstream_is_stream,
         ),
-        "openai:cli" => convert_openai_chat_request_to_openai_cli_request(
-            canonical_request,
-            mapped_model,
-            upstream_is_stream,
-            false,
-        ),
-        "openai:compact" => convert_openai_chat_request_to_openai_cli_request(
-            canonical_request,
-            mapped_model,
-            false,
-            true,
-        ),
+        "openai:responses" | "openai:cli" => {
+            convert_openai_chat_request_to_openai_responses_request(
+                canonical_request,
+                mapped_model,
+                upstream_is_stream,
+                false,
+            )
+        }
+        "openai:responses:compact" | "openai:compact" => {
+            convert_openai_chat_request_to_openai_responses_request(
+                canonical_request,
+                mapped_model,
+                false,
+                true,
+            )
+        }
         "claude:chat" | "claude:cli" => convert_openai_chat_request_to_claude_request(
             canonical_request,
             mapped_model,
@@ -115,8 +123,8 @@ fn normalize_standard_request_to_openai_chat_request_cow<'a>(
 ) -> Option<Cow<'a, Value>> {
     match client_api_format.trim().to_ascii_lowercase().as_str() {
         "openai:chat" => Some(Cow::Borrowed(body_json)),
-        "openai:cli" | "openai:compact" => {
-            normalize_openai_cli_request_to_openai_chat_request(body_json).map(Cow::Owned)
+        "openai:responses" | "openai:cli" | "openai:responses:compact" | "openai:compact" => {
+            normalize_openai_responses_request_to_openai_chat_request(body_json).map(Cow::Owned)
         }
         "claude:chat" | "claude:cli" => {
             normalize_claude_request_to_openai_chat_request(body_json).map(Cow::Owned)
@@ -149,7 +157,10 @@ pub fn build_standard_upstream_url(
 
 #[cfg(test)]
 mod tests {
-    use super::build_standard_request_body;
+    use super::{
+        build_standard_request_body, build_standard_request_body_from_canonical,
+        normalize_standard_request_to_openai_chat_request,
+    };
     use serde_json::{json, Value};
 
     const STANDARD_SURFACES: &[&str] = &[
@@ -251,6 +262,80 @@ mod tests {
         ])
     }
 
+    fn legacy_openai_responses_alias_request_body(
+        request: &Value,
+        provider_api_format: &str,
+        upstream_is_stream: bool,
+    ) -> Value {
+        let chat_canonical = normalize_standard_request_to_openai_chat_request(
+            request,
+            "openai:cli",
+            "/v1/responses",
+        )
+        .expect("legacy openai responses alias normalization should succeed");
+        build_standard_request_body_from_canonical(
+            &chat_canonical,
+            "mapped-model",
+            provider_api_format,
+            upstream_is_stream,
+        )
+        .expect("legacy openai responses alias target conversion should succeed")
+    }
+
+    fn legacy_openai_chat_request_body(
+        request: &Value,
+        provider_api_format: &str,
+        upstream_is_stream: bool,
+    ) -> Value {
+        build_standard_request_body_from_canonical(
+            request,
+            "mapped-model",
+            provider_api_format,
+            upstream_is_stream,
+        )
+        .expect("legacy openai chat target conversion should succeed")
+    }
+
+    fn legacy_claude_request_body(
+        request: &Value,
+        provider_api_format: &str,
+        upstream_is_stream: bool,
+    ) -> Value {
+        let chat_canonical = normalize_standard_request_to_openai_chat_request(
+            request,
+            "claude:chat",
+            "/v1/messages",
+        )
+        .expect("legacy claude normalization should succeed");
+        build_standard_request_body_from_canonical(
+            &chat_canonical,
+            "mapped-model",
+            provider_api_format,
+            upstream_is_stream,
+        )
+        .expect("legacy claude target conversion should succeed")
+    }
+
+    fn legacy_gemini_request_body(
+        request: &Value,
+        provider_api_format: &str,
+        upstream_is_stream: bool,
+    ) -> Value {
+        let chat_canonical = normalize_standard_request_to_openai_chat_request(
+            request,
+            "gemini:chat",
+            "/v1beta/models/source-model:generateContent",
+        )
+        .expect("legacy gemini normalization should succeed");
+        build_standard_request_body_from_canonical(
+            &chat_canonical,
+            "mapped-model",
+            provider_api_format,
+            upstream_is_stream,
+        )
+        .expect("legacy gemini target conversion should succeed")
+    }
+
     #[test]
     fn builds_request_body_for_all_standard_surface_pairs_in_sync_and_stream_modes() {
         for client_api_format in STANDARD_SURFACES {
@@ -285,7 +370,357 @@ mod tests {
     }
 
     #[test]
-    fn applies_codex_body_rules_for_all_standard_sources_to_openai_cli() {
+    fn openai_responses_request_uses_typed_canonical_without_changing_target_payloads() {
+        let request = json!({
+            "model": "gpt-5",
+            "instructions": "Be exact.",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "Inspect this"},
+                        {
+                            "type": "input_image",
+                            "image_url": "data:image/png;base64,iVBORw0KGgo=",
+                            "detail": "high"
+                        },
+                        {
+                            "type": "input_file",
+                            "file_data": "data:application/pdf;base64,JVBERi0x",
+                            "filename": "spec.pdf"
+                        }
+                    ]
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_123",
+                    "name": "lookup",
+                    "arguments": "{\"q\":\"rust\"}"
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_123",
+                    "output": "{\"ok\":true}"
+                }
+            ],
+            "max_output_tokens": 64,
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "parallel_tool_calls": true,
+            "tools": [{
+                "type": "function",
+                "name": "lookup",
+                "description": "Lookup data",
+                "parameters": {"type": "object"}
+            }],
+            "tool_choice": {"type": "function", "name": "lookup"},
+            "reasoning": {"effort": "high"},
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "answer", "schema": {"type": "object"}}
+                },
+                "verbosity": "low"
+            },
+            "metadata": {"trace": "abc"}
+        });
+
+        for provider_api_format in STANDARD_SURFACES {
+            for upstream_is_stream in [false, true] {
+                let converted = build_standard_request_body(
+                    &request,
+                    "openai:cli",
+                    "mapped-model",
+                    "custom",
+                    provider_api_format,
+                    "/v1/responses",
+                    upstream_is_stream,
+                    None,
+                    None,
+                )
+                .expect("typed canonical route should build");
+                let legacy = legacy_openai_responses_alias_request_body(
+                    &request,
+                    provider_api_format,
+                    upstream_is_stream,
+                );
+                assert_eq!(
+                    converted, legacy,
+                    "typed canonical openai:cli -> {provider_api_format} changed payload with upstream_is_stream={upstream_is_stream}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn openai_chat_request_uses_typed_canonical_without_changing_target_payloads() {
+        let request = json!({
+            "model": "gpt-5",
+            "messages": [
+                {"role": "system", "content": "Be exact."},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Inspect this"},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}
+                        }
+                    ]
+                },
+                {
+                    "role": "assistant",
+                    "content": null,
+                    "reasoning_parts": [{
+                        "type": "thinking",
+                        "thinking": "plan",
+                        "signature": "sig_123"
+                    }],
+                    "tool_calls": [{
+                        "id": "call_123",
+                        "type": "function",
+                        "function": {
+                            "name": "lookup",
+                            "arguments": "{\"q\":\"rust\"}"
+                        }
+                    }]
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_123",
+                    "content": {"ok": true}
+                }
+            ],
+            "max_completion_tokens": 64,
+            "temperature": 0.2,
+            "tools": [{
+                "type": "function",
+                "function": {
+                    "name": "lookup",
+                    "description": "Lookup data",
+                    "parameters": {"type": "object"}
+                }
+            }],
+            "tool_choice": {"type": "function", "function": {"name": "lookup"}},
+            "reasoning_effort": "medium",
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "answer", "schema": {"type": "object"}}
+            }
+        });
+
+        for provider_api_format in STANDARD_SURFACES {
+            for upstream_is_stream in [false, true] {
+                let converted = build_standard_request_body(
+                    &request,
+                    "openai:chat",
+                    "mapped-model",
+                    "custom",
+                    provider_api_format,
+                    "/v1/chat/completions",
+                    upstream_is_stream,
+                    None,
+                    None,
+                )
+                .expect("typed canonical openai chat route should build");
+                let legacy = legacy_openai_chat_request_body(
+                    &request,
+                    provider_api_format,
+                    upstream_is_stream,
+                );
+                assert_eq!(
+                    converted, legacy,
+                    "typed canonical openai:chat -> {provider_api_format} changed payload with upstream_is_stream={upstream_is_stream}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn claude_request_uses_typed_canonical_without_changing_non_claude_target_payloads() {
+        let request = json!({
+            "model": "claude-sonnet-4-5",
+            "system": "Be exact.",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Inspect this"},
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": "iVBORw0KGgo="
+                            }
+                        },
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "application/pdf",
+                                "data": "JVBERi0x"
+                            }
+                        }
+                    ]
+                },
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "thinking",
+                            "thinking": "plan",
+                            "signature": "sig_123"
+                        },
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_123",
+                            "name": "lookup",
+                            "input": {"q": "rust"}
+                        }
+                    ]
+                },
+                {
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_123",
+                        "content": {"ok": true}
+                    }]
+                }
+            ],
+            "max_tokens": 64,
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "tools": [{
+                "name": "lookup",
+                "description": "Lookup data",
+                "input_schema": {"type": "object"}
+            }],
+            "tool_choice": {
+                "type": "tool",
+                "name": "lookup",
+                "disable_parallel_tool_use": false
+            },
+            "metadata": {"trace": "abc"},
+            "thinking": {"type": "enabled", "budget_tokens": 2048}
+        });
+
+        for provider_api_format in [
+            "openai:chat",
+            "openai:cli",
+            "openai:compact",
+            "gemini:chat",
+            "gemini:cli",
+        ] {
+            for upstream_is_stream in [false, true] {
+                let converted = build_standard_request_body(
+                    &request,
+                    "claude:chat",
+                    "mapped-model",
+                    "custom",
+                    provider_api_format,
+                    "/v1/messages",
+                    upstream_is_stream,
+                    None,
+                    None,
+                )
+                .expect("typed canonical claude route should build");
+                let legacy =
+                    legacy_claude_request_body(&request, provider_api_format, upstream_is_stream);
+                assert_eq!(
+                    converted, legacy,
+                    "typed canonical claude:chat -> {provider_api_format} changed payload with upstream_is_stream={upstream_is_stream}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn gemini_request_uses_typed_canonical_without_changing_non_gemini_target_payloads() {
+        let request = json!({
+            "systemInstruction": {
+                "parts": [{"text": "Be exact."}]
+            },
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [
+                        {"text": "Inspect this"},
+                        {"inlineData": {"mimeType": "image/png", "data": "iVBORw0KGgo="}}
+                    ]
+                },
+                {
+                    "role": "model",
+                    "parts": [
+                        {"text": "plan", "thought": true, "thoughtSignature": "sig_123"},
+                        {"functionCall": {"id": "call_123", "name": "lookup", "args": {"q": "rust"}}}
+                    ]
+                },
+                {
+                    "role": "user",
+                    "parts": [{
+                        "functionResponse": {
+                            "id": "call_123",
+                            "name": "lookup",
+                            "response": {"result": {"ok": true}}
+                        }
+                    }]
+                }
+            ],
+            "generationConfig": {
+                "maxOutputTokens": 64,
+                "temperature": 0.2,
+                "thinkingConfig": {"includeThoughts": true, "thinkingBudget": 2048}
+            },
+            "tools": [{
+                "functionDeclarations": [{
+                    "name": "lookup",
+                    "description": "Lookup data",
+                    "parameters": {"type": "object"}
+                }]
+            }],
+            "toolConfig": {
+                "functionCallingConfig": {
+                    "mode": "ANY",
+                    "allowedFunctionNames": ["lookup"]
+                }
+            }
+        });
+
+        for provider_api_format in [
+            "openai:chat",
+            "openai:cli",
+            "openai:compact",
+            "claude:chat",
+            "claude:cli",
+        ] {
+            for upstream_is_stream in [false, true] {
+                let converted = build_standard_request_body(
+                    &request,
+                    "gemini:chat",
+                    "mapped-model",
+                    "custom",
+                    provider_api_format,
+                    "/v1beta/models/source-model:generateContent",
+                    upstream_is_stream,
+                    None,
+                    None,
+                )
+                .expect("typed canonical gemini route should build");
+                let legacy =
+                    legacy_gemini_request_body(&request, provider_api_format, upstream_is_stream);
+                assert_eq!(
+                    converted, legacy,
+                    "typed canonical gemini:chat -> {provider_api_format} changed payload with upstream_is_stream={upstream_is_stream}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn applies_codex_body_rules_for_all_standard_sources_to_openai_responses() {
         let body_rules = codex_default_body_rules();
 
         for client_api_format in STANDARD_SURFACES {

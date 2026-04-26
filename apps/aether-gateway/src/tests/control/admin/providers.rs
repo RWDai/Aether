@@ -943,20 +943,20 @@ async fn gateway_creates_admin_provider_locally_with_trusted_admin_principal() {
         .await
         .expect("endpoints should list");
     assert_eq!(endpoints.len(), 3);
-    let cli_endpoint = endpoints
+    let responses_endpoint = endpoints
         .iter()
-        .find(|endpoint| endpoint.api_format == "openai:cli")
-        .expect("cli endpoint should exist");
+        .find(|endpoint| endpoint.api_format == "openai:responses")
+        .expect("responses endpoint should exist");
     let compact_endpoint = endpoints
         .iter()
-        .find(|endpoint| endpoint.api_format == "openai:compact")
+        .find(|endpoint| endpoint.api_format == "openai:responses:compact")
         .expect("compact endpoint should exist");
     let image_endpoint = endpoints
         .iter()
         .find(|endpoint| endpoint.api_format == "openai:image")
         .expect("image endpoint should exist");
     assert_eq!(
-        cli_endpoint.base_url,
+        responses_endpoint.base_url,
         "https://chatgpt.com/backend-api/codex"
     );
     assert_eq!(
@@ -967,11 +967,11 @@ async fn gateway_creates_admin_provider_locally_with_trusted_admin_principal() {
         image_endpoint.base_url,
         "https://chatgpt.com/backend-api/codex"
     );
-    assert_eq!(cli_endpoint.max_retries, Some(7));
+    assert_eq!(responses_endpoint.max_retries, Some(7));
     assert_eq!(compact_endpoint.max_retries, Some(7));
     assert_eq!(image_endpoint.max_retries, Some(7));
     assert_eq!(
-        cli_endpoint
+        responses_endpoint
             .config
             .as_ref()
             .and_then(|value| value.get("upstream_stream_policy"))
@@ -986,7 +986,7 @@ async fn gateway_creates_admin_provider_locally_with_trusted_admin_principal() {
             .and_then(serde_json::Value::as_str),
         Some("force_stream")
     );
-    assert!(cli_endpoint.body_rules.is_none());
+    assert!(responses_endpoint.body_rules.is_none());
     assert!(compact_endpoint.body_rules.is_none());
     assert!(image_endpoint.body_rules.is_none());
     assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
@@ -1079,24 +1079,24 @@ async fn gateway_updates_fixed_provider_and_reconciles_template_managed_endpoint
         .await
         .expect("endpoints should list");
     assert_eq!(endpoints.len(), 3);
-    let cli_endpoint = endpoints
+    let responses_endpoint = endpoints
         .iter()
-        .find(|endpoint| endpoint.api_format == "openai:cli")
-        .expect("cli endpoint should exist");
+        .find(|endpoint| endpoint.api_format == "openai:responses")
+        .expect("responses endpoint should exist");
     let compact_endpoint = endpoints
         .iter()
-        .find(|endpoint| endpoint.api_format == "openai:compact")
+        .find(|endpoint| endpoint.api_format == "openai:responses:compact")
         .expect("compact endpoint should exist");
     let image_endpoint = endpoints
         .iter()
         .find(|endpoint| endpoint.api_format == "openai:image")
         .expect("image endpoint should exist");
 
-    assert_eq!(cli_endpoint.max_retries, Some(9));
+    assert_eq!(responses_endpoint.max_retries, Some(9));
     assert_eq!(compact_endpoint.max_retries, Some(9));
     assert_eq!(image_endpoint.max_retries, Some(9));
     assert_eq!(
-        cli_endpoint
+        responses_endpoint
             .config
             .as_ref()
             .and_then(|value| value.get("_aether_fixed_provider_template"))

@@ -7,7 +7,7 @@ use super::internal::resolve_local_proxy_execution_path;
 pub(crate) use super::public::matches_model_mapping_for_models;
 use crate::ai_pipeline_api::{
     aggregate_claude_stream_sync_response, aggregate_gemini_stream_sync_response,
-    aggregate_openai_chat_stream_sync_response, aggregate_openai_cli_stream_sync_response,
+    aggregate_openai_chat_stream_sync_response, aggregate_openai_responses_stream_sync_response,
     maybe_bridge_standard_sync_json_to_stream,
 };
 use crate::api::response::{
@@ -66,7 +66,7 @@ const OPENAI_CHAT_LOCAL_EXECUTION_RUNTIME_MISS_DETAIL: &str =
     "当前 OpenAI Chat Completions 请求无法在本地执行：没有匹配到可用的执行路径";
 const OPENAI_RESPONSES_LOCAL_EXECUTION_RUNTIME_MISS_DETAIL: &str =
     "当前 OpenAI Responses 请求无法在本地执行：没有匹配到可用的执行路径";
-const OPENAI_COMPACT_LOCAL_EXECUTION_RUNTIME_MISS_DETAIL: &str =
+const OPENAI_RESPONSES_COMPACT_LOCAL_EXECUTION_RUNTIME_MISS_DETAIL: &str =
     "当前 OpenAI Responses Compact 请求无法在本地执行：没有匹配到可用的执行路径";
 const OPENAI_VIDEO_LOCAL_EXECUTION_RUNTIME_MISS_DETAIL: &str =
     "当前 OpenAI Video 请求无法在本地执行：没有匹配到可用的执行路径";
@@ -463,10 +463,12 @@ fn aggregate_sync_sse_response_for_client(
             aggregate_openai_chat_stream_sync_response(body)
         }
         Some(value)
-            if value.eq_ignore_ascii_case("openai:cli")
+            if value.eq_ignore_ascii_case("openai:responses")
+                || value.eq_ignore_ascii_case("openai:responses:compact")
+                || value.eq_ignore_ascii_case("openai:cli")
                 || value.eq_ignore_ascii_case("openai:compact") =>
         {
-            aggregate_openai_cli_stream_sync_response(body)
+            aggregate_openai_responses_stream_sync_response(body)
         }
         Some(value)
             if value.eq_ignore_ascii_case("claude:chat")
@@ -484,7 +486,7 @@ fn aggregate_sync_sse_response_for_client(
             aggregate_openai_chat_stream_sync_response(body)
         }
         _ if public_path == "/v1/responses" || public_path == "/v1/responses/compact" => {
-            aggregate_openai_cli_stream_sync_response(body)
+            aggregate_openai_responses_stream_sync_response(body)
         }
         _ if public_path == "/v1/messages" => aggregate_claude_stream_sync_response(body),
         _ if decision.route_family.as_deref() == Some("gemini")
@@ -531,15 +533,25 @@ fn resolve_affinity_forward_client_api_format(
         .filter(|value| !value.is_empty());
     match api_format {
         Some(value) if value.eq_ignore_ascii_case("openai:chat") => Some("openai:chat"),
-        Some(value) if value.eq_ignore_ascii_case("openai:cli") => Some("openai:cli"),
-        Some(value) if value.eq_ignore_ascii_case("openai:compact") => Some("openai:compact"),
+        Some(value)
+            if value.eq_ignore_ascii_case("openai:responses")
+                || value.eq_ignore_ascii_case("openai:cli") =>
+        {
+            Some("openai:responses")
+        }
+        Some(value)
+            if value.eq_ignore_ascii_case("openai:responses:compact")
+                || value.eq_ignore_ascii_case("openai:compact") =>
+        {
+            Some("openai:responses:compact")
+        }
         Some(value) if value.eq_ignore_ascii_case("claude:chat") => Some("claude:chat"),
         Some(value) if value.eq_ignore_ascii_case("claude:cli") => Some("claude:cli"),
         Some(value) if value.eq_ignore_ascii_case("gemini:chat") => Some("gemini:chat"),
         Some(value) if value.eq_ignore_ascii_case("gemini:cli") => Some("gemini:cli"),
         _ if public_path == "/v1/chat/completions" => Some("openai:chat"),
-        _ if public_path == "/v1/responses" => Some("openai:cli"),
-        _ if public_path == "/v1/responses/compact" => Some("openai:compact"),
+        _ if public_path == "/v1/responses" => Some("openai:responses"),
+        _ if public_path == "/v1/responses/compact" => Some("openai:responses:compact"),
         _ if public_path == "/v1/messages" => Some("claude:chat"),
         _ if decision.route_family.as_deref() == Some("gemini")
             && (public_path.contains(":generateContent")
@@ -1702,7 +1714,9 @@ fn local_execution_runtime_miss_route_detail(
     match public_path {
         "/v1/chat/completions" => Some(OPENAI_CHAT_LOCAL_EXECUTION_RUNTIME_MISS_DETAIL),
         "/v1/responses" => Some(OPENAI_RESPONSES_LOCAL_EXECUTION_RUNTIME_MISS_DETAIL),
-        "/v1/responses/compact" => Some(OPENAI_COMPACT_LOCAL_EXECUTION_RUNTIME_MISS_DETAIL),
+        "/v1/responses/compact" => {
+            Some(OPENAI_RESPONSES_COMPACT_LOCAL_EXECUTION_RUNTIME_MISS_DETAIL)
+        }
         "/v1/messages" => Some(CLAUDE_MESSAGES_LOCAL_EXECUTION_RUNTIME_MISS_DETAIL),
         path if path.starts_with("/v1/videos") => {
             Some(OPENAI_VIDEO_LOCAL_EXECUTION_RUNTIME_MISS_DETAIL)
@@ -1784,8 +1798,8 @@ mod tests {
             "/v1/responses",
             Some("ai_public".to_string()),
             Some("openai".to_string()),
-            Some("cli".to_string()),
-            Some("openai:cli".to_string()),
+            Some("responses".to_string()),
+            Some("openai:responses".to_string()),
         );
         let diagnostic = LocalExecutionRuntimeMissDiagnostic {
             reason: "all_candidates_skipped".to_string(),
@@ -1815,8 +1829,8 @@ mod tests {
             "/v1/responses",
             Some("ai_public".to_string()),
             Some("openai".to_string()),
-            Some("cli".to_string()),
-            Some("openai:cli".to_string()),
+            Some("responses".to_string()),
+            Some("openai:responses".to_string()),
         );
         let diagnostic = LocalExecutionRuntimeMissDiagnostic {
             reason: "all_candidates_skipped".to_string(),

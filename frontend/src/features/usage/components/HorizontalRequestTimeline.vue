@@ -546,7 +546,7 @@ interface NodeGroup {
   startIndex: number
   endIndex: number
   hasConversion: boolean  // 组内是否有格式转换候选
-  providerApiFormat: string | null  // 提供商 API 格式（如 openai:cli）
+  providerApiFormat: string | null  // 提供商 API 格式（如 openai:responses）
   isPoolGroup?: boolean
 }
 

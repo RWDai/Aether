@@ -2746,6 +2746,7 @@ fn openai_cli_legacy_alias_occurrences_are_whitelisted() {
         "crates/aether-admin/src/system.rs",
         "crates/aether-ai-formats/src/canonical.rs",
         "crates/aether-ai-formats/src/formats.rs",
+        "crates/aether-ai-formats/src/matrix.rs",
         "crates/aether-ai-formats/src/registry.rs",
         "crates/aether-ai-pipeline/src/contracts/report_kinds.rs",
         "crates/aether-ai-pipeline/src/conversion/registry.rs",

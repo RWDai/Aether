@@ -2,6 +2,7 @@ pub mod canonical;
 pub mod context;
 pub mod conversion;
 pub mod formats;
+pub mod matrix;
 pub mod planner;
 pub mod proxy;
 pub mod registry;
@@ -29,5 +30,11 @@ pub use formats::{
     is_openai_responses_format, legacy_openai_format_alias_matches,
     normalize_legacy_openai_format_alias, openai_format_storage_aliases, FormatFamily, FormatId,
     FormatProfile,
+};
+pub use matrix::{
+    request_candidate_api_format_preference, request_candidate_api_formats,
+    request_conversion_kind, request_conversion_requires_enable_flag,
+    sync_chat_response_conversion_kind, sync_cli_response_conversion_kind, RequestConversionKind,
+    SyncChatResponseConversionKind, SyncCliResponseConversionKind,
 };
 pub use registry::{build_stream_transcoder, convert_request, convert_response};

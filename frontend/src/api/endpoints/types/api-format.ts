@@ -31,8 +31,8 @@ export const API_FORMAT_LABELS: Record<string, string> = {
   CLAUDE: 'Claude Chat',
   CLAUDE_CLI: 'Claude CLI',
   OPENAI: 'OpenAI Chat',
-  OPENAI_CLI: 'OpenAI Responses',
-  OPENAI_COMPACT: 'OpenAI Responses Compact',
+  LEGACY_OPENAI_CLI: 'OpenAI Responses',
+  LEGACY_OPENAI_COMPACT: 'OpenAI Responses Compact',
   OPENAI_RESPONSES: 'OpenAI Responses',
   OPENAI_RESPONSES_COMPACT: 'OpenAI Responses Compact',
   OPENAI_IMAGE: 'OpenAI Image',
@@ -56,8 +56,8 @@ export const API_FORMAT_SHORT: Record<string, string> = {
   [API_FORMATS.GEMINI_VIDEO]: 'GV',
   // legacy 兼容（仅用于展示历史数据）
   OPENAI: 'O',
-  OPENAI_CLI: 'OR',
-  OPENAI_COMPACT: 'ORC',
+  LEGACY_OPENAI_CLI: 'OR',
+  LEGACY_OPENAI_COMPACT: 'ORC',
   OPENAI_RESPONSES: 'OR',
   OPENAI_RESPONSES_COMPACT: 'ORC',
   OPENAI_IMAGE: 'OI',
@@ -146,7 +146,23 @@ export function groupApiFormats(formats: string[]): ApiFormatGroup[] {
 export function formatApiFormat(format: string | null | undefined): string {
   if (!format) return '-'
   const raw = format.trim()
-  return API_FORMAT_LABELS[raw] || API_FORMAT_LABELS[raw.toLowerCase()] || API_FORMAT_LABELS[raw.toUpperCase()] || raw
+  const upper = raw.toUpperCase()
+  return API_FORMAT_LABELS[raw]
+    || API_FORMAT_LABELS[raw.toLowerCase()]
+    || API_FORMAT_LABELS[legacyUppercaseApiFormatKey(upper)]
+    || API_FORMAT_LABELS[upper]
+    || raw
+}
+
+function legacyUppercaseApiFormatKey(value: string): string {
+  switch (value) {
+    case 'OPENAI_CLI':
+      return 'LEGACY_OPENAI_CLI'
+    case 'OPENAI_COMPACT':
+      return 'LEGACY_OPENAI_COMPACT'
+    default:
+      return value
+  }
 }
 
 // 工具函数：按标准顺序排序 API 格式数组

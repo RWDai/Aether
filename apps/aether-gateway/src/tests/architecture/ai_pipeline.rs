@@ -2724,3 +2724,106 @@ fn ai_pipeline_openai_cli_legacy_names_stay_out_of_primary_paths() {
         );
     }
 }
+
+#[test]
+fn openai_cli_legacy_alias_occurrences_are_whitelisted() {
+    let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("workspace root should resolve");
+    let mut files = Vec::new();
+    for root in ["apps", "crates", "frontend/src"] {
+        collect_alias_scan_files(&workspace_root.join(root), &mut files);
+    }
+
+    let allowed_paths = [
+        "apps/aether-gateway/src/ai_pipeline/conversion/mod.rs",
+        "apps/aether-gateway/src/ai_pipeline/planner/common.rs",
+        "apps/aether-gateway/src/ai_pipeline/planner/standard/openai/chat/plans/sync.rs",
+        "apps/aether-gateway/src/execution_runtime/tests.rs",
+        "apps/aether-gateway/src/handlers/public/support/models/shared.rs",
+        "apps/aether-gateway/src/scheduler/affinity.rs",
+        "crates/aether-admin/src/system.rs",
+        "crates/aether-ai-formats/src/canonical.rs",
+        "crates/aether-ai-formats/src/formats.rs",
+        "crates/aether-ai-formats/src/registry.rs",
+        "crates/aether-ai-pipeline/src/contracts/report_kinds.rs",
+        "crates/aether-ai-pipeline/src/conversion/registry.rs",
+        "crates/aether-ai-pipeline/src/finalize/sync_products.rs",
+        "crates/aether-ai-pipeline/src/planner/common.rs",
+        "crates/aether-model-fetch/src/logic.rs",
+        "crates/aether-usage-runtime/src/report.rs",
+        "frontend/src/api/endpoints/types/api-format.ts",
+        "frontend/src/features/models/components/RoutingTab.vue",
+        "frontend/src/features/providers/components/EndpointFormDialog.vue",
+        "frontend/src/features/providers/components/PriorityManagementDialog.vue",
+        "frontend/src/features/usage/conversation/__tests__/stream.spec.ts",
+        "frontend/src/features/usage/utils/__tests__/status.spec.ts",
+        "frontend/src/features/usage/utils/status.ts",
+        "frontend/src/mocks/data.ts",
+        "frontend/src/mocks/handler.ts",
+    ];
+    let allowed = allowed_paths
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    let patterns = [
+        "openai:cli",
+        "openai:compact",
+        "openai_cli",
+        "openai_compact",
+        "OPENAI_CLI",
+        "OPENAI_COMPACT",
+        "OpenAI CLI",
+        "OpenAI Compact",
+    ];
+
+    let mut violations = Vec::new();
+    for file in files {
+        let relative = file
+            .strip_prefix(&workspace_root)
+            .expect("file should be under workspace root")
+            .to_string_lossy()
+            .replace('\\', "/");
+        if relative == "apps/aether-gateway/src/tests/architecture/ai_pipeline.rs" {
+            continue;
+        }
+
+        let source = std::fs::read_to_string(&file).expect("source file should be readable");
+        let hits = patterns
+            .iter()
+            .filter(|pattern| source.contains(**pattern))
+            .copied()
+            .collect::<Vec<_>>();
+        if !hits.is_empty() && !allowed.contains(relative.as_str()) {
+            violations.push(format!("{relative} -> {}", hits.join(", ")));
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "legacy OpenAI Responses aliases should stay confined to explicit compatibility files:\n{}",
+        violations.join("\n")
+    );
+}
+
+fn collect_alias_scan_files(root: &std::path::Path, files: &mut Vec<std::path::PathBuf>) {
+    for entry in std::fs::read_dir(root).expect("directory should be readable") {
+        let entry = entry.expect("directory entry should be readable");
+        let path = entry.path();
+        if path.is_dir() {
+            let name = path.file_name().and_then(|value| value.to_str());
+            if matches!(name, Some("target" | "node_modules" | ".git")) {
+                continue;
+            }
+            collect_alias_scan_files(&path, files);
+            continue;
+        }
+
+        if matches!(
+            path.extension().and_then(|value| value.to_str()),
+            Some("rs" | "ts" | "vue")
+        ) {
+            files.push(path);
+        }
+    }
+}

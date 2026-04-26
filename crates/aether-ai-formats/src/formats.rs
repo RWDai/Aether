@@ -1,4 +1,15 @@
+//! Format identity and per-wire-format adapters.
+//!
+//! Each child module owns the boundary between one external wire shape and
+//! the canonical IR. Registry conversion is intentionally constrained to:
+//! source format -> canonical -> target format.
+
 use std::{fmt, str::FromStr};
+
+pub mod claude_messages;
+pub mod gemini_generate_content;
+pub mod openai_chat;
+pub mod openai_responses;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum FormatFamily {

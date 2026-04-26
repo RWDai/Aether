@@ -1,4 +1,5 @@
 pub mod canonical;
+pub mod context;
 pub mod conversion;
 pub mod formats;
 pub mod planner;
@@ -22,12 +23,11 @@ pub use canonical::{
     CanonicalRole, CanonicalStopReason, CanonicalStreamEvent, CanonicalStreamFrame,
     CanonicalThinkingConfig, CanonicalToolChoice, CanonicalToolDefinition, CanonicalUsage,
 };
+pub use context::{FormatContext, FormatError};
 pub use formats::{
     is_openai_responses_compact_format, is_openai_responses_family_format,
     is_openai_responses_format, legacy_openai_format_alias_matches,
     normalize_legacy_openai_format_alias, openai_format_storage_aliases, FormatFamily, FormatId,
     FormatProfile,
 };
-pub use registry::{
-    build_stream_transcoder, convert_request, convert_response, FormatContext, FormatError,
-};
+pub use registry::{build_stream_transcoder, convert_request, convert_response};

@@ -9,7 +9,7 @@ mod request_candidate;
 
 pub use affinity::{
     build_scheduler_affinity_cache_key_for_api_key_id, candidate_affinity_hash, candidate_key,
-    compare_affinity_order, matches_affinity_target, SchedulerAffinityTarget,
+    matches_affinity_target, SchedulerAffinityTarget,
 };
 pub use auth::{
     auth_constraints_allow_api_format, auth_constraints_allow_model,
@@ -19,11 +19,9 @@ pub use candidate::{
     auth_api_key_concurrency_limit_reached, build_minimal_candidate_selection,
     candidate_is_selectable_with_runtime_state, candidate_runtime_skip_reason_with_state,
     candidate_supports_required_capability, collect_global_model_names_for_required_capability,
-    collect_selectable_candidates_from_keys, compare_candidates_by_priority_mode,
-    enumerate_minimal_candidate_selection, reorder_candidates_by_scheduler_health,
-    requested_capability_priority_for_candidate, BuildMinimalCandidateSelectionInput,
-    CandidateRuntimeSelectabilityInput, SchedulerMinimalCandidateSelectionCandidate,
-    SchedulerPriorityMode,
+    enumerate_minimal_candidate_selection, requested_capability_priority_for_candidate,
+    BuildMinimalCandidateSelectionInput, CandidateRuntimeSelectabilityInput,
+    SchedulerMinimalCandidateSelectionCandidate, SchedulerPriorityMode,
 };
 pub use health::{
     aggregate_provider_key_health_score, count_recent_active_requests_for_api_key,

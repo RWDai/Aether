@@ -1,6 +1,5 @@
 pub mod capability;
 pub mod enumeration;
-pub mod identity;
 pub mod selectability;
 pub mod selection;
 pub mod types;
@@ -11,15 +10,11 @@ pub use capability::{
 pub use enumeration::{
     collect_global_model_names_for_required_capability, enumerate_minimal_candidate_selection,
 };
-pub use identity::compare_candidates_by_priority_mode;
 pub use selectability::{
     auth_api_key_concurrency_limit_reached, candidate_is_selectable_with_runtime_state,
     candidate_runtime_skip_reason_with_state, CandidateRuntimeSelectabilityInput,
 };
-pub use selection::{
-    build_minimal_candidate_selection, collect_selectable_candidates_from_keys,
-    reorder_candidates_by_scheduler_health,
-};
+pub use selection::build_minimal_candidate_selection;
 pub use types::{
     BuildMinimalCandidateSelectionInput, SchedulerMinimalCandidateSelectionCandidate,
     SchedulerPriorityMode,
@@ -27,7 +22,7 @@ pub use types::{
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::BTreeMap;
 
     use aether_data_contracts::repository::candidate_selection::{
         StoredMinimalCandidateSelectionRow, StoredProviderModelMapping,
@@ -40,10 +35,9 @@ mod tests {
     use super::{
         auth_api_key_concurrency_limit_reached, build_minimal_candidate_selection,
         candidate_is_selectable_with_runtime_state, candidate_supports_required_capability,
-        collect_global_model_names_for_required_capability,
-        collect_selectable_candidates_from_keys, reorder_candidates_by_scheduler_health,
-        BuildMinimalCandidateSelectionInput, CandidateRuntimeSelectabilityInput,
-        SchedulerMinimalCandidateSelectionCandidate, SchedulerPriorityMode,
+        collect_global_model_names_for_required_capability, BuildMinimalCandidateSelectionInput,
+        CandidateRuntimeSelectabilityInput, SchedulerMinimalCandidateSelectionCandidate,
+        SchedulerPriorityMode,
     };
     use crate::SchedulerAuthConstraints;
 
@@ -286,66 +280,6 @@ mod tests {
         assert_eq!(candidates.len(), 2);
         assert_eq!(candidates[0].key_id, "key-2");
         assert_eq!(candidates[1].key_id, "key-1");
-    }
-
-    #[test]
-    fn reorders_candidates_by_health_before_affinity_tiebreak() {
-        let mut candidates = vec![
-            sample_candidate("1", None),
-            sample_candidate("2", None),
-            sample_candidate("3", None),
-        ];
-        let provider_key_rpm_states = BTreeMap::from([
-            ("key-1".to_string(), sample_key("1", 0.95)),
-            ("key-2".to_string(), sample_key("2", 0.40)),
-            ("key-3".to_string(), sample_key("3", 0.95)),
-        ]);
-
-        reorder_candidates_by_scheduler_health(
-            &mut candidates,
-            &provider_key_rpm_states,
-            None,
-            Some("api-key-1"),
-            SchedulerPriorityMode::GlobalKey,
-        );
-
-        assert_ne!(candidates[0].key_id, "key-2");
-        assert_ne!(candidates[1].key_id, "key-2");
-        assert_eq!(candidates[2].key_id, "key-2");
-    }
-
-    #[test]
-    fn collects_selectable_candidates_with_affinity_priority_and_dedup() {
-        let candidates = vec![
-            sample_candidate("1", None),
-            sample_candidate("2", None),
-            sample_candidate("1", None),
-        ];
-        let selectable_keys = BTreeSet::from([
-            (
-                "provider-1".to_string(),
-                "endpoint-1".to_string(),
-                "key-1".to_string(),
-            ),
-            (
-                "provider-2".to_string(),
-                "endpoint-2".to_string(),
-                "key-2".to_string(),
-            ),
-        ]);
-        let selected = collect_selectable_candidates_from_keys(
-            candidates,
-            &selectable_keys,
-            Some(&crate::SchedulerAffinityTarget {
-                provider_id: "provider-2".to_string(),
-                endpoint_id: "endpoint-2".to_string(),
-                key_id: "key-2".to_string(),
-            }),
-        );
-
-        assert_eq!(selected.len(), 2);
-        assert_eq!(selected[0].key_id, "key-2");
-        assert_eq!(selected[1].key_id, "key-1");
     }
 
     #[test]

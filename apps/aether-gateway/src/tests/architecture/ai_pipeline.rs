@@ -426,6 +426,7 @@ fn ai_pipeline_planner_separates_local_candidate_resolution_from_ranking() {
         "mod candidate_resolution;",
         "mod candidate_preparation;",
         "mod candidate_transport_ranking_facts;",
+        "mod pool_scheduler;",
     ] {
         assert!(
             planner_mod.contains(pattern),
@@ -435,6 +436,16 @@ fn ai_pipeline_planner_separates_local_candidate_resolution_from_ranking() {
 
     let candidate_resolution =
         read_workspace_file("apps/aether-gateway/src/ai_pipeline/planner/candidate_resolution.rs");
+    let ranking_call = candidate_resolution
+        .find("rank_eligible_local_execution_candidates(")
+        .expect("candidate_resolution.rs should call core-backed local candidate ranking");
+    let pool_scheduler_call = candidate_resolution
+        .find("apply_local_execution_pool_scheduler(")
+        .expect("candidate_resolution.rs should call pool scheduler after ranking");
+    assert!(
+        ranking_call < pool_scheduler_call,
+        "candidate_resolution.rs should rank eligible candidates before applying pool-internal account scheduling"
+    );
     for pattern in [
         "pub(crate) async fn filter_and_rank_local_execution_candidates(",
         "pub(crate) async fn filter_and_rank_local_execution_candidates_without_transport_pair_gate(",
@@ -518,6 +529,29 @@ fn ai_pipeline_planner_separates_local_candidate_resolution_from_ranking() {
         assert!(
             !candidate_transport_ranking_facts.contains(forbidden),
             "planner/candidate_transport_ranking_facts.rs should not own ranking or resolution helper {forbidden}"
+        );
+    }
+
+    let pool_scheduler =
+        read_workspace_file("apps/aether-gateway/src/ai_pipeline/planner/pool_scheduler.rs");
+    for pattern in [
+        "pub(crate) async fn apply_local_execution_pool_scheduler(",
+        "fn schedule_pool_group(",
+        "fn pool_group_key(",
+    ] {
+        assert!(
+            pool_scheduler.contains(pattern),
+            "planner/pool_scheduler.rs should own pool-internal account scheduling helper {pattern}"
+        );
+    }
+    for forbidden in [
+        "apply_scheduler_candidate_ranking",
+        "SchedulerRankableCandidate",
+        "rank_eligible_local_execution_candidates",
+    ] {
+        assert!(
+            !pool_scheduler.contains(forbidden),
+            "planner/pool_scheduler.rs should not own global candidate ranking helper {forbidden}"
         );
     }
 }

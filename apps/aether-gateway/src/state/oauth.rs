@@ -935,6 +935,7 @@ impl AppState {
             .await?
             .is_some();
         if updated {
+            self.clear_provider_transport_snapshot_cache();
             let _ = self.invalidate_local_oauth_refresh_entry(key_id).await;
         }
         Ok(updated)
@@ -1007,7 +1008,13 @@ impl AppState {
         let current_status_snapshot = latest_key.status_snapshot.take();
         latest_key.status_snapshot =
             sync_provider_key_oauth_status_snapshot(current_status_snapshot, &latest_key);
-        self.update_provider_catalog_key(&latest_key).await?;
+        if self
+            .update_provider_catalog_key(&latest_key)
+            .await?
+            .is_some()
+        {
+            self.clear_provider_transport_snapshot_cache();
+        }
         Ok(())
     }
 
@@ -1072,6 +1079,7 @@ impl AppState {
             .await?
             .is_some();
         if updated {
+            self.clear_provider_transport_snapshot_cache();
             let _ = self.invalidate_local_oauth_refresh_entry(key_id).await;
         }
         Ok(updated)

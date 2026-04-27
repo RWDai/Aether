@@ -4569,6 +4569,204 @@ async fn gateway_refreshes_admin_provider_oauth_key_locally_via_execution_runtim
 }
 
 #[tokio::test]
+async fn gateway_consecutive_manual_oauth_refresh_uses_rotated_refresh_token() {
+    let refresh_request_bodies = Arc::new(Mutex::new(Vec::<String>::new()));
+    let refresh_request_bodies_clone = Arc::clone(&refresh_request_bodies);
+    let execution_runtime = Router::new().route(
+        "/v1/execute/sync",
+        any(move |Json(plan): Json<ExecutionPlan>| {
+            let refresh_request_bodies_inner = Arc::clone(&refresh_request_bodies_clone);
+            async move {
+                if plan.request_id == "provider-oauth:local-refresh-token" {
+                    use base64::Engine as _;
+
+                    let body_text = plan
+                        .body
+                        .body_bytes_b64
+                        .as_deref()
+                        .and_then(|body| {
+                            base64::engine::general_purpose::STANDARD.decode(body).ok()
+                        })
+                        .and_then(|body| String::from_utf8(body).ok())
+                        .unwrap_or_default();
+                    refresh_request_bodies_inner
+                        .lock()
+                        .expect("mutex should lock")
+                        .push(body_text.clone());
+
+                    let (access_token, refresh_token) =
+                        if body_text.contains("refresh_token=old-codex-refresh-token") {
+                            (
+                                "refreshed-codex-access-token",
+                                "rotated-codex-refresh-token",
+                            )
+                        } else if body_text.contains("refresh_token=rotated-codex-refresh-token") {
+                            (
+                                "refreshed-codex-access-token-2",
+                                "rotated-codex-refresh-token-2",
+                            )
+                        } else {
+                            return Json(json!({
+                                "request_id": plan.request_id,
+                                "status_code": 401,
+                                "headers": {
+                                    "content-type": "application/json"
+                                },
+                                "body": {
+                                    "json_body": {
+                                        "error": {
+                                            "message": "unexpected refresh token"
+                                        }
+                                    }
+                                }
+                            }));
+                        };
+
+                    Json(json!({
+                        "request_id": plan.request_id,
+                        "status_code": 200,
+                        "headers": {
+                            "content-type": "application/json"
+                        },
+                        "body": {
+                            "json_body": {
+                                "access_token": access_token,
+                                "refresh_token": refresh_token,
+                                "token_type": "Bearer",
+                                "expires_in": 1800,
+                                "scope": "openid email profile offline_access",
+                                "email": "alice@example.com",
+                                "account_id": "acct-codex-123",
+                                "plan_type": "plus"
+                            }
+                        }
+                    }))
+                } else {
+                    Json(json!({
+                        "request_id": plan.request_id,
+                        "status_code": 200,
+                        "headers": {
+                            "content-type": "application/json"
+                        },
+                        "body": {
+                            "json_body": {}
+                        }
+                    }))
+                }
+            }
+        }),
+    );
+
+    let mut provider = sample_provider("provider-codex", "codex", 10);
+    provider.provider_type = "codex".to_string();
+    let endpoint = sample_endpoint(
+        "endpoint-codex-cli",
+        "provider-codex",
+        "openai:responses",
+        "https://chatgpt.com/backend-api/codex",
+    );
+
+    let mut key = sample_key(
+        "key-codex-oauth-consecutive-refresh",
+        "provider-codex",
+        "openai:responses",
+        "stale-codex-access-token",
+    );
+    key.auth_type = "oauth".to_string();
+    key.encrypted_auth_config = Some(
+        encrypt_python_fernet_plaintext(
+            DEVELOPMENT_ENCRYPTION_KEY,
+            r#"{"provider_type":"codex","refresh_token":"old-codex-refresh-token","email":"alice@example.com","account_id":"acct-codex-123","plan_type":"plus","expires_at":1}"#,
+        )
+        .expect("auth config ciphertext should build"),
+    );
+
+    let provider_catalog_repository = Arc::new(InMemoryProviderCatalogReadRepository::seed(
+        vec![provider],
+        vec![endpoint],
+        vec![key],
+    ));
+
+    let oauth_refresh =
+        crate::provider_transport::LocalOAuthRefreshCoordinator::with_adapters_for_tests(vec![
+            Arc::new(
+                crate::provider_transport::oauth_refresh::GenericOAuthRefreshAdapter::default()
+                    .with_token_url_for_tests("codex", "https://oauth.example/oauth/token"),
+            ),
+        ]);
+
+    let (execution_runtime_url, execution_runtime_handle) = start_server(execution_runtime).await;
+    let gateway = build_router_with_state(
+        build_state_with_execution_runtime_override(execution_runtime_url)
+            .with_data_state_for_tests(
+                GatewayDataState::with_provider_catalog_repository_for_tests(
+                    provider_catalog_repository.clone(),
+                )
+                .with_encryption_key_for_tests(DEVELOPMENT_ENCRYPTION_KEY),
+            )
+            .with_oauth_refresh_coordinator_for_tests(oauth_refresh),
+    );
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+    let client = reqwest::Client::new();
+
+    for _ in 0..2 {
+        let response = client
+            .post(format!(
+                "{gateway_url}/api/admin/provider-oauth/keys/key-codex-oauth-consecutive-refresh/refresh"
+            ))
+            .header(crate::constants::GATEWAY_HEADER, "rust-phase3b")
+            .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+            .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+            .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+            .send()
+            .await
+            .expect("request should succeed");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    let bodies = refresh_request_bodies
+        .lock()
+        .expect("mutex should lock")
+        .clone();
+    assert_eq!(bodies.len(), 2);
+    assert!(
+        bodies[0].contains("refresh_token=old-codex-refresh-token"),
+        "unexpected first refresh body: {}",
+        bodies[0]
+    );
+    assert!(
+        bodies[1].contains("refresh_token=rotated-codex-refresh-token"),
+        "unexpected second refresh body: {}",
+        bodies[1]
+    );
+
+    let stored_key = provider_catalog_repository
+        .list_keys_by_ids(&["key-codex-oauth-consecutive-refresh".to_string()])
+        .await
+        .expect("keys should list")
+        .into_iter()
+        .next()
+        .expect("refreshed key should exist");
+    let decrypted_auth_config = decrypt_python_fernet_ciphertext(
+        DEVELOPMENT_ENCRYPTION_KEY,
+        stored_key
+            .encrypted_auth_config
+            .as_deref()
+            .expect("auth config should exist"),
+    )
+    .expect("auth config should decrypt");
+    let auth_config: serde_json::Value =
+        serde_json::from_str(&decrypted_auth_config).expect("auth config should parse");
+    assert_eq!(
+        auth_config["refresh_token"],
+        "rotated-codex-refresh-token-2"
+    );
+
+    gateway_handle.abort();
+    execution_runtime_handle.abort();
+}
+
+#[tokio::test]
 async fn gateway_refreshes_admin_provider_oauth_key_locally_via_execution_runtime_key_proxy_before_system_proxy(
 ) {
     let execution_plans = Arc::new(Mutex::new(Vec::<ExecutionPlan>::new()));

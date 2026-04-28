@@ -16,7 +16,7 @@
         <Input
           id="usage-records-search"
           v-model="localSearch"
-          :placeholder="isAdmin ? '搜索用户/密钥' : '搜索密钥/模型'"
+          :placeholder="isAdmin ? '搜索用户/密钥/IP' : '搜索密钥/模型/IP'"
           class="w-[7.5rem] sm:w-48 h-8 text-xs border-border/60 pl-8"
         />
       </div>
@@ -282,6 +282,20 @@
             <span>{{ formatTokens(getRecordEffectiveInputTokens(record)) }}/{{ formatTokens(record.output_tokens || 0) }}</span>
           </div>
         </div>
+        <div
+          v-if="hasRecordOrigin(record)"
+          class="flex items-center gap-1.5 text-[11px] text-muted-foreground mt-1 min-w-0"
+        >
+          <span
+            class="truncate"
+            :title="getRecordClient(record)"
+          >客户端: {{ getRecordClient(record) }}</span>
+          <span class="text-muted-foreground/50 flex-shrink-0">|</span>
+          <span
+            class="truncate flex-shrink-0 max-w-[45%]"
+            :title="getRecordIp(record)"
+          >IP: {{ getRecordIp(record) }}</span>
+        </div>
       </div>
     </div>
 
@@ -313,6 +327,12 @@
           >
             提供商
           </TableHead>
+          <TableHead class="h-12 font-semibold w-[140px]">
+            客户端
+          </TableHead>
+          <TableHead class="h-12 font-semibold w-[120px]">
+            IP
+          </TableHead>
           <TableHead class="h-12 font-semibold w-[120px]">
             API格式
           </TableHead>
@@ -336,7 +356,7 @@
       <TableBody>
         <TableRow v-if="records.length === 0">
           <TableCell
-            :colspan="isAdmin ? 9 : 8"
+            :colspan="isAdmin ? 11 : 10"
             class="text-center py-12 text-muted-foreground"
           >
             暂无请求记录
@@ -473,6 +493,24 @@
                 <path d="M3 3v5h5" />
               </svg>
             </div>
+          </TableCell>
+          <TableCell
+            class="py-4 w-[140px]"
+            :title="getRecordClient(record)"
+          >
+            <span
+              class="text-xs truncate block"
+              :class="getRecordClient(record) === '-' ? 'text-muted-foreground' : ''"
+            >{{ getRecordClient(record) }}</span>
+          </TableCell>
+          <TableCell
+            class="py-4 w-[120px]"
+            :title="getRecordIp(record)"
+          >
+            <span
+              class="text-xs truncate block"
+              :class="getRecordIp(record) === '-' ? 'text-muted-foreground' : ''"
+            >{{ getRecordIp(record) }}</span>
           </TableCell>
           <TableCell
             class="py-4 w-[120px]"
@@ -839,6 +877,23 @@ function hasPositiveTokens(value: number | null | undefined): boolean {
 
 function formatOptionalTokens(value: number | null | undefined): string {
   return hasPositiveTokens(value) ? formatTokens(value) : '-'
+}
+
+function normalizeOriginValue(value: string | null | undefined): string | null {
+  const trimmed = value?.trim()
+  return trimmed ? trimmed : null
+}
+
+function getRecordClient(record: UsageRecord): string {
+  return normalizeOriginValue(record.client) ?? normalizeOriginValue(record.user_agent) ?? '-'
+}
+
+function getRecordIp(record: UsageRecord): string {
+  return normalizeOriginValue(record.ip) ?? normalizeOriginValue(record.client_ip) ?? '-'
+}
+
+function hasRecordOrigin(record: UsageRecord): boolean {
+  return getRecordClient(record) !== '-' || getRecordIp(record) !== '-'
 }
 
 // useDebounceFn 自动处理清理，无需 onUnmounted

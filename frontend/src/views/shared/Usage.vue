@@ -153,7 +153,7 @@ import {
   isUsageUpstreamStream,
   resolveDisplayRequestStatus,
 } from '@/features/usage/utils/status'
-import type { DateRangeParams, FilterStatusValue } from '@/features/usage/types'
+import type { DateRangeParams, FilterStatusValue, UsageRecord } from '@/features/usage/types'
 import type { UserOption } from '@/features/usage/components/UsageRecordsTable.vue'
 import { log } from '@/utils/logger'
 import type { ActivityHeatmap } from '@/types/activity'
@@ -224,6 +224,34 @@ const filterModel = ref('__all__')
 const filterProvider = ref('__all__')
 const filterApiFormat = ref('__all__')
 const filterStatus = ref<FilterStatusValue>('__all__')
+
+function normalizeUsageSearchValue(value: string | null | undefined): string | null {
+  const normalized = value?.trim().toLowerCase()
+  return normalized || null
+}
+
+function usageRecordMatchesSearch(record: UsageRecord, rawSearch: string): boolean {
+  const keywords = rawSearch.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  if (!keywords.length) return true
+
+  const searchableValues = [
+    record.api_key?.name,
+    record.api_key?.display,
+    record.api_key_name,
+    record.model,
+    record.target_model,
+    record.model_version,
+    record.provider,
+    record.client,
+    record.user_agent,
+    record.ip,
+    record.client_ip,
+  ]
+    .map(normalizeUsageSearchValue)
+    .filter((value): value is string => Boolean(value))
+
+  return keywords.every(keyword => searchableValues.some(value => value.includes(keyword)))
+}
 
 // 用户列表（仅管理员页面使用）
 const availableUsers = ref<UserOption[]>([])
@@ -334,6 +362,10 @@ const filteredRecords = computed(() => {
       records = records.filter(record =>
         record.api_format?.toUpperCase() === filterApiFormat.value.toUpperCase()
       )
+    }
+
+    if (filterSearch.value.trim()) {
+      records = records.filter(record => usageRecordMatchesSearch(record, filterSearch.value))
     }
 
     if (filterStatus.value !== '__all__') {
@@ -524,10 +556,14 @@ async function discoverActiveRequests() {
     })
 
     discoveredActiveRequestIds.clear()
-    retainedDiscoveredActiveRequestIds.forEach(id => discoveredActiveRequestIds.add(id))
+    retainedDiscoveredActiveRequestIds.forEach((id) => {
+      discoveredActiveRequestIds.add(id)
+    })
 
     if (unseenActiveRequestIds.length > 0) {
-      unseenActiveRequestIds.forEach(id => discoveredActiveRequestIds.add(id))
+      unseenActiveRequestIds.forEach((id) => {
+        discoveredActiveRequestIds.add(id)
+      })
       await refreshData()
     }
   } catch (error) {

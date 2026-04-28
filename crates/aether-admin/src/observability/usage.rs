@@ -178,6 +178,8 @@ pub fn admin_usage_matches_search(
         api_key_name.as_deref(),
         Some(item.model.as_str()),
         Some(item.provider_name.as_str()),
+        item.client_ip.as_deref(),
+        item.user_agent.as_deref(),
     ];
     search.split_whitespace().all(|keyword| {
         let keyword = keyword.to_ascii_lowercase();
@@ -969,6 +971,10 @@ fn admin_usage_active_request_json(
         "status_code": item.status_code,
         "error_message": item.error_message,
         "provider": item.provider_name,
+        "client": item.user_agent,
+        "ip": item.client_ip,
+        "user_agent": item.user_agent,
+        "client_ip": item.client_ip,
         "api_key_name": api_key_name,
         "provider_key_name": provider_key_name,
         "is_stream": item.is_stream,
@@ -1066,6 +1072,10 @@ pub fn admin_usage_record_json(
     let object = payload
         .as_object_mut()
         .expect("admin usage record payload should be an object");
+    object.insert("client".to_string(), json!(item.user_agent));
+    object.insert("ip".to_string(), json!(item.client_ip));
+    object.insert("user_agent".to_string(), json!(item.user_agent));
+    object.insert("client_ip".to_string(), json!(item.client_ip));
     object.insert("is_stream".to_string(), json!(item.is_stream));
     object.insert("upstream_is_stream".to_string(), json!(upstream_is_stream));
     object.insert(

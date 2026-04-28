@@ -989,6 +989,24 @@ async fn gateway_handles_admin_usage_records_locally_with_trusted_admin_principa
     let (upstream_url, upstream_hits, upstream_handle) =
         start_usage_upstream("/api/admin/usage/records").await;
 
+    let mut usage_b = sample_usage_row(
+        "usage-b",
+        "req-b",
+        Some("user-2"),
+        Some("key-2"),
+        Some("secondary"),
+        "Anthropic",
+        "claude-3-7",
+        "failed",
+        40,
+        10,
+        0.1,
+        0.12,
+        DAY_2_UNIX_SECS,
+    );
+    usage_b.client_ip = Some("203.0.113.42".to_string());
+    usage_b.user_agent = Some("AetherIssue357/1.0".to_string());
+
     let usage_repository = Arc::new(InMemoryUsageReadRepository::seed(vec![
         sample_usage_row(
             "usage-a",
@@ -1005,21 +1023,7 @@ async fn gateway_handles_admin_usage_records_locally_with_trusted_admin_principa
             0.36,
             DAY_1_UNIX_SECS,
         ),
-        sample_usage_row(
-            "usage-b",
-            "req-b",
-            Some("user-2"),
-            Some("key-2"),
-            Some("secondary"),
-            "Anthropic",
-            "claude-3-7",
-            "failed",
-            40,
-            10,
-            0.1,
-            0.12,
-            DAY_2_UNIX_SECS,
-        ),
+        usage_b,
     ]));
     let mut provider_key = sample_key("provider-key-1", "provider-1", "openai:chat", "sk-upstream");
     provider_key.name = "upstream-primary".to_string();
@@ -1066,6 +1070,8 @@ async fn gateway_handles_admin_usage_records_locally_with_trusted_admin_principa
     );
     assert_eq!(payload["records"][0]["effective_input_tokens"], 35);
     assert_eq!(payload["records"][0]["first_byte_time_ms"], 120);
+    assert_eq!(payload["records"][0]["client"], "AetherIssue357/1.0");
+    assert_eq!(payload["records"][0]["ip"], "203.0.113.42");
     assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
 
     gateway_handle.abort();

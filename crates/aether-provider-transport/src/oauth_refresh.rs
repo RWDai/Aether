@@ -3,6 +3,11 @@ use std::fmt;
 use std::sync::Arc;
 
 use aether_data::redis::{RedisLockKey, RedisLockRunner};
+use aether_oauth::core::OAuthError;
+use aether_oauth::network::{
+    OAuthHttpExecutor, OAuthHttpRequest, OAuthHttpResponse, OAuthNetworkContext,
+};
+use aether_oauth::provider::ProviderOAuthTransportContext;
 use async_trait::async_trait;
 use serde_json::Value;
 use thiserror::Error;
@@ -71,6 +76,11 @@ pub enum LocalOAuthRefreshError {
         provider_type: &'static str,
         status_code: u16,
         body_excerpt: String,
+    },
+    #[error("{provider_type} oauth refresh transport failed: {message}")]
+    TransportMessage {
+        provider_type: &'static str,
+        message: String,
     },
     #[error("{provider_type} oauth refresh returned invalid response: {message}")]
     InvalidResponse {
@@ -141,6 +151,127 @@ impl LocalOAuthHttpExecutor for ReqwestLocalOAuthHttpExecutor {
             status_code,
             body_text,
         })
+    }
+}
+
+pub(crate) struct ProviderOAuthLocalHttpExecutor<'a> {
+    provider_type: &'static str,
+    transport: &'a GatewayProviderTransportSnapshot,
+    inner: &'a dyn LocalOAuthHttpExecutor,
+}
+
+impl<'a> ProviderOAuthLocalHttpExecutor<'a> {
+    pub(crate) fn new(
+        provider_type: &'static str,
+        transport: &'a GatewayProviderTransportSnapshot,
+        inner: &'a dyn LocalOAuthHttpExecutor,
+    ) -> Self {
+        Self {
+            provider_type,
+            transport,
+            inner,
+        }
+    }
+}
+
+#[async_trait]
+impl OAuthHttpExecutor for ProviderOAuthLocalHttpExecutor<'_> {
+    async fn execute(&self, request: OAuthHttpRequest) -> Result<OAuthHttpResponse, OAuthError> {
+        let response = self
+            .inner
+            .execute(
+                self.provider_type,
+                self.transport,
+                &LocalOAuthHttpRequest {
+                    request_id: "provider-oauth:local-refresh-token",
+                    method: request.method,
+                    url: request.url,
+                    headers: request.headers,
+                    json_body: request.json_body,
+                    body_bytes: request.body_bytes,
+                },
+            )
+            .await
+            .map_err(local_refresh_error_to_oauth_error)?;
+        let json_body = serde_json::from_str::<Value>(&response.body_text).ok();
+        Ok(OAuthHttpResponse {
+            status_code: response.status_code,
+            body_text: response.body_text,
+            json_body,
+        })
+    }
+}
+
+pub(crate) fn provider_oauth_transport_context_from_snapshot(
+    transport: &GatewayProviderTransportSnapshot,
+) -> ProviderOAuthTransportContext {
+    ProviderOAuthTransportContext {
+        provider_id: transport.provider.id.clone(),
+        provider_type: transport.provider.provider_type.clone(),
+        endpoint_id: Some(transport.endpoint.id.clone()),
+        key_id: Some(transport.key.id.clone()),
+        auth_type: Some(transport.key.auth_type.clone()),
+        decrypted_api_key: Some(transport.key.decrypted_api_key.clone()),
+        decrypted_auth_config: transport.key.decrypted_auth_config.clone(),
+        provider_config: transport.provider.config.clone(),
+        endpoint_config: transport.endpoint.config.clone(),
+        key_config: None,
+        network: OAuthNetworkContext::provider_operation(None),
+    }
+}
+
+pub(crate) fn oauth_error_to_local_refresh_error(
+    provider_type: &'static str,
+    error: OAuthError,
+) -> LocalOAuthRefreshError {
+    match error {
+        OAuthError::HttpStatus {
+            status_code,
+            body_excerpt,
+        } => LocalOAuthRefreshError::HttpStatus {
+            provider_type,
+            status_code,
+            body_excerpt,
+        },
+        OAuthError::Transport(message) => LocalOAuthRefreshError::TransportMessage {
+            provider_type,
+            message,
+        },
+        OAuthError::InvalidRequest(message)
+        | OAuthError::InvalidResponse(message)
+        | OAuthError::Storage(message)
+        | OAuthError::UnsupportedProvider(message) => LocalOAuthRefreshError::InvalidResponse {
+            provider_type,
+            message,
+        },
+        OAuthError::InvalidState => LocalOAuthRefreshError::InvalidResponse {
+            provider_type,
+            message: "oauth state is invalid or expired".to_string(),
+        },
+        OAuthError::EncryptionUnavailable => LocalOAuthRefreshError::InvalidResponse {
+            provider_type,
+            message: "oauth encryption unavailable".to_string(),
+        },
+    }
+}
+
+fn local_refresh_error_to_oauth_error(error: LocalOAuthRefreshError) -> OAuthError {
+    match error {
+        LocalOAuthRefreshError::Transport { source, .. } => {
+            OAuthError::Transport(source.to_string())
+        }
+        LocalOAuthRefreshError::TransportMessage { message, .. } => OAuthError::Transport(message),
+        LocalOAuthRefreshError::HttpStatus {
+            status_code,
+            body_excerpt,
+            ..
+        } => OAuthError::HttpStatus {
+            status_code,
+            body_excerpt,
+        },
+        LocalOAuthRefreshError::InvalidResponse { message, .. } => {
+            OAuthError::InvalidResponse(message)
+        }
     }
 }
 

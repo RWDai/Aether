@@ -17,6 +17,7 @@ pub mod url;
 pub mod vertex;
 mod video;
 
+pub use aether_oauth as oauth;
 pub use auth::{build_passthrough_headers, ensure_upstream_auth_header};
 pub use cache::{provider_transport_snapshot_looks_refreshed, ProviderTransportSnapshotCacheKey};
 pub use generic_oauth::{

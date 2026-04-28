@@ -5675,9 +5675,11 @@ async fn gateway_handles_admin_oauth_supported_types_locally_with_trusted_admin_
     assert_eq!(response.status(), StatusCode::OK);
     let payload: serde_json::Value = response.json().await.expect("json body should parse");
     let items = payload.as_array().expect("items should be array");
-    assert_eq!(items.len(), 1);
+    assert_eq!(items.len(), 2);
     assert_eq!(items[0]["provider_type"], "linuxdo");
     assert_eq!(items[0]["display_name"], "Linux Do");
+    assert_eq!(items[1]["provider_type"], "custom_oidc");
+    assert_eq!(items[1]["display_name"], "Custom OIDC");
     assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
 
     gateway_handle.abort();
@@ -5796,6 +5798,152 @@ async fn gateway_upserts_admin_oauth_provider_locally_with_trusted_admin_princip
         .expect("lookup should succeed")
         .expect("provider should exist");
     assert!(stored.client_secret_encrypted.is_some());
+    assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
+
+    gateway_handle.abort();
+    upstream_handle.abort();
+}
+
+#[tokio::test]
+async fn gateway_rejects_custom_oidc_without_allowed_domains() {
+    let upstream_hits = Arc::new(Mutex::new(0usize));
+    let upstream_hits_clone = Arc::clone(&upstream_hits);
+    let upstream = Router::new().route(
+        "/api/admin/oauth/providers/custom_oidc",
+        any(move |_request: Request| {
+            let upstream_hits_inner = Arc::clone(&upstream_hits_clone);
+            async move {
+                *upstream_hits_inner.lock().expect("mutex should lock") += 1;
+                (StatusCode::OK, Body::from("unexpected upstream hit"))
+            }
+        }),
+    );
+
+    let repository = Arc::new(InMemoryOAuthProviderRepository::default());
+    let (upstream_url, upstream_handle) = start_server(upstream).await;
+    let gateway = build_router_with_state(
+        AppState::new()
+            .expect("gateway should build")
+            .with_data_state_for_tests(GatewayDataState::with_oauth_provider_repository_for_tests(
+                repository,
+            )),
+    );
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+
+    let response = reqwest::Client::new()
+        .put(format!(
+            "{gateway_url}/api/admin/oauth/providers/custom_oidc"
+        ))
+        .header(crate::constants::GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .json(&json!({
+            "display_name": "Custom OIDC",
+            "client_id": "custom-client",
+            "authorization_url_override": "https://idp.example.com/oauth/authorize",
+            "token_url_override": "https://idp.example.com/oauth/token",
+            "userinfo_url_override": "https://idp.example.com/oauth/userinfo",
+            "scopes": ["openid", "profile", "email"],
+            "redirect_uri": "https://backend.example.com/oauth/callback",
+            "frontend_callback_url": "https://frontend.example.com/auth/callback",
+            "attribute_mapping": {"sub": "sub", "email": "email"},
+            "extra_config": {},
+            "is_enabled": true
+        }))
+        .send()
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let payload: serde_json::Value = response.json().await.expect("json body should parse");
+    assert_eq!(
+        payload["error"]["message"],
+        "custom_oidc 必须在 extra_config.allowed_domains 配置域名白名单"
+    );
+    assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
+
+    gateway_handle.abort();
+    upstream_handle.abort();
+}
+
+#[tokio::test]
+async fn gateway_upserts_custom_oidc_with_allowed_domains() {
+    let upstream_hits = Arc::new(Mutex::new(0usize));
+    let upstream_hits_clone = Arc::clone(&upstream_hits);
+    let upstream = Router::new().route(
+        "/api/admin/oauth/providers/custom_oidc",
+        any(move |_request: Request| {
+            let upstream_hits_inner = Arc::clone(&upstream_hits_clone);
+            async move {
+                *upstream_hits_inner.lock().expect("mutex should lock") += 1;
+                (StatusCode::OK, Body::from("unexpected upstream hit"))
+            }
+        }),
+    );
+
+    let repository = Arc::new(InMemoryOAuthProviderRepository::default());
+    let (upstream_url, upstream_handle) = start_server(upstream).await;
+    let gateway = build_router_with_state(
+        AppState::new()
+            .expect("gateway should build")
+            .with_data_state_for_tests(GatewayDataState::with_oauth_provider_repository_for_tests(
+                repository.clone(),
+            )),
+    );
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+
+    let response = reqwest::Client::new()
+        .put(format!(
+            "{gateway_url}/api/admin/oauth/providers/custom_oidc"
+        ))
+        .header(crate::constants::GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .json(&json!({
+            "display_name": "Custom OIDC",
+            "client_id": "custom-client",
+            "authorization_url_override": "https://idp.example.com/oauth/authorize",
+            "token_url_override": "https://idp.example.com/oauth/token",
+            "userinfo_url_override": "https://idp.example.com/oauth/userinfo",
+            "scopes": ["openid", "profile", "email"],
+            "redirect_uri": "https://backend.example.com/oauth/callback",
+            "frontend_callback_url": "https://frontend.example.com/auth/callback",
+            "attribute_mapping": {"sub": "id", "email": "profile.email"},
+            "extra_config": {"allowed_domains": ["idp.example.com"]},
+            "is_enabled": true
+        }))
+        .send()
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: serde_json::Value = response.json().await.expect("json body should parse");
+    assert_eq!(payload["provider_type"], "custom_oidc");
+    assert_eq!(payload["is_enabled"], true);
+
+    let stored = repository
+        .get_oauth_provider_config("custom_oidc")
+        .await
+        .expect("lookup should succeed")
+        .expect("provider should exist");
+    assert_eq!(
+        stored.authorization_url_override.as_deref(),
+        Some("https://idp.example.com/oauth/authorize")
+    );
+    assert_eq!(
+        stored
+            .extra_config
+            .as_ref()
+            .and_then(|value| {
+                value
+                    .get("allowed_domains")
+                    .and_then(serde_json::Value::as_array)
+            })
+            .map(Vec::len),
+        Some(1)
+    );
     assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
 
     gateway_handle.abort();

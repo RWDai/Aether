@@ -159,6 +159,7 @@ dependencies = [
  "aether-data-contracts",
  "aether-http",
  "aether-model-fetch",
+ "aether-oauth",
  "aether-provider-transport",
  "aether-runtime",
  "aether-scheduler-core",
@@ -232,6 +233,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "aether-oauth"
+version = "0.1.0"
+dependencies = [
+ "aether-contracts",
+ "async-trait",
+ "base64 0.22.1",
+ "http",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
+ "tokio",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "aether-provider-transport"
 version = "0.1.0"
 dependencies = [
@@ -240,6 +259,7 @@ dependencies = [
  "aether-crypto",
  "aether-data",
  "aether-data-contracts",
+ "aether-oauth",
  "aether-video-tasks-core",
  "async-trait",
  "axum",

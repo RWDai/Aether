@@ -95,6 +95,19 @@ pub(super) async fn execute_admin_provider_oauth_refresh(
                 response::oauth_refresh_failed_service_unavailable_response(source.to_string()),
             ));
         }
+        Err(AdminLocalOAuthRefreshError::TransportMessage { message, .. }) => {
+            tracing::warn!(
+                trace_id = %trace_id,
+                key_id = %key_id,
+                provider_id = %provider.id,
+                provider_type = %provider_type,
+                error = %message,
+                "gateway manual provider oauth refresh transport failed"
+            );
+            return Ok(RefreshDispatch::Respond(
+                response::oauth_refresh_failed_service_unavailable_response(message),
+            ));
+        }
         Err(AdminLocalOAuthRefreshError::InvalidResponse { message, .. }) => {
             tracing::warn!(
                 trace_id = %trace_id,

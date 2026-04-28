@@ -1,14 +1,16 @@
 use std::collections::BTreeMap;
-use std::time::{SystemTime, UNIX_EPOCH};
 
+use aether_oauth::provider::providers::{
+    GenericProviderOAuthAdapter, GENERIC_PROVIDER_OAUTH_TEMPLATES,
+};
+use aether_oauth::provider::{ProviderOAuthAccount, ProviderOAuthAdapter, ProviderOAuthTokenSet};
 use async_trait::async_trait;
-use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
-use url::form_urlencoded;
+use serde_json::Value;
 
 use super::oauth_refresh::{
-    CachedOAuthEntry, LocalOAuthHttpExecutor, LocalOAuthHttpRequest, LocalOAuthRefreshAdapter,
-    LocalOAuthRefreshError, LocalResolvedOAuthRequestAuth,
+    oauth_error_to_local_refresh_error, provider_oauth_transport_context_from_snapshot,
+    CachedOAuthEntry, LocalOAuthHttpExecutor, LocalOAuthRefreshAdapter, LocalOAuthRefreshError,
+    LocalResolvedOAuthRequestAuth, ProviderOAuthLocalHttpExecutor,
 };
 use super::snapshot::GatewayProviderTransportSnapshot;
 
@@ -16,66 +18,11 @@ const AUTH_HEADER_NAME: &str = "authorization";
 const OAUTH_REFRESH_SKEW_SECS: u64 = 120;
 const PLACEHOLDER_API_KEY: &str = "__placeholder__";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct GenericOAuthTemplate {
-    provider_type: &'static str,
-    token_url: &'static str,
-    client_id: &'static str,
-    client_secret: &'static str,
-    scopes: &'static [&'static str],
-    uses_json_payload: bool,
-}
-
-const GENERIC_OAUTH_TEMPLATES: &[GenericOAuthTemplate] = &[
-    GenericOAuthTemplate {
-        provider_type: "claude_code",
-        token_url: "https://console.anthropic.com/v1/oauth/token",
-        client_id: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
-        client_secret: "",
-        scopes: &["org:create_api_key", "user:profile", "user:inference"],
-        uses_json_payload: true,
-    },
-    GenericOAuthTemplate {
-        provider_type: "codex",
-        token_url: "https://auth.openai.com/oauth/token",
-        client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
-        client_secret: "",
-        scopes: &["openid", "email", "profile", "offline_access"],
-        uses_json_payload: false,
-    },
-    GenericOAuthTemplate {
-        provider_type: "gemini_cli",
-        token_url: "https://oauth2.googleapis.com/token",
-        client_id: "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com",
-        client_secret: "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",
-        scopes: &[
-            "https://www.googleapis.com/auth/cloud-platform",
-            "https://www.googleapis.com/auth/userinfo.email",
-            "https://www.googleapis.com/auth/userinfo.profile",
-        ],
-        uses_json_payload: false,
-    },
-    GenericOAuthTemplate {
-        provider_type: "antigravity",
-        token_url: "https://oauth2.googleapis.com/token",
-        client_id: "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com",
-        client_secret: "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",
-        scopes: &[
-            "https://www.googleapis.com/auth/cloud-platform",
-            "https://www.googleapis.com/auth/userinfo.email",
-            "https://www.googleapis.com/auth/userinfo.profile",
-            "https://www.googleapis.com/auth/cclog",
-            "https://www.googleapis.com/auth/experimentsandconfigs",
-        ],
-        uses_json_payload: false,
-    },
-];
-
 pub fn supports_local_generic_oauth_request_auth_resolution(
     transport: &GatewayProviderTransportSnapshot,
 ) -> bool {
     transport.key.auth_type.trim().eq_ignore_ascii_case("oauth")
-        && template_for_provider_type(transport.provider.provider_type.as_str()).is_some()
+        && generic_provider_type(transport.provider.provider_type.as_str()).is_some()
 }
 
 #[derive(Debug, Clone, Default)]
@@ -94,11 +41,15 @@ impl GenericOAuthRefreshAdapter {
         self
     }
 
-    fn token_url_for_template(&self, template: GenericOAuthTemplate) -> String {
-        self.token_url_overrides
-            .get(template.provider_type)
-            .cloned()
-            .unwrap_or_else(|| template.token_url.to_string())
+    fn adapter_for_provider_type(
+        &self,
+        provider_type: &'static str,
+    ) -> Option<GenericProviderOAuthAdapter> {
+        let adapter = GenericProviderOAuthAdapter::for_provider_type(provider_type)?;
+        if let Some(token_url) = self.token_url_overrides.get(provider_type) {
+            return Some(adapter.with_token_url_override(token_url.clone()));
+        }
+        Some(adapter)
     }
 
     fn auth_config_from_transport(transport: &GatewayProviderTransportSnapshot) -> Option<Value> {
@@ -186,18 +137,15 @@ impl GenericOAuthRefreshAdapter {
     }
 
     fn build_cached_entry(
-        &self,
-        template: GenericOAuthTemplate,
-        access_token: &str,
-        metadata: Value,
-        expires_at_unix_secs: Option<u64>,
+        provider_type: &'static str,
+        refreshed: ProviderOAuthTokenSet,
     ) -> CachedOAuthEntry {
         CachedOAuthEntry {
-            provider_type: template.provider_type.to_string(),
+            provider_type: provider_type.to_string(),
             auth_header_name: AUTH_HEADER_NAME.to_string(),
-            auth_header_value: format!("Bearer {access_token}"),
-            expires_at_unix_secs,
-            metadata: Some(metadata),
+            auth_header_value: refreshed.token_set.bearer_header_value(),
+            expires_at_unix_secs: refreshed.token_set.expires_at_unix_secs,
+            metadata: Some(refreshed.auth_config),
         }
     }
 }
@@ -274,252 +222,70 @@ impl LocalOAuthRefreshAdapter for GenericOAuthRefreshAdapter {
         transport: &GatewayProviderTransportSnapshot,
         entry: Option<&CachedOAuthEntry>,
     ) -> Result<Option<CachedOAuthEntry>, LocalOAuthRefreshError> {
-        let Some(template) = template_for_provider_type(transport.provider.provider_type.as_str())
+        let Some(provider_type) = generic_provider_type(transport.provider.provider_type.as_str())
         else {
             return Ok(None);
         };
-        let cached_auth_config =
-            entry.and_then(|cached| Self::auth_config_from_entry(transport, cached));
-        let transport_auth_config = Self::auth_config_from_transport(transport);
-        let base_auth_config = self.base_auth_config(transport, entry);
-        let base_auth_config_source = match (
-            base_auth_config.as_ref(),
-            cached_auth_config.as_ref(),
-            transport_auth_config.as_ref(),
-        ) {
-            (Some(selected), Some(cached), Some(transport_auth))
-                if selected == transport_auth && selected != cached =>
-            {
-                "transport_auth_config"
-            }
-            (Some(selected), Some(cached), Some(transport_auth))
-                if selected == cached && selected != transport_auth =>
-            {
-                "cached_entry"
-            }
-            (Some(_), Some(_), Some(_)) => "cached_entry",
-            (Some(_), Some(_), None) => "cached_entry",
-            (Some(_), None, Some(_)) => "transport_auth_config",
-            _ => "none",
+        let Some(auth_config) = self.base_auth_config(transport, entry) else {
+            return Ok(None);
         };
-        let mut metadata = base_auth_config
-            .and_then(|value| value.as_object().cloned())
-            .unwrap_or_default();
-        let Some(refresh_token) = metadata.get("refresh_token").and_then(non_empty_string) else {
+        let Some(refresh_token) = refresh_token_from_auth_config(&auth_config) else {
             tracing::warn!(
                 key_id = %transport.key.id,
                 provider_id = %transport.provider.id,
-                provider_type = template.provider_type,
-                auth_config_source = base_auth_config_source,
+                provider_type,
                 "gateway generic oauth refresh skipped because auth_config has no refresh_token"
             );
             return Ok(None);
         };
+        let Some(adapter) = self.adapter_for_provider_type(provider_type) else {
+            return Ok(None);
+        };
 
-        let token_url = self.token_url_for_template(template);
-        let request_refresh_token_fingerprint = secret_fingerprint(refresh_token.as_str());
         tracing::info!(
             key_id = %transport.key.id,
             provider_id = %transport.provider.id,
             endpoint_id = %transport.endpoint.id,
-            provider_type = template.provider_type,
-            auth_config_source = base_auth_config_source,
-            request_refresh_token_fingerprint = %request_refresh_token_fingerprint,
+            provider_type,
             request_refresh_token_len = refresh_token.len(),
-            token_url = %token_url,
-            uses_json_payload = template.uses_json_payload,
-            "gateway generic oauth refresh request prepared"
+            "gateway generic oauth refresh delegated to provider oauth adapter"
         );
-        let scope = (!template.scopes.is_empty()).then(|| template.scopes.join(" "));
-        let response = if template.uses_json_payload {
-            let mut body = serde_json::Map::from_iter([
-                (
-                    "grant_type".to_string(),
-                    Value::String("refresh_token".to_string()),
-                ),
-                (
-                    "client_id".to_string(),
-                    Value::String(template.client_id.to_string()),
-                ),
-                (
-                    "refresh_token".to_string(),
-                    Value::String(refresh_token.clone()),
-                ),
-            ]);
-            if let Some(scope) = scope.as_ref() {
-                body.insert("scope".to_string(), Value::String(scope.clone()));
-            }
-            executor
-                .execute(
-                    template.provider_type,
-                    transport,
-                    &LocalOAuthHttpRequest {
-                        request_id: "provider-oauth:local-refresh-token",
-                        method: reqwest::Method::POST,
-                        url: token_url,
-                        headers: BTreeMap::from([
-                            ("content-type".to_string(), "application/json".to_string()),
-                            ("accept".to_string(), "application/json".to_string()),
-                        ]),
-                        json_body: Some(Value::Object(body)),
-                        body_bytes: None,
-                    },
-                )
-                .await?
-        } else {
-            let form_body = {
-                let mut form = form_urlencoded::Serializer::new(String::new());
-                form.append_pair("grant_type", "refresh_token");
-                form.append_pair("client_id", template.client_id);
-                form.append_pair("refresh_token", refresh_token.as_str());
-                if let Some(scope) = scope.as_ref() {
-                    form.append_pair("scope", scope);
-                }
-                if !template.client_secret.trim().is_empty() {
-                    form.append_pair("client_secret", template.client_secret);
-                }
-                form.finish().into_bytes()
-            };
-            executor
-                .execute(
-                    template.provider_type,
-                    transport,
-                    &LocalOAuthHttpRequest {
-                        request_id: "provider-oauth:local-refresh-token",
-                        method: reqwest::Method::POST,
-                        url: token_url,
-                        headers: BTreeMap::from([
-                            (
-                                "content-type".to_string(),
-                                "application/x-www-form-urlencoded".to_string(),
-                            ),
-                            ("accept".to_string(), "application/json".to_string()),
-                        ]),
-                        json_body: None,
-                        body_bytes: Some(form_body),
-                    },
-                )
-                .await?
-        };
-        let status = reqwest::StatusCode::from_u16(response.status_code).unwrap_or_default();
-        let body = response.body_text;
-        if !status.is_success() {
-            let body_excerpt = truncate_body(&body);
-            tracing::warn!(
-                key_id = %transport.key.id,
-                provider_id = %transport.provider.id,
-                endpoint_id = %transport.endpoint.id,
-                provider_type = template.provider_type,
-                status_code = status.as_u16(),
-                request_refresh_token_fingerprint = %request_refresh_token_fingerprint,
-                body_excerpt = %body_excerpt,
-                "gateway generic oauth refresh returned error status"
-            );
-            return Err(LocalOAuthRefreshError::HttpStatus {
-                provider_type: template.provider_type,
-                status_code: status.as_u16(),
-                body_excerpt,
-            });
-        }
 
-        let payload: Value =
-            serde_json::from_str(&body).map_err(|_| LocalOAuthRefreshError::InvalidResponse {
-                provider_type: template.provider_type,
-                message: "generic oauth refresh returned non-json body".to_string(),
-            })?;
-        let Some(access_token) = payload.get("access_token").and_then(non_empty_string) else {
-            return Err(LocalOAuthRefreshError::InvalidResponse {
-                provider_type: template.provider_type,
-                message: "generic oauth refresh returned empty access_token".to_string(),
-            });
+        let oauth_executor =
+            ProviderOAuthLocalHttpExecutor::new(provider_type, transport, executor);
+        let ctx = provider_oauth_transport_context_from_snapshot(transport);
+        let account = ProviderOAuthAccount {
+            provider_type: provider_type.to_string(),
+            access_token: current_access_token(transport, entry).unwrap_or_default(),
+            expires_at_unix_secs: auth_config_expires_at(&auth_config),
+            auth_config,
+            identity: BTreeMap::new(),
         };
+        let refreshed = adapter
+            .refresh(&oauth_executor, &ctx, &account)
+            .await
+            .map_err(|error| oauth_error_to_local_refresh_error(provider_type, error))?;
 
-        let expires_at_unix_secs = resolve_expires_at(payload.get("expires_in"));
-        metadata.insert(
-            "provider_type".to_string(),
-            Value::String(template.provider_type.to_string()),
-        );
-        metadata.insert("updated_at".to_string(), json!(current_unix_secs()));
-        let response_refresh_token = payload.get("refresh_token").and_then(non_empty_string);
-        let response_refresh_token_fingerprint = response_refresh_token
-            .as_deref()
-            .map(secret_fingerprint)
-            .unwrap_or_else(|| "-".to_string());
-        let response_refresh_token_rotated = response_refresh_token
-            .as_deref()
-            .map(|value| value != refresh_token.as_str());
-        if let Some(refresh_token) = response_refresh_token.as_ref() {
-            metadata.insert(
-                "refresh_token".to_string(),
-                Value::String(refresh_token.clone()),
-            );
-        }
-        if let Some(token_type) = payload.get("token_type").and_then(non_empty_string) {
-            metadata.insert("token_type".to_string(), Value::String(token_type));
-        }
-        if let Some(scope) = payload.get("scope").and_then(non_empty_string) {
-            metadata.insert("scope".to_string(), Value::String(scope));
-        }
-        match expires_at_unix_secs {
-            Some(expires_at_unix_secs) => {
-                metadata.insert("expires_at".to_string(), json!(expires_at_unix_secs));
-            }
-            None => {
-                metadata.remove("expires_at");
-            }
-        }
-        let stored_refresh_token_fingerprint = metadata
-            .get("refresh_token")
-            .and_then(non_empty_string)
-            .map(|value| secret_fingerprint(value.as_str()))
-            .unwrap_or_else(|| "-".to_string());
-        let stored_refresh_token_source = if response_refresh_token.is_some() {
-            "response"
-        } else {
-            "existing"
-        };
         tracing::info!(
             key_id = %transport.key.id,
             provider_id = %transport.provider.id,
             endpoint_id = %transport.endpoint.id,
-            provider_type = template.provider_type,
-            status_code = status.as_u16(),
-            request_refresh_token_fingerprint = %request_refresh_token_fingerprint,
-            response_has_refresh_token = response_refresh_token.is_some(),
-            response_refresh_token_fingerprint = %response_refresh_token_fingerprint,
-            response_refresh_token_rotated = ?response_refresh_token_rotated,
-            stored_refresh_token_source = stored_refresh_token_source,
-            stored_refresh_token_fingerprint = %stored_refresh_token_fingerprint,
-            expires_at_unix_secs = ?expires_at_unix_secs,
+            provider_type,
+            expires_at_unix_secs = ?refreshed.token_set.expires_at_unix_secs,
+            response_has_refresh_token = refreshed.token_set.refresh_token.is_some(),
             "gateway generic oauth refresh succeeded"
         );
-        if response_refresh_token.is_none() && template.provider_type == "codex" {
-            tracing::warn!(
-                key_id = %transport.key.id,
-                provider_id = %transport.provider.id,
-                endpoint_id = %transport.endpoint.id,
-                provider_type = template.provider_type,
-                request_refresh_token_fingerprint = %request_refresh_token_fingerprint,
-                stored_refresh_token_fingerprint = %stored_refresh_token_fingerprint,
-                "gateway codex oauth refresh succeeded without replacement refresh_token"
-            );
-        }
 
-        Ok(Some(self.build_cached_entry(
-            template,
-            access_token.as_str(),
-            Value::Object(metadata),
-            expires_at_unix_secs,
-        )))
+        Ok(Some(Self::build_cached_entry(provider_type, refreshed)))
     }
 }
 
-fn template_for_provider_type(provider_type: &str) -> Option<GenericOAuthTemplate> {
+fn generic_provider_type(provider_type: &str) -> Option<&'static str> {
     let normalized = provider_type.trim();
-    GENERIC_OAUTH_TEMPLATES
+    GENERIC_PROVIDER_OAUTH_TEMPLATES
         .iter()
         .find(|template| normalized.eq_ignore_ascii_case(template.provider_type))
-        .copied()
+        .map(|template| template.provider_type)
 }
 
 fn refresh_token_from_auth_config(auth_config: &Value) -> Option<String> {
@@ -529,25 +295,24 @@ fn refresh_token_from_auth_config(auth_config: &Value) -> Option<String> {
         .and_then(non_empty_string)
 }
 
+fn auth_config_expires_at(auth_config: &Value) -> Option<u64> {
+    auth_config
+        .as_object()
+        .and_then(|object| object.get("expires_at"))
+        .and_then(|value| parse_u64_value(Some(value)))
+}
+
 fn auth_config_expires_soon(auth_config: Option<&Value>) -> bool {
-    expires_at_requires_refresh(
-        auth_config
-            .and_then(|value| value.as_object())
-            .and_then(|object| object.get("expires_at"))
-            .and_then(|value| parse_u64_value(Some(value))),
-    )
+    expires_at_requires_refresh(auth_config.and_then(auth_config_expires_at))
 }
 
 fn expires_at_requires_refresh(expires_at_unix_secs: Option<u64>) -> bool {
     expires_at_unix_secs
         .map(|expires_at_unix_secs| {
-            current_unix_secs() >= expires_at_unix_secs.saturating_sub(OAUTH_REFRESH_SKEW_SECS)
+            aether_oauth::core::current_unix_secs()
+                >= expires_at_unix_secs.saturating_sub(OAUTH_REFRESH_SKEW_SECS)
         })
         .unwrap_or(false)
-}
-
-fn resolve_expires_at(expires_in: Option<&Value>) -> Option<u64> {
-    parse_u64_value(expires_in).map(|expires_in| current_unix_secs().saturating_add(expires_in))
 }
 
 fn parse_u64_value(value: Option<&Value>) -> Option<u64> {
@@ -566,28 +331,22 @@ fn non_empty_string(value: &Value) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn secret_fingerprint(value: &str) -> String {
-    let digest = Sha256::digest(value.as_bytes());
-    let mut fingerprint = String::with_capacity(16);
-    for byte in digest.iter().take(8) {
-        use std::fmt::Write as _;
-        let _ = write!(&mut fingerprint, "{byte:02x}");
-    }
-    fingerprint
-}
-
-fn current_unix_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .ok()
-        .map(|value| value.as_secs())
-        .unwrap_or_default()
-}
-
-fn truncate_body(body: &str) -> String {
-    let body = body.trim();
-    if body.is_empty() {
-        return String::from("-");
-    }
-    body.chars().take(500).collect()
+fn current_access_token(
+    transport: &GatewayProviderTransportSnapshot,
+    entry: Option<&CachedOAuthEntry>,
+) -> Option<String> {
+    entry
+        .and_then(|entry| {
+            entry
+                .auth_header_value
+                .trim()
+                .strip_prefix("Bearer ")
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .or_else(|| {
+            let secret = transport.key.decrypted_api_key.trim();
+            (!secret.is_empty() && secret != PLACEHOLDER_API_KEY).then(|| secret.to_string())
+        })
 }

@@ -48,6 +48,7 @@ mod log_ids;
 mod maintenance;
 pub(crate) mod middleware;
 mod model_fetch;
+mod oauth;
 mod orchestration;
 mod provider_key_auth;
 pub(crate) use aether_provider_transport as provider_transport;

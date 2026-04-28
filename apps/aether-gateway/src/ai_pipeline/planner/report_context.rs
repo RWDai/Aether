@@ -5,6 +5,7 @@ use serde_json::{Map, Value};
 
 use crate::ai_pipeline::contracts::ExecutionRuntimeAuthContext;
 use crate::ai_pipeline::planner::candidate_metadata::append_ranking_metadata_to_object;
+use crate::headers::RequestOrigin;
 use crate::orchestration::ExecutionAttemptIdentity;
 
 pub(crate) struct LocalExecutionReportContextParts<'a> {
@@ -32,6 +33,7 @@ pub(crate) struct LocalExecutionReportContextParts<'a> {
     pub(crate) provider_request_method: Option<Value>,
     pub(crate) provider_request_headers: Option<&'a BTreeMap<String, String>>,
     pub(crate) original_headers: &'a http::HeaderMap,
+    pub(crate) request_origin: Option<&'a RequestOrigin>,
     pub(crate) original_request_body_json: Option<&'a Value>,
     pub(crate) original_request_body_base64: Option<&'a str>,
     pub(crate) client_requested_stream: bool,
@@ -123,6 +125,27 @@ pub(crate) fn build_local_execution_report_context(
         ))
         .expect("control headers should serialize"),
     );
+    let fallback_origin = crate::headers::request_origin_from_headers(parts.original_headers);
+    let client_ip = parts
+        .request_origin
+        .and_then(|origin| origin.client_ip.as_deref())
+        .or(fallback_origin.client_ip.as_deref());
+    if let Some(client_ip) = client_ip {
+        object.insert(
+            "client_ip".to_string(),
+            Value::String(client_ip.to_string()),
+        );
+    }
+    let user_agent = parts
+        .request_origin
+        .and_then(|origin| origin.user_agent.as_deref())
+        .or(fallback_origin.user_agent.as_deref());
+    if let Some(user_agent) = user_agent {
+        object.insert(
+            "user_agent".to_string(),
+            Value::String(user_agent.to_string()),
+        );
+    }
     object.insert(
         "original_request_body".to_string(),
         crate::ai_pipeline::build_report_context_original_request_echo(

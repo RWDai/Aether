@@ -296,6 +296,7 @@ pub(crate) async fn record_failed_usage_for_runtime_miss_request(
     diagnostic: Option<&LocalExecutionRuntimeMissDiagnostic>,
     context: &LocalExecutionRuntimeMissContext,
     request_headers: &HeaderMap,
+    request_origin: Option<&crate::headers::RequestOrigin>,
     request_body: Option<&Bytes>,
 ) {
     if !state.usage_runtime.is_enabled() {
@@ -352,6 +353,25 @@ pub(crate) async fn record_failed_usage_for_runtime_miss_request(
         "trace_id".to_string(),
         Value::String(request_id.to_string()),
     );
+    let fallback_origin = crate::headers::request_origin_from_headers(request_headers);
+    let client_ip = request_origin
+        .and_then(|origin| origin.client_ip.as_deref())
+        .or(fallback_origin.client_ip.as_deref());
+    if let Some(client_ip) = client_ip {
+        request_metadata.insert(
+            "client_ip".to_string(),
+            Value::String(client_ip.to_string()),
+        );
+    }
+    let user_agent = request_origin
+        .and_then(|origin| origin.user_agent.as_deref())
+        .or(fallback_origin.user_agent.as_deref());
+    if let Some(user_agent) = user_agent {
+        request_metadata.insert(
+            "user_agent".to_string(),
+            Value::String(user_agent.to_string()),
+        );
+    }
     let mut data = UsageEventData {
         user_id: context.auth_user_id.clone(),
         api_key_id: context.auth_api_key_id.clone(),

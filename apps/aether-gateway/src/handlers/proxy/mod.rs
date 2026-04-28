@@ -49,7 +49,10 @@ use crate::handlers::shared::{
     local_proxy_route_requires_buffered_body, request_enables_control_execute,
     should_strip_forwarded_provider_credential_header, should_strip_forwarded_trusted_admin_header,
 };
-use crate::headers::{extract_or_generate_trace_id, should_skip_request_header};
+use crate::headers::{
+    extract_or_generate_trace_id, request_origin_from_headers_and_remote,
+    should_skip_request_header,
+};
 use crate::router::RequestAdmissionError;
 use crate::{
     AppState, FrontdoorUserRpmOutcome, GatewayError, GatewayFallbackMetricKind,
@@ -708,7 +711,9 @@ pub(crate) async fn proxy_request(
         )) => return Err(GatewayError::Internal(message)),
     };
     let request_admission_ms = started_at.elapsed().as_millis() as u64;
-    let (parts, body) = request.into_parts();
+    let (mut parts, body) = request.into_parts();
+    let request_origin = request_origin_from_headers_and_remote(&parts.headers, remote_addr.ip());
+    parts.extensions.insert(request_origin);
     let trace_id = extract_or_generate_trace_id(&parts.headers);
     state.clear_local_execution_runtime_miss_diagnostic(&trace_id);
     if request_hits_execution_loop_guard(&parts) {
@@ -1361,6 +1366,7 @@ pub(crate) async fn proxy_request(
                 local_execution_runtime_miss_diagnostic.as_ref(),
                 &local_execution_runtime_miss_context,
                 &parts.headers,
+                parts.extensions.get::<crate::headers::RequestOrigin>(),
                 Some(buffered_body),
             )
             .await;

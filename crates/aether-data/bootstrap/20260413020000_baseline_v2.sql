@@ -1092,7 +1092,9 @@ CREATE TABLE IF NOT EXISTS public.usage (
     actual_cache_creation_cost_usd_1h numeric(20,8) DEFAULT '0'::numeric NOT NULL,
     actual_cache_cost_usd numeric(20,8) DEFAULT '0'::numeric NOT NULL,
     cache_creation_price_per_1m_5m numeric(20,8),
-    cache_creation_price_per_1m_1h numeric(20,8)
+    cache_creation_price_per_1m_1h numeric(20,8),
+    client_ip character varying(45),
+    user_agent text
 );
 
 
@@ -3508,6 +3510,14 @@ CREATE INDEX IF NOT EXISTS ix_system_configs_id ON public.system_configs USING b
 --
 
 CREATE INDEX IF NOT EXISTS ix_usage_created_at ON public.usage USING btree (created_at);
+
+
+
+--
+-- Name: ix_usage_client_ip; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX IF NOT EXISTS ix_usage_client_ip ON public.usage USING btree (client_ip);
 
 
 

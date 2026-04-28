@@ -109,7 +109,7 @@ pub(crate) async fn maybe_build_local_same_format_provider_decision_payload_for_
                 provider_request_method: Some(serde_json::Value::Null),
                 provider_request_headers: Some(&resolved.provider_request_headers),
                 original_headers: &parts.headers,
-                request_origin: parts.extensions.get::<crate::headers::RequestOrigin>(),
+                request_origin: parts.extensions.get::<crate::ai_pipeline::RequestOrigin>(),
                 original_request_body_json: Some(body_json),
                 original_request_body_base64: None,
                 client_requested_stream: body_json

@@ -49,6 +49,7 @@ pub(crate) use self::planner::{
 pub(crate) use self::pure::*;
 pub(crate) use crate::control::GatewayControlDecision;
 pub(crate) use crate::execution_runtime::{ConversionMode, ExecutionStrategy};
+pub(crate) use crate::headers::RequestOrigin;
 
 pub(crate) fn build_provider_transport_request_url(
     transport: &GatewayProviderTransportSnapshot,
@@ -103,6 +104,10 @@ pub(crate) fn build_report_context_original_request_echo(
 
 pub(crate) fn is_json_request(headers: &http::HeaderMap) -> bool {
     crate::headers::is_json_request(headers)
+}
+
+pub(crate) fn request_origin_from_headers(headers: &http::HeaderMap) -> RequestOrigin {
+    crate::headers::request_origin_from_headers(headers)
 }
 
 pub(crate) fn extract_gemini_model_from_path(path: &str) -> Option<String> {

@@ -3,9 +3,8 @@ use std::collections::BTreeMap;
 use aether_scheduler_core::SchedulerRankingOutcome;
 use serde_json::{Map, Value};
 
-use crate::ai_pipeline::contracts::ExecutionRuntimeAuthContext;
 use crate::ai_pipeline::planner::candidate_metadata::append_ranking_metadata_to_object;
-use crate::headers::RequestOrigin;
+use crate::ai_pipeline::{request_origin_from_headers, ExecutionRuntimeAuthContext, RequestOrigin};
 use crate::orchestration::ExecutionAttemptIdentity;
 
 pub(crate) struct LocalExecutionReportContextParts<'a> {
@@ -125,7 +124,7 @@ pub(crate) fn build_local_execution_report_context(
         ))
         .expect("control headers should serialize"),
     );
-    let fallback_origin = crate::headers::request_origin_from_headers(parts.original_headers);
+    let fallback_origin = request_origin_from_headers(parts.original_headers);
     let client_ip = parts
         .request_origin
         .and_then(|origin| origin.client_ip.as_deref())

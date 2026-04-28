@@ -31,6 +31,9 @@ pub fn build_upsert_usage_record_from_event(
     let (status, billing_status) = lifecycle_status_and_billing(event.event_type);
     let data = event.data.clone();
     let now_unix_secs = event.timestamp_ms / 1_000;
+    let request_metadata = sanitize_usage_request_metadata(data.request_metadata.clone());
+    let client_ip = metadata_string(request_metadata.as_ref(), "client_ip");
+    let user_agent = metadata_string(request_metadata.as_ref(), "user_agent");
 
     Ok(UpsertUsageRecord {
         request_id: event.request_id.clone(),
@@ -51,6 +54,8 @@ pub fn build_upsert_usage_record_from_event(
         endpoint_api_format: data.endpoint_api_format,
         provider_api_family: data.provider_api_family,
         provider_endpoint_kind: data.provider_endpoint_kind,
+        client_ip,
+        user_agent,
         has_format_conversion: data.has_format_conversion,
         is_stream: data.is_stream,
         input_tokens: data.input_tokens,
@@ -123,7 +128,7 @@ pub fn build_upsert_usage_record_from_event(
                 )
             },
         ),
-        request_metadata: sanitize_usage_request_metadata(data.request_metadata),
+        request_metadata,
         finalized_at_unix_secs: Some(now_unix_secs),
         created_at_unix_ms: Some(now_unix_secs),
         updated_at_unix_secs: now_unix_secs,

@@ -316,6 +316,8 @@ mod tests {
             endpoint_api_format: Some("openai:chat".to_string()),
             provider_api_family: Some("openai".to_string()),
             provider_endpoint_kind: Some("chat".to_string()),
+            client_ip: None,
+            user_agent: None,
             has_format_conversion: Some(false),
             is_stream: Some(false),
             input_tokens: Some(10),

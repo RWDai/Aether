@@ -72,6 +72,8 @@ async fn validates_upsert_before_hitting_database() {
             endpoint_api_format: Some("openai:chat".to_string()),
             provider_api_family: Some("openai".to_string()),
             provider_endpoint_kind: Some("chat".to_string()),
+            client_ip: None,
+            user_agent: None,
             has_format_conversion: Some(false),
             is_stream: Some(false),
             input_tokens: Some(10),
@@ -557,9 +559,11 @@ fn usage_sql_casts_json_payload_bind_parameters_explicitly() {
 
 #[test]
 fn usage_sql_insert_values_aligns_request_metadata_and_timestamps() {
-    assert!(super::UPSERT_SQL.contains("\n  $51::json,\n  $52,\n  $53::json,\n  CASE"));
-    assert!(super::UPSERT_SQL.contains("WHEN $54 IS NULL THEN NULL"));
-    assert!(super::UPSERT_SQL.contains("TO_TIMESTAMP($55::double precision)"));
+    assert!(
+        super::UPSERT_SQL.contains("\n  $51::json,\n  $52,\n  $53::json,\n  $54,\n  $55,\n  CASE")
+    );
+    assert!(super::UPSERT_SQL.contains("WHEN $56 IS NULL THEN NULL"));
+    assert!(super::UPSERT_SQL.contains("TO_TIMESTAMP($57::double precision)"));
 }
 
 #[test]
@@ -644,13 +648,13 @@ fn usage_sql_clears_legacy_header_columns_on_upsert() {
 #[test]
 fn usage_sql_detached_body_flags_clear_inline_and_compressed_columns() {
     assert!(super::UPSERT_SQL
-        .contains("WHEN EXCLUDED.request_body_compressed IS NOT NULL OR $56 THEN NULL"));
+        .contains("WHEN EXCLUDED.request_body_compressed IS NOT NULL OR $58 THEN NULL"));
     assert!(super::UPSERT_SQL
-        .contains("WHEN EXCLUDED.provider_request_body_compressed IS NOT NULL OR $57 THEN NULL"));
+        .contains("WHEN EXCLUDED.provider_request_body_compressed IS NOT NULL OR $59 THEN NULL"));
     assert!(super::UPSERT_SQL
-        .contains("WHEN EXCLUDED.response_body_compressed IS NOT NULL OR $58 THEN NULL"));
+        .contains("WHEN EXCLUDED.response_body_compressed IS NOT NULL OR $60 THEN NULL"));
     assert!(super::UPSERT_SQL
-        .contains("WHEN EXCLUDED.client_response_body_compressed IS NOT NULL OR $59 THEN NULL"));
+        .contains("WHEN EXCLUDED.client_response_body_compressed IS NOT NULL OR $61 THEN NULL"));
 }
 
 #[test]
@@ -1016,6 +1020,8 @@ fn usage_routing_snapshot_from_usage_only_activates_for_routing_metadata() {
             endpoint_api_format: Some("openai:chat".to_string()),
             provider_api_family: Some("openai".to_string()),
             provider_endpoint_kind: Some("chat".to_string()),
+            client_ip: None,
+            user_agent: None,
             has_format_conversion: Some(false),
             is_stream: Some(false),
             input_tokens: Some(1),
@@ -1115,6 +1121,8 @@ fn usage_routing_snapshot_from_usage_only_activates_for_routing_metadata() {
             endpoint_api_format: Some("openai:chat".to_string()),
             provider_api_family: Some("openai".to_string()),
             provider_endpoint_kind: Some("chat".to_string()),
+            client_ip: None,
+            user_agent: None,
             has_format_conversion: Some(true),
             is_stream: Some(false),
             input_tokens: Some(1),
@@ -1193,6 +1201,8 @@ fn usage_routing_snapshot_from_usage_prefers_typed_routing_fields_without_metada
             endpoint_api_format: Some("openai:chat".to_string()),
             provider_api_family: Some("openai".to_string()),
             provider_endpoint_kind: Some("chat".to_string()),
+            client_ip: None,
+            user_agent: None,
             has_format_conversion: Some(true),
             is_stream: Some(false),
             input_tokens: Some(1),
@@ -1327,6 +1337,8 @@ fn usage_settlement_pricing_snapshot_from_usage_extracts_typed_billing_fields() 
             endpoint_api_format: Some("openai:chat".to_string()),
             provider_api_family: Some("openai".to_string()),
             provider_endpoint_kind: Some("chat".to_string()),
+            client_ip: None,
+            user_agent: None,
             has_format_conversion: Some(false),
             is_stream: Some(false),
             input_tokens: Some(1),

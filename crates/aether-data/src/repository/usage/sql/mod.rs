@@ -1810,6 +1810,12 @@ OR (\"usage\".error_message IS NOT NULL AND BTRIM(\"usage\".error_message) <> ''
             builder
                 .push(" OR LOWER(COALESCE(\"usage\".provider_name, '')) LIKE ")
                 .push_bind(pattern.clone());
+            builder
+                .push(" OR LOWER(COALESCE(\"usage\".client_ip, '')) LIKE ")
+                .push_bind(pattern.clone());
+            builder
+                .push(" OR LOWER(COALESCE(\"usage\".user_agent, '')) LIKE ")
+                .push_bind(pattern.clone());
             if query.auth_user_reader_available {
                 let matched_user_ids = query
                     .matched_user_ids_by_keyword
@@ -2073,6 +2079,12 @@ OR (\"usage\".error_message IS NOT NULL AND BTRIM(\"usage\".error_message) <> ''
                 .push_bind(pattern.clone());
             builder
                 .push(" OR LOWER(COALESCE(\"usage\".provider_name, '')) LIKE ")
+                .push_bind(pattern.clone());
+            builder
+                .push(" OR LOWER(COALESCE(\"usage\".client_ip, '')) LIKE ")
+                .push_bind(pattern.clone());
+            builder
+                .push(" OR LOWER(COALESCE(\"usage\".user_agent, '')) LIKE ")
                 .push_bind(pattern.clone());
             if query.auth_user_reader_available {
                 let matched_user_ids = query
@@ -6365,6 +6377,8 @@ ORDER BY "usage".user_id ASC
                         .bind(&client_response_body_storage.inline_json)
                         .bind(None::<Vec<u8>>)
                         .bind(&request_metadata_json)
+                        .bind(&usage.client_ip)
+                        .bind(&usage.user_agent)
                         .bind(usage.finalized_at_unix_secs.map(|value| value as f64))
                         .bind(usage.created_at_unix_ms.map(|value| value as f64))
                         .bind(request_body_storage.has_detached_blob())
@@ -7055,6 +7069,8 @@ fn map_usage_row(
         row.try_get("updated_at_unix_secs").map_postgres_err()?,
         row.try_get("finalized_at_unix_secs").map_postgres_err()?,
     )?;
+    usage.client_ip = row_try_get_optional(row, "client_ip")?;
+    usage.user_agent = row_try_get_optional(row, "user_agent")?;
     usage.cache_creation_input_tokens = row
         .try_get::<Option<i32>, _>("cache_creation_input_tokens")
         .map_postgres_err()?

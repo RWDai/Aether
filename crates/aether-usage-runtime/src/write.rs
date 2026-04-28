@@ -1026,6 +1026,7 @@ fn build_lifecycle_usage_record_owned(
     } else {
         sanitize_usage_request_metadata(request_metadata)
     };
+    let request_metadata_object = request_metadata.as_ref().and_then(Value::as_object);
 
     Ok(UpsertUsageRecord {
         request_id,
@@ -1046,6 +1047,8 @@ fn build_lifecycle_usage_record_owned(
         endpoint_api_format,
         provider_api_family,
         provider_endpoint_kind,
+        client_ip: context_string(request_metadata_object, "client_ip"),
+        user_agent: context_string(request_metadata_object, "user_agent"),
         has_format_conversion,
         is_stream: Some(is_stream),
         input_tokens: None,
@@ -1123,6 +1126,7 @@ fn build_lifecycle_usage_record_impl(
     } else {
         sanitize_usage_request_metadata_ref(seed.request_metadata.as_ref())
     };
+    let request_metadata_object = request_metadata.as_ref().and_then(Value::as_object);
 
     Ok(UpsertUsageRecord {
         request_id: seed.request_id.clone(),
@@ -1143,6 +1147,8 @@ fn build_lifecycle_usage_record_impl(
         endpoint_api_format: seed.endpoint_api_format.clone(),
         provider_api_family: seed.provider_api_family.clone(),
         provider_endpoint_kind: seed.provider_endpoint_kind.clone(),
+        client_ip: context_string(request_metadata_object, "client_ip"),
+        user_agent: context_string(request_metadata_object, "user_agent"),
         has_format_conversion: seed.has_format_conversion,
         is_stream: Some(seed.is_stream),
         input_tokens: None,
@@ -1530,6 +1536,12 @@ fn build_runtime_request_metadata_seed_from_parts(
     let mut metadata = Map::new();
     if let Some(trace_id) = context_string(context, "trace_id") {
         metadata.insert("trace_id".to_string(), Value::String(trace_id));
+    }
+    if let Some(client_ip) = context_string(context, "client_ip") {
+        metadata.insert("client_ip".to_string(), Value::String(client_ip));
+    }
+    if let Some(user_agent) = context_string(context, "user_agent") {
+        metadata.insert("user_agent".to_string(), Value::String(user_agent));
     }
     if let Some(client_requested_stream) = context_bool(context, "client_requested_stream") {
         metadata.insert(
@@ -2531,7 +2543,9 @@ mod tests {
         let record = build_pending_usage_record(
             &plan,
             Some(&json!({
-                "api_key_is_standalone": true
+                "api_key_is_standalone": true,
+                "client_ip": "203.0.113.42",
+                "user_agent": "AetherCLI/2.0"
             })),
             1_700_000_000,
         )
@@ -2540,9 +2554,13 @@ mod tests {
         assert_eq!(
             record.request_metadata,
             Some(json!({
-                "api_key_is_standalone": true
+                "api_key_is_standalone": true,
+                "client_ip": "203.0.113.42",
+                "user_agent": "AetherCLI/2.0"
             }))
         );
+        assert_eq!(record.client_ip.as_deref(), Some("203.0.113.42"));
+        assert_eq!(record.user_agent.as_deref(), Some("AetherCLI/2.0"));
     }
 
     #[test]
@@ -3896,6 +3914,8 @@ mod tests {
                     "authorization": "Bearer outcome-secret",
                     "accept": "application/json"
                 },
+                "client_ip": "198.51.100.7",
+                "user_agent": "AetherDesktop/3.0",
                 "original_request_body": {
                     "payload": "x".repeat(MAX_USAGE_CAPTURE_BYTES + 1)
                 }
@@ -3915,6 +3935,23 @@ mod tests {
                 "payload": "x".repeat(MAX_USAGE_CAPTURE_BYTES + 1)
             }))
         );
+        assert_eq!(
+            data.request_metadata,
+            Some(json!({
+                "client_ip": "198.51.100.7",
+                "user_agent": "AetherDesktop/3.0"
+            }))
+        );
+
+        let record = build_upsert_usage_record_from_event(&UsageEvent {
+            event_type: UsageEventType::Completed,
+            request_id: plan.request_id.clone(),
+            timestamp_ms: 1_700_000_000_000,
+            data,
+        })
+        .expect("usage event should build an upsert record");
+        assert_eq!(record.client_ip.as_deref(), Some("198.51.100.7"));
+        assert_eq!(record.user_agent.as_deref(), Some("AetherDesktop/3.0"));
     }
 
     #[test]

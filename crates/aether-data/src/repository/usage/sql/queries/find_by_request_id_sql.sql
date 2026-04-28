@@ -18,6 +18,8 @@ SELECT
   "usage".endpoint_api_format,
   "usage".provider_api_family,
   "usage".provider_endpoint_kind,
+  "usage".client_ip,
+  "usage".user_agent,
   COALESCE("usage".has_format_conversion, FALSE) AS has_format_conversion,
   COALESCE("usage".is_stream, FALSE) AS is_stream,
   CAST("usage".input_tokens AS INTEGER) AS input_tokens,

@@ -339,13 +339,27 @@ fn usage_matches_keyword_search_query(
         .as_deref()
         .unwrap_or_default()
         .to_ascii_lowercase();
+    let client_ip = item
+        .client_ip
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let user_agent = item
+        .user_agent
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
 
     query.keywords.iter().enumerate().all(|(index, keyword)| {
         let keyword = keyword.trim();
         if keyword.is_empty() {
             return true;
         }
-        if model.contains(keyword) || provider.contains(keyword) {
+        if model.contains(keyword)
+            || provider.contains(keyword)
+            || client_ip.contains(keyword)
+            || user_agent.contains(keyword)
+        {
             return true;
         }
         if query.auth_user_reader_available {
@@ -2264,6 +2278,16 @@ impl UsageWriteRepository for InMemoryUsageReadRepository {
             endpoint_api_format: usage.endpoint_api_format,
             provider_api_family: usage.provider_api_family,
             provider_endpoint_kind: usage.provider_endpoint_kind,
+            client_ip: usage.client_ip.or_else(|| {
+                existing
+                    .as_ref()
+                    .and_then(|existing| existing.client_ip.clone())
+            }),
+            user_agent: usage.user_agent.or_else(|| {
+                existing
+                    .as_ref()
+                    .and_then(|existing| existing.user_agent.clone())
+            }),
             has_format_conversion: usage.has_format_conversion.unwrap_or(false),
             is_stream: usage.is_stream.unwrap_or(false),
             input_tokens: usage.input_tokens.unwrap_or_default(),
@@ -2579,7 +2603,9 @@ mod tests {
         StoredProviderUsageWindow, StoredRequestUsageAudit, UpsertUsageRecord, UsageReadRepository,
         UsageWriteRepository,
     };
-    use aether_data_contracts::repository::usage::{usage_body_ref, UsageBodyField};
+    use aether_data_contracts::repository::usage::{
+        usage_body_ref, UsageAuditKeywordSearchQuery, UsageBodyField,
+    };
     use serde_json::json;
 
     fn sample_usage(request_id: &str, created_at_unix_ms: i64) -> StoredRequestUsageAudit {
@@ -2644,6 +2670,8 @@ mod tests {
             endpoint_api_format: None,
             provider_api_family: None,
             provider_endpoint_kind: None,
+            client_ip: None,
+            user_agent: None,
             has_format_conversion: Some(false),
             is_stream: Some(false),
             input_tokens: None,
@@ -2714,6 +2742,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn keyword_search_matches_client_ip_and_user_agent() {
+        let mut usage = sample_usage("req-origin-1", 100);
+        usage.client_ip = Some("203.0.113.42".to_string());
+        usage.user_agent = Some("AetherIssue357/1.0".to_string());
+        let repository = InMemoryUsageReadRepository::seed(vec![usage]);
+
+        let by_ip = repository
+            .list_usage_audits_by_keyword_search(&UsageAuditKeywordSearchQuery {
+                keywords: vec!["203.0.113.42".to_string()],
+                newest_first: true,
+                ..UsageAuditKeywordSearchQuery::default()
+            })
+            .await
+            .expect("keyword search by IP should succeed");
+        assert_eq!(by_ip.len(), 1);
+        assert_eq!(by_ip[0].request_id, "req-origin-1");
+
+        let by_user_agent = repository
+            .list_usage_audits_by_keyword_search(&UsageAuditKeywordSearchQuery {
+                keywords: vec!["aetherissue357".to_string()],
+                newest_first: true,
+                ..UsageAuditKeywordSearchQuery::default()
+            })
+            .await
+            .expect("keyword search by client should succeed");
+        assert_eq!(by_user_agent.len(), 1);
+        assert_eq!(by_user_agent[0].request_id, "req-origin-1");
+    }
+
+    #[tokio::test]
     async fn stale_pending_update_does_not_regress_finalized_usage() {
         let repository = InMemoryUsageReadRepository::default();
         repository
@@ -2736,6 +2794,8 @@ mod tests {
                 endpoint_api_format: Some("openai:chat".to_string()),
                 provider_api_family: Some("openai".to_string()),
                 provider_endpoint_kind: Some("chat".to_string()),
+                client_ip: None,
+                user_agent: None,
                 has_format_conversion: Some(false),
                 is_stream: Some(false),
                 input_tokens: Some(3),
@@ -2809,6 +2869,8 @@ mod tests {
                 endpoint_api_format: Some("openai:chat".to_string()),
                 provider_api_family: Some("openai".to_string()),
                 provider_endpoint_kind: Some("chat".to_string()),
+                client_ip: None,
+                user_agent: None,
                 has_format_conversion: Some(false),
                 is_stream: Some(false),
                 input_tokens: None,
@@ -2896,6 +2958,8 @@ mod tests {
                 endpoint_api_format: Some("openai:chat".to_string()),
                 provider_api_family: Some("openai".to_string()),
                 provider_endpoint_kind: Some("chat".to_string()),
+                client_ip: None,
+                user_agent: None,
                 has_format_conversion: Some(false),
                 is_stream: Some(false),
                 input_tokens: None,
@@ -2969,6 +3033,8 @@ mod tests {
                 endpoint_api_format: Some("openai:chat".to_string()),
                 provider_api_family: Some("openai".to_string()),
                 provider_endpoint_kind: Some("chat".to_string()),
+                client_ip: None,
+                user_agent: None,
                 has_format_conversion: Some(true),
                 is_stream: Some(true),
                 input_tokens: Some(10),
@@ -3103,6 +3169,8 @@ mod tests {
                 endpoint_api_format: Some("openai:chat".to_string()),
                 provider_api_family: Some("openai".to_string()),
                 provider_endpoint_kind: Some("chat".to_string()),
+                client_ip: None,
+                user_agent: None,
                 has_format_conversion: Some(false),
                 is_stream: Some(true),
                 input_tokens: Some(10),
@@ -3178,6 +3246,8 @@ mod tests {
                 endpoint_api_format: Some("openai:chat".to_string()),
                 provider_api_family: Some("openai".to_string()),
                 provider_endpoint_kind: Some("chat".to_string()),
+                client_ip: None,
+                user_agent: None,
                 has_format_conversion: Some(false),
                 is_stream: Some(true),
                 input_tokens: None,
@@ -3382,6 +3452,8 @@ mod tests {
                 endpoint_api_format: Some("openai:chat".to_string()),
                 provider_api_family: Some("openai".to_string()),
                 provider_endpoint_kind: Some("chat".to_string()),
+                client_ip: None,
+                user_agent: None,
                 has_format_conversion: Some(false),
                 is_stream: Some(true),
                 input_tokens: Some(10),
@@ -3473,6 +3545,8 @@ mod tests {
                 endpoint_api_format: None,
                 provider_api_family: None,
                 provider_endpoint_kind: None,
+                client_ip: None,
+                user_agent: None,
                 has_format_conversion: None,
                 is_stream: None,
                 input_tokens: None,
@@ -3552,6 +3626,8 @@ mod tests {
                 endpoint_api_format: Some("openai:chat".to_string()),
                 provider_api_family: Some("openai".to_string()),
                 provider_endpoint_kind: Some("chat".to_string()),
+                client_ip: None,
+                user_agent: None,
                 has_format_conversion: Some(false),
                 is_stream: Some(false),
                 input_tokens: Some(10),
@@ -3634,6 +3710,8 @@ mod tests {
                 endpoint_api_format: Some("openai:chat".to_string()),
                 provider_api_family: Some("openai".to_string()),
                 provider_endpoint_kind: Some("chat".to_string()),
+                client_ip: None,
+                user_agent: None,
                 has_format_conversion: Some(false),
                 is_stream: Some(false),
                 input_tokens: Some(10),
@@ -3721,6 +3799,8 @@ mod tests {
                 endpoint_api_format: Some("openai:chat".to_string()),
                 provider_api_family: Some("openai".to_string()),
                 provider_endpoint_kind: Some("chat".to_string()),
+                client_ip: None,
+                user_agent: None,
                 has_format_conversion: Some(true),
                 is_stream: Some(false),
                 input_tokens: Some(10),
@@ -3819,6 +3899,8 @@ mod tests {
                 endpoint_api_format: Some("openai:chat".to_string()),
                 provider_api_family: Some("openai".to_string()),
                 provider_endpoint_kind: Some("chat".to_string()),
+                client_ip: None,
+                user_agent: None,
                 has_format_conversion: Some(false),
                 is_stream: Some(false),
                 input_tokens: Some(10),
@@ -3898,6 +3980,8 @@ mod tests {
             endpoint_api_format: Some("openai:chat".to_string()),
             provider_api_family: Some("openai".to_string()),
             provider_endpoint_kind: Some("chat".to_string()),
+            client_ip: None,
+            user_agent: None,
             has_format_conversion: false,
             is_stream: false,
             input_tokens: 10,
@@ -3968,6 +4052,8 @@ mod tests {
                 endpoint_api_format: Some("openai:chat".to_string()),
                 provider_api_family: Some("openai".to_string()),
                 provider_endpoint_kind: Some("chat".to_string()),
+                client_ip: None,
+                user_agent: None,
                 has_format_conversion: Some(false),
                 is_stream: Some(false),
                 input_tokens: Some(30),

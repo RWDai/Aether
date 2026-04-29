@@ -1002,11 +1002,14 @@ pub(crate) async fn proxy_request(
 
     if let Some(buffered_body) = buffered_body.as_ref() {
         if let Some(rejection) = request_model_local_rejection(
+            &state,
             control_decision,
             &parts.uri,
             &parts.headers,
             buffered_body,
-        ) {
+        )
+        .await?
+        {
             let response =
                 build_local_auth_rejection_response(&trace_id, control_decision, &rejection)?;
             return Ok(finalize_gateway_response_with_context(

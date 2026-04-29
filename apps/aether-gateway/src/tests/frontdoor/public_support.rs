@@ -7241,7 +7241,7 @@ async fn gateway_handles_users_me_providers_locally_without_proxying_upstream() 
             sample_endpoint(
                 "endpoint-claude-1",
                 "provider-claude",
-                "anthropic:messages",
+                "claude:messages",
                 "https://api.claude.example",
             ),
         ],

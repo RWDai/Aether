@@ -559,7 +559,7 @@ const ADMIN_API_FORMAT_DEFINITIONS: &[AdminApiFormatDefinition] = &[
         value: "claude:messages",
         label: "Claude Messages",
         default_path: "/v1/messages",
-        aliases: &["claude", "anthropic", "claude_compatible"],
+        aliases: &["claude", "claude_compatible"],
     },
     AdminApiFormatDefinition {
         value: "gemini:generate_content",

@@ -561,7 +561,7 @@ fn is_error_like_sync_body(value: &Value) -> bool {
         return false;
     };
 
-    object.contains_key("error")
+    object.get("error").is_some_and(|error| !error.is_null())
         || object
             .get("type")
             .and_then(Value::as_str)
@@ -572,7 +572,9 @@ fn is_error_like_sync_body(value: &Value) -> bool {
             .is_some_and(|chunks| {
                 chunks.iter().any(|chunk| {
                     chunk.as_object().is_some_and(|chunk_object| {
-                        chunk_object.contains_key("error")
+                        chunk_object
+                            .get("error")
+                            .is_some_and(|error| !error.is_null())
                             || chunk_object
                                 .get("type")
                                 .and_then(Value::as_str)
@@ -2877,6 +2879,7 @@ mod tests {
         convert_openai_chat_response_to_openai_responses,
         convert_openai_responses_response_to_openai_chat,
     };
+    use crate::conversion::{sync_cli_response_conversion_kind, SyncCliResponseConversionKind};
     use base64::Engine as _;
     use serde_json::json;
 
@@ -4232,6 +4235,58 @@ mod tests {
             product,
             StandardSyncFinalizeNormalizedProduct::CrossFormat(_)
         ));
+    }
+
+    #[test]
+    fn standard_sync_finalize_product_converts_openai_responses_null_error_to_claude_cli() {
+        let report_context = json!({
+            "provider_api_format": "openai:responses",
+            "client_api_format": "claude:messages",
+            "model": "claude-sonnet-4-5",
+            "mapped_model": "gpt-5",
+        });
+        let provider_body_json = json!({
+            "id": "resp_completed_cli_123",
+            "object": "response",
+            "model": "gpt-5",
+            "status": "completed",
+            "error": null,
+            "output": [{
+                "type": "message",
+                "id": "msg_completed_cli_123",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "Done", "annotations": []}]
+            }]
+        });
+        assert_eq!(
+            sync_cli_response_conversion_kind("openai:responses", "claude:messages"),
+            Some(SyncCliResponseConversionKind::ToClaudeCli)
+        );
+        assert!(convert_standard_cli_response(
+            &provider_body_json,
+            "openai:responses",
+            "claude:messages",
+            &report_context
+        )
+        .is_some());
+
+        let product = maybe_build_standard_sync_finalize_product_from_normalized_payload(
+            "claude_cli_sync_finalize",
+            200,
+            Some(&report_context),
+            Some(&provider_body_json),
+            None,
+        )
+        .expect("dispatch should succeed")
+        .expect("dispatch should produce a product");
+
+        let StandardSyncFinalizeNormalizedProduct::CrossFormat(product) = product else {
+            panic!("openai responses provider body should be converted for claude client")
+        };
+        assert_eq!(product.client_body_json["type"], "message");
+        assert_eq!(product.client_body_json["content"][0]["text"], "Done");
+        assert_eq!(product.client_body_json["stop_reason"], "end_turn");
     }
 
     #[test]

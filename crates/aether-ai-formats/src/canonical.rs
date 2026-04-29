@@ -4438,6 +4438,7 @@ mod tests {
             "id": "resp_123",
             "object": "response",
             "status": "completed",
+            "error": null,
             "model": "gpt-5",
             "output": [
                 {

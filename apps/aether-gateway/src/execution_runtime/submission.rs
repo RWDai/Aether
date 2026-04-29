@@ -483,7 +483,7 @@ pub(crate) fn has_nested_error(value: &serde_json::Value) -> bool {
         return false;
     };
 
-    if object.contains_key("error") {
+    if object.get("error").is_some_and(|error| !error.is_null()) {
         return true;
     }
     if object
@@ -500,7 +500,9 @@ pub(crate) fn has_nested_error(value: &serde_json::Value) -> bool {
         .is_some_and(|chunks| {
             chunks.iter().any(|chunk| {
                 chunk.as_object().is_some_and(|chunk_object| {
-                    chunk_object.contains_key("error")
+                    chunk_object
+                        .get("error")
+                        .is_some_and(|error| !error.is_null())
                         || chunk_object
                             .get("type")
                             .and_then(|value| value.as_str())

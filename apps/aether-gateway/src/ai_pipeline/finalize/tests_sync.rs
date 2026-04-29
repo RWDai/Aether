@@ -1250,6 +1250,63 @@ fn local_finalize_handles_openai_responses_openai_family_sync_response_even_when
     );
 }
 
+#[tokio::test]
+async fn local_finalize_converts_openai_responses_null_error_to_claude_cli() {
+    let payload = GatewaySyncReportRequest {
+        trace_id: "trace-openai-responses-to-claude-cli-success".to_string(),
+        report_kind: "claude_cli_sync_finalize".to_string(),
+        report_context: Some(json!({
+            "client_api_format": "claude:messages",
+            "provider_api_format": "openai:responses",
+            "model": "claude-sonnet-4-5",
+            "mapped_model": "gpt-5",
+            "needs_conversion": true,
+            "has_envelope": false,
+        })),
+        status_code: 200,
+        headers: BTreeMap::from([("content-type".to_string(), "application/json".to_string())]),
+        body_json: Some(json!({
+            "id": "resp_completed_cli_123",
+            "object": "response",
+            "model": "gpt-5",
+            "status": "completed",
+            "error": null,
+            "output": [{
+                "type": "message",
+                "id": "msg_completed_cli_123",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{
+                    "type": "output_text",
+                    "text": "Done",
+                    "annotations": []
+                }]
+            }]
+        })),
+        client_body_json: None,
+        body_base64: None,
+        telemetry: None,
+    };
+
+    let outcome = maybe_build_local_core_sync_finalize_response(
+        "trace-openai-responses-to-claude-cli-success",
+        &test_decision(),
+        &payload,
+    )
+    .expect("local finalize should succeed")
+    .expect("local finalize should convert the response");
+
+    assert_eq!(outcome.response.status(), 200);
+    let response_body = to_bytes(outcome.response.into_body(), usize::MAX)
+        .await
+        .expect("response body should read");
+    let body: serde_json::Value =
+        serde_json::from_slice(&response_body).expect("response should be json");
+    assert_eq!(body["type"], "message");
+    assert_eq!(body["content"][0]["text"], "Done");
+    assert_eq!(body["stop_reason"], "end_turn");
+}
+
 #[test]
 fn local_finalize_handles_openai_chat_stream_response_from_openai_chat() {
     let body = concat!(

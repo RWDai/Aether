@@ -11,8 +11,9 @@ use crate::ai_pipeline_api::{
     GatewayControlSyncDecisionResponse,
 };
 use crate::execution_runtime::submission::{
-    build_best_effort_local_core_error_body, resolve_core_error_background_report_kind,
-    resolve_core_success_background_report_kind, resolve_local_core_error_response_body_json,
+    build_best_effort_local_core_error_body, has_nested_error,
+    resolve_core_error_background_report_kind, resolve_core_success_background_report_kind,
+    resolve_local_core_error_response_body_json,
 };
 use crate::execution_runtime::{
     resolve_local_sync_error_background_report_kind,
@@ -249,6 +250,23 @@ fn build_best_effort_local_core_error_body_converts_claude_cli_error_to_openai_r
             }
         })
     );
+}
+
+#[test]
+fn has_nested_error_ignores_null_error_fields() {
+    assert!(!has_nested_error(&json!({
+        "id": "resp_completed_123",
+        "object": "response",
+        "status": "completed",
+        "error": null,
+        "output": []
+    })));
+    assert!(has_nested_error(&json!({
+        "id": "resp_failed_123",
+        "object": "response",
+        "status": "failed",
+        "error": {"message": "quota reached"}
+    })));
 }
 
 #[test]

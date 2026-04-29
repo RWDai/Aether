@@ -29,7 +29,9 @@ pub fn to_compact(response: &CanonicalResponse, ctx: &FormatContext) -> Option<V
 
 pub fn from_raw(body_json: &Value) -> Option<CanonicalResponse> {
     let body = body_json.as_object()?;
-    if body.contains_key("error") || body.get("status").and_then(Value::as_str) == Some("failed") {
+    if body.get("error").is_some_and(|error| !error.is_null())
+        || body.get("status").and_then(Value::as_str) == Some("failed")
+    {
         return None;
     }
     let content = openai_responses_output_to_canonical_blocks(body.get("output"))?;

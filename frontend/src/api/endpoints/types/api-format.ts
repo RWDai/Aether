@@ -201,3 +201,8 @@ export function sortApiFormats(formats: string[]): string[] {
     return aIdx - bIdx
   })
 }
+
+// openai family 格式只支持 bearer（Authorization header），不允许覆盖认证方式
+export function formatSupportsAuthOverride(format: string): boolean {
+  return parseApiFormat(normalizeApiFormatAlias(format)).family !== 'openai'
+}

@@ -83,35 +83,36 @@
 
       <!-- API 格式 & 认证方式 -->
       <div v-if="visibleApiFormats.length > 0">
-        <Label class="mb-1.5 block">支持的 API 格式 *</Label>
-        <!-- 默认认证方式（单个格式可在下方覆盖） -->
-        <div
-          v-if="showAuthTypeSelector"
-          class="flex gap-2 mb-2"
-        >
-          <button
-            v-for="option in authTypeOptions"
-            :key="option.value"
-            type="button"
-            class="flex items-center gap-1.5 px-3 py-1.5 rounded-md border text-sm transition-colors"
-            :class="form.auth_type === option.value
-              ? 'bg-primary/10 border-primary/50 text-primary'
-              : 'bg-muted/30 border-border text-muted-foreground hover:border-muted-foreground/40'"
-            @click="form.auth_type = option.value"
+        <div class="flex items-center gap-1 mb-1.5">
+          <Label>支持的 API 格式 *</Label>
+          <span
+            class="relative inline-flex"
+            @mouseenter="apiFormatHelpHovered = true"
+            @mouseleave="apiFormatHelpHovered = false"
           >
-            <span
-              class="w-3.5 h-3.5 rounded-full border-2 flex items-center justify-center shrink-0"
-              :class="form.auth_type === option.value ? 'border-primary' : 'border-muted-foreground/40'"
+            <button
+              type="button"
+              class="inline-flex items-center justify-center rounded-sm p-0.5 text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              title="API 格式说明"
+              aria-label="API 格式说明"
+              :aria-expanded="apiFormatHelpVisible"
+              @click.stop="toggleApiFormatHelp"
+              @focus="apiFormatHelpHovered = true"
+              @blur="apiFormatHelpHovered = false"
+              @keydown.escape.stop.prevent="apiFormatHelpOpen = false"
             >
-              <span
-                v-if="form.auth_type === option.value"
-                class="w-1.5 h-1.5 rounded-full bg-primary"
-              />
+              <CircleHelp class="h-3.5 w-3.5" />
+            </button>
+            <span
+              v-if="apiFormatHelpVisible"
+              role="tooltip"
+              class="absolute left-0 top-full z-[100] mt-1 w-80 rounded-md border bg-popover px-3 py-2 text-xs font-normal normal-case leading-5 tracking-normal text-popover-foreground shadow-md"
+            >
+              选择此密钥支持的 API 格式及对应认证方式。OpenAI 格式固定使用 Bearer Token；Claude / Gemini 格式可选 API Key 或 Bearer Token（如 Claude Code 应使用 Bearer Token）。
             </span>
-            {{ option.label }}
-          </button>
+          </span>
         </div>
-        <div class="grid grid-cols-2 gap-2">
+        <div class="flex flex-col gap-1.5">
           <div
             v-for="format in visibleApiFormats"
             :key="format"
@@ -130,46 +131,55 @@
               >
                 <span v-if="form.api_formats.includes(format)">✓</span>
               </span>
-              <div class="min-w-0">
-                <span
-                  class="block text-sm truncate"
-                  :class="form.api_formats.includes(format) ? 'text-primary' : 'text-muted-foreground'"
-                >{{ formatApiFormat(format) }}</span>
+              <span
+                class="text-sm"
+                :class="form.api_formats.includes(format) ? 'text-primary' : 'text-muted-foreground'"
+              >{{ formatApiFormat(format) }}</span>
+            </div>
+            <!-- 认证方式：已勾选且可覆盖时显示 radio -->
+            <div class="flex items-center gap-3">
+              <div
+                v-if="canOverrideFormatAuth(format)"
+                class="flex gap-2"
+                @click.stop
+              >
                 <button
+                  v-for="opt in authTypeOptions.filter(o => isRawSecretAuthType(o.value))"
+                  :key="opt.value"
                   type="button"
-                  class="mt-0.5 inline-flex max-w-full items-center rounded border px-1.5 py-0.5 text-[10px] leading-none transition-colors"
-                  :class="[
-                    form.api_formats.includes(format)
-                      ? 'border-primary/20 bg-primary/10 text-primary'
-                      : 'border-border bg-background/60 text-muted-foreground',
-                    canOverrideFormatAuth(format)
-                      ? 'cursor-pointer hover:border-primary/40 hover:bg-primary/15'
-                      : 'cursor-default'
-                  ]"
-                  :aria-disabled="!canOverrideFormatAuth(format)"
-                  :title="formatAuthMethodTitle(format)"
-                  @click="handleFormatAuthBadgeClick(format, $event)"
+                  class="flex items-center gap-1 text-[10px] leading-none transition-colors"
+                  :class="getFormatAuthType(format) === opt.value ? 'text-primary' : 'text-muted-foreground hover:text-foreground'"
+                  @click="setFormatAuthType(format, opt.value as RawSecretAuthType)"
                 >
-                  {{ formatAuthMethodLabel(format) }}
+                  <span
+                    class="w-2.5 h-2.5 rounded-full border flex items-center justify-center shrink-0"
+                    :class="getFormatAuthType(format) === opt.value ? 'border-primary' : 'border-muted-foreground/40'"
+                  >
+                    <span
+                      v-if="getFormatAuthType(format) === opt.value"
+                      class="w-1 h-1 rounded-full bg-primary"
+                    />
+                  </span>
+                  {{ opt.label }}
                 </button>
               </div>
-            </div>
-            <div
-              class="flex items-center shrink-0 ml-2 text-xs text-muted-foreground gap-1"
-              @click.stop
-            >
-              <span>×</span>
-              <input
-                :value="form.rate_multipliers[format] ?? ''"
-                type="number"
-                step="0.01"
-                min="0.01"
-                placeholder="1"
-                class="w-9 bg-transparent text-right outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                :class="form.api_formats.includes(format) ? 'text-primary' : 'text-muted-foreground'"
-                title="成本倍率"
-                @input="(e) => updateRateMultiplier(format, (e.target as HTMLInputElement).value)"
+              <div
+                class="flex items-center text-xs text-muted-foreground gap-1"
+                @click.stop
               >
+                <span>×</span>
+                <input
+                  :value="form.rate_multipliers[format] ?? ''"
+                  type="number"
+                  step="0.01"
+                  min="0.01"
+                  placeholder="1"
+                  class="w-9 bg-transparent text-right outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                  :class="form.api_formats.includes(format) ? 'text-primary' : 'text-muted-foreground'"
+                  title="成本倍率"
+                  @input="(e) => updateRateMultiplier(format, (e.target as HTMLInputElement).value)"
+                >
+              </div>
             </div>
           </div>
         </div>
@@ -338,7 +348,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { Dialog, Button, Input, Label, Switch } from '@/components/ui'
-import { Key, SquarePen } from 'lucide-vue-next'
+import { Key, SquarePen, CircleHelp } from 'lucide-vue-next'
 import { useToast } from '@/composables/useToast'
 import { useFormDialog } from '@/composables/useFormDialog'
 import { parseApiError } from '@/utils/errorParser'
@@ -356,7 +366,7 @@ import {
   type CapabilityDefinition,
   type ProviderType
 } from '@/api/endpoints'
-import { formatApiFormat, normalizeApiFormatAlias } from '@/api/endpoints/types/api-format'
+import { formatApiFormat, normalizeApiFormatAlias, formatSupportsAuthOverride } from '@/api/endpoints/types/api-format'
 
 type RawSecretAuthType = 'api_key' | 'bearer'
 type ProviderKeyFormAuthType = RawSecretAuthType | 'service_account'
@@ -428,19 +438,6 @@ function normalizeApiFormat(format: string): string {
   return normalizeApiFormatAlias(format).trim().toLowerCase()
 }
 
-function getAvailableApiFormatSet(): Set<string> {
-  return new Set(props.availableApiFormats.map(normalizeApiFormat))
-}
-
-function filterAvailableApiFormats(formats: string[]): string[] {
-  const availableFormatSet = getAvailableApiFormatSet()
-  if (availableFormatSet.size === 0) {
-    return []
-  }
-
-  return formats.filter(format => availableFormatSet.has(normalizeApiFormat(format)))
-}
-
 function getSelectableApiFormats(authType = form.value.auth_type): string[] {
   const sorted = sortApiFormats(props.availableApiFormats)
   if (props.providerType !== 'vertex_ai') {
@@ -499,7 +496,16 @@ const visibleApiFormats = computed(() => getSelectableApiFormats())
 
 const authTypeOptions = computed(() => getAuthTypeOptions(props.providerType))
 
-const showAuthTypeSelector = computed(() => authTypeOptions.value.length > 1)
+const apiFormatHelpOpen = ref(false)
+const apiFormatHelpHovered = ref(false)
+const apiFormatHelpVisible = computed(() => apiFormatHelpOpen.value || apiFormatHelpHovered.value)
+
+function toggleApiFormatHelp() {
+  apiFormatHelpOpen.value = !apiFormatHelpOpen.value
+  if (!apiFormatHelpOpen.value) {
+    apiFormatHelpHovered.value = false
+  }
+}
 
 const authSecretLabel = computed(() => {
   if (form.value.auth_type === 'service_account') return 'Service Account JSON'
@@ -518,28 +524,7 @@ const authSecretRequiredMark = computed(() => {
   return ''
 })
 
-function formatAuthMethodLabel(format: string): string {
-  const authType = getFormatAuthType(format)
-  if (authType === 'service_account') return 'Service Account'
-  if (authType === 'bearer') return 'Authorization'
 
-  const { family } = normalizeApiFormat(format).includes(':')
-    ? { family: normalizeApiFormat(format).split(':', 1)[0] }
-    : { family: normalizeApiFormat(format) }
-  if (family === 'claude') return 'x-api-key'
-  if (family === 'gemini') return 'x-goog-api-key'
-  if (family === 'openai') return 'Authorization'
-  return 'API Key'
-}
-
-function formatAuthMethodTitle(format: string): string {
-  const label = formatAuthMethodLabel(format)
-  if (!canOverrideFormatAuth(format)) {
-    return label
-  }
-  const nextAuthType = getFormatAuthType(format) === 'bearer' ? 'API Key' : 'Bearer Token'
-  return `${label}，点击切换为 ${nextAuthType}`
-}
 
 function getFormatAuthType(format: string): ProviderKeyFormAuthType {
   if (!isRawSecretAuthType(form.value.auth_type)) {
@@ -549,7 +534,7 @@ function getFormatAuthType(format: string): ProviderKeyFormAuthType {
 }
 
 function canOverrideFormatAuth(format: string): boolean {
-  return isRawSecretAuthType(form.value.auth_type) && form.value.api_formats.includes(format)
+  return isRawSecretAuthType(form.value.auth_type) && form.value.api_formats.includes(format) && formatSupportsAuthOverride(format)
 }
 
 function setFormatAuthType(format: string, authType: RawSecretAuthType) {
@@ -564,16 +549,6 @@ function setFormatAuthType(format: string, authType: RawSecretAuthType) {
   form.value.auth_type_by_format = sanitizeAuthTypeByFormat(next)
 }
 
-function toggleFormatAuthType(format: string) {
-  if (!canOverrideFormatAuth(format)) return
-  setFormatAuthType(format, getFormatAuthType(format) === 'bearer' ? 'api_key' : 'bearer')
-}
-
-function handleFormatAuthBadgeClick(format: string, event: MouseEvent) {
-  if (!canOverrideFormatAuth(format)) return
-  event.stopPropagation()
-  toggleFormatAuthType(format)
-}
 
 function buildAuthTypeByFormatPayload(): Record<string, RawSecretAuthType> | null {
   const sanitized = sanitizeAuthTypeByFormat(form.value.auth_type_by_format)

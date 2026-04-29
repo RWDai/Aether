@@ -300,19 +300,17 @@ mod tests {
     }
 
     #[test]
-    fn admin_user_api_formats_reject_retired_signatures() {
-        for retired in [
-            "anthropic:messages",
-            "claude:chat",
-            "claude:cli",
-            "openai:cli",
-            "openai:compact",
-            "gemini:chat",
-            "gemini:cli",
+    fn admin_user_api_formats_reject_unsupported_signatures() {
+        for unsupported in [
+            "claude",
+            "openai",
+            "unknown:chat",
+            "openai:unknown",
+            "gemini:generate",
         ] {
             assert!(
-                normalize_admin_user_api_formats(Some(vec![retired.to_string()])).is_err(),
-                "{retired} should be rejected"
+                normalize_admin_user_api_formats(Some(vec![unsupported.to_string()])).is_err(),
+                "{unsupported} should be rejected"
             );
         }
     }

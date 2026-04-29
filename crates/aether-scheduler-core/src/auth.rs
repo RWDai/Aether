@@ -156,7 +156,7 @@ mod tests {
             "claude",
         ));
         assert!(!provider_matches_allowed_value(
-            "anthropic",
+            "vendor-x",
             "provider-1",
             "Other",
             "claude",
@@ -164,11 +164,11 @@ mod tests {
         assert!(!provider_matches_allowed_value(
             "claude",
             "provider-1",
-            "Anthropic",
+            "OtherVendor",
             "custom",
         ));
         assert!(!provider_matches_allowed_value(
-            "anthropic:messages",
+            "provider-1:extra",
             "provider-1",
             "Other",
             "claude",
@@ -201,37 +201,21 @@ mod tests {
     }
 
     #[test]
-    fn api_format_allowed_value_rejects_retired_aliases() {
-        assert!(!api_format_matches_allowed_value(
-            "anthropic:messages",
-            "claude:messages"
-        ));
-        assert!(!api_format_matches_allowed_value(
-            "claude:chat",
-            "claude:messages"
-        ));
-        assert!(!api_format_matches_allowed_value(
-            "claude:cli",
-            "claude:messages"
-        ));
-        assert!(!api_format_matches_allowed_value(
-            "openai:cli",
-            "openai:responses"
-        ));
-        assert!(!api_format_matches_allowed_value(
-            "openai:compact",
-            "openai:responses:compact"
-        ));
-        assert!(!api_format_matches_allowed_value(
-            "gemini:chat",
-            "gemini:generate_content"
-        ));
+    fn api_format_allowed_value_matches_current_signatures_only() {
         assert!(api_format_matches_allowed_value(
             "CLAUDE:MESSAGES",
             "claude:messages"
         ));
+        assert!(api_format_matches_allowed_value(
+            "openai:responses",
+            "openai:responses"
+        ));
         assert!(!api_format_matches_allowed_value(
             "openai:responses",
+            "claude:messages"
+        ));
+        assert!(!api_format_matches_allowed_value(
+            "claude:messages:extra",
             "claude:messages"
         ));
     }

@@ -25,6 +25,27 @@ fn deep_nested_metadata(levels: usize) -> serde_json::Value {
     current
 }
 
+fn run_async_test_on_large_stack<F>(name: &'static str, future: F)
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    let handle = std::thread::Builder::new()
+        .name(name.to_string())
+        .stack_size(8 * 1024 * 1024)
+        .spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("tokio runtime should build")
+                .block_on(future);
+        })
+        .expect("large-stack test thread should spawn");
+
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
+    }
+}
+
 async fn wait_for_usage_status<T>(
     repository: &T,
     request_id: &str,
@@ -232,8 +253,15 @@ async fn gateway_handles_local_openai_chat_sync_report_with_local_reporting_when
     upstream_handle.abort();
 }
 
-#[tokio::test]
-async fn gateway_truncates_deep_request_echo_for_local_openai_chat_sync_usage() {
+#[test]
+fn gateway_truncates_deep_request_echo_for_local_openai_chat_sync_usage() {
+    run_async_test_on_large_stack(
+        "gateway_truncates_deep_request_echo_for_local_openai_chat_sync_usage",
+        gateway_truncates_deep_request_echo_for_local_openai_chat_sync_usage_impl(),
+    );
+}
+
+async fn gateway_truncates_deep_request_echo_for_local_openai_chat_sync_usage_impl() {
     let usage_repository = Arc::new(InMemoryUsageReadRepository::default());
     let request_candidate_repository = Arc::new(InMemoryRequestCandidateRepository::default());
 
@@ -812,8 +840,15 @@ async fn gateway_records_failed_usage_when_all_local_openai_chat_candidates_exha
     assert_eq!(stored_candidates[0].status_code, Some(503));
 }
 
-#[tokio::test]
-async fn gateway_records_failed_usage_for_claude_runtime_miss_without_execution_exhaustion() {
+#[test]
+fn gateway_records_failed_usage_for_claude_runtime_miss_without_execution_exhaustion() {
+    run_async_test_on_large_stack(
+        "gateway_records_failed_usage_for_claude_runtime_miss_without_execution_exhaustion",
+        gateway_records_failed_usage_for_claude_runtime_miss_without_execution_exhaustion_impl(),
+    );
+}
+
+async fn gateway_records_failed_usage_for_claude_runtime_miss_without_execution_exhaustion_impl() {
     fn sample_claude_auth_snapshot(api_key_id: &str, user_id: &str) -> StoredAuthApiKeySnapshot {
         StoredAuthApiKeySnapshot::new(
             user_id.to_string(),
@@ -1357,8 +1392,15 @@ async fn gateway_preserves_stream_usage_when_max_response_body_size_truncates_ca
     upstream_handle.abort();
 }
 
-#[tokio::test]
-async fn gateway_records_failed_usage_when_all_local_claude_cli_candidates_are_skipped() {
+#[test]
+fn gateway_records_failed_usage_when_all_local_claude_cli_candidates_are_skipped() {
+    run_async_test_on_large_stack(
+        "gateway_records_failed_usage_when_all_local_claude_cli_candidates_are_skipped",
+        gateway_records_failed_usage_when_all_local_claude_cli_candidates_are_skipped_impl(),
+    );
+}
+
+async fn gateway_records_failed_usage_when_all_local_claude_cli_candidates_are_skipped_impl() {
     fn sample_auth_snapshot(api_key_id: &str, user_id: &str) -> StoredAuthApiKeySnapshot {
         StoredAuthApiKeySnapshot::new(
             user_id.to_string(),
@@ -1670,9 +1712,9 @@ async fn gateway_records_failed_usage_when_all_local_claude_cli_candidates_are_s
     upstream_handle.abort();
 }
 
-#[tokio::test]
-async fn gateway_keeps_failed_usage_request_capture_lightweight_for_large_local_claude_cli_runtime_miss(
-) {
+#[test]
+fn gateway_keeps_failed_usage_request_capture_lightweight_for_large_local_claude_cli_runtime_miss()
+{
     fn sample_auth_snapshot(api_key_id: &str, user_id: &str) -> StoredAuthApiKeySnapshot {
         StoredAuthApiKeySnapshot::new(
             user_id.to_string(),
@@ -1810,122 +1852,124 @@ async fn gateway_keeps_failed_usage_request_capture_lightweight_for_large_local_
         .expect("key transport should build")
     }
 
-    let usage_repository = Arc::new(InMemoryUsageReadRepository::default());
-    let request_candidate_repository = Arc::new(InMemoryRequestCandidateRepository::default());
+    run_async_test_on_large_stack("large-local-claude-cli-runtime-miss", async move {
+        let usage_repository = Arc::new(InMemoryUsageReadRepository::default());
+        let request_candidate_repository = Arc::new(InMemoryRequestCandidateRepository::default());
 
-    let execution_runtime = Router::new();
-    let auth_repository = Arc::new(InMemoryAuthApiKeySnapshotRepository::seed(vec![(
-        Some(hash_api_key("sk-client-claude-cli-usage-local-miss-large")),
-        sample_auth_snapshot(
-            "api-key-claude-cli-usage-local-miss-large-1",
-            "user-claude-cli-usage-local-miss-large-1",
-        ),
-    )]));
-    let candidate_selection_repository =
-        Arc::new(InMemoryMinimalCandidateSelectionReadRepository::seed(vec![
-            sample_candidate_row(),
-        ]));
-    let provider_catalog_repository = Arc::new(InMemoryProviderCatalogReadRepository::seed(
-        vec![sample_provider_catalog_provider()],
-        vec![sample_provider_catalog_endpoint()],
-        vec![sample_provider_catalog_key()],
-    ));
+        let execution_runtime = Router::new();
+        let auth_repository = Arc::new(InMemoryAuthApiKeySnapshotRepository::seed(vec![(
+            Some(hash_api_key("sk-client-claude-cli-usage-local-miss-large")),
+            sample_auth_snapshot(
+                "api-key-claude-cli-usage-local-miss-large-1",
+                "user-claude-cli-usage-local-miss-large-1",
+            ),
+        )]));
+        let candidate_selection_repository =
+            Arc::new(InMemoryMinimalCandidateSelectionReadRepository::seed(vec![
+                sample_candidate_row(),
+            ]));
+        let provider_catalog_repository = Arc::new(InMemoryProviderCatalogReadRepository::seed(
+            vec![sample_provider_catalog_provider()],
+            vec![sample_provider_catalog_endpoint()],
+            vec![sample_provider_catalog_key()],
+        ));
 
-    let (execution_runtime_url, execution_runtime_handle) = start_server(execution_runtime).await;
-    let gateway_state =
-        build_state_with_execution_runtime_override(execution_runtime_url)
-            .with_data_state_for_tests(
-                GatewayDataState::with_auth_candidate_selection_provider_catalog_request_candidates_and_usage_for_tests(
-                    auth_repository,
-                    candidate_selection_repository,
-                    provider_catalog_repository,
-                    Arc::clone(&request_candidate_repository),
-                    Arc::clone(&usage_repository),
-                    DEVELOPMENT_ENCRYPTION_KEY,
-                ),
+        let (execution_runtime_url, execution_runtime_handle) =
+            start_server(execution_runtime).await;
+        let gateway_state = build_state_with_execution_runtime_override(execution_runtime_url)
+                .with_data_state_for_tests(
+                    GatewayDataState::with_auth_candidate_selection_provider_catalog_request_candidates_and_usage_for_tests(
+                        auth_repository,
+                        candidate_selection_repository,
+                        provider_catalog_repository,
+                        Arc::clone(&request_candidate_repository),
+                        Arc::clone(&usage_repository),
+                        DEVELOPMENT_ENCRYPTION_KEY,
+                    ),
+                )
+                .with_usage_runtime_for_tests(UsageRuntimeConfig {
+                    enabled: true,
+                    ..UsageRuntimeConfig::default()
+                });
+        let gateway = build_router_with_state(gateway_state);
+        let (gateway_url, gateway_handle) = start_server(gateway).await;
+
+        let request_body = serde_json::to_string(&json!({
+            "model": "gpt-5.4",
+            "messages": [{
+                "role": "user",
+                "content": "x".repeat(128 * 1024)
+            }],
+            "metadata": deep_nested_metadata(96)
+        }))
+        .expect("request should encode");
+
+        let response = reqwest::Client::new()
+            .post(format!("{gateway_url}/v1/messages?beta=true"))
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .header(
+                http::header::AUTHORIZATION,
+                "Bearer sk-client-claude-cli-usage-local-miss-large",
             )
-            .with_usage_runtime_for_tests(UsageRuntimeConfig {
-                enabled: true,
-                ..UsageRuntimeConfig::default()
-            });
-    let gateway = build_router_with_state(gateway_state);
-    let (gateway_url, gateway_handle) = start_server(gateway).await;
+            .header(
+                TRACE_ID_HEADER,
+                "trace-claude-cli-usage-local-miss-large-123",
+            )
+            .body(request_body)
+            .send()
+            .await
+            .expect("request should complete");
 
-    let request_body = serde_json::to_string(&json!({
-        "model": "gpt-5.4",
-        "messages": [{
-            "role": "user",
-            "content": "x".repeat(128 * 1024)
-        }],
-        "metadata": deep_nested_metadata(96)
-    }))
-    .expect("request should encode");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response
+                .headers()
+                .get(LOCAL_EXECUTION_RUNTIME_MISS_REASON_HEADER)
+                .and_then(|value| value.to_str().ok()),
+            Some("all_candidates_skipped")
+        );
 
-    let response = reqwest::Client::new()
-        .post(format!("{gateway_url}/v1/messages?beta=true"))
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .header(
-            http::header::AUTHORIZATION,
-            "Bearer sk-client-claude-cli-usage-local-miss-large",
-        )
-        .header(
-            TRACE_ID_HEADER,
+        let stored_usage = wait_for_usage_status(
+            usage_repository.as_ref(),
             "trace-claude-cli-usage-local-miss-large-123",
+            "failed",
         )
-        .body(request_body)
-        .send()
-        .await
-        .expect("request should complete");
+        .await;
+        assert_eq!(stored_usage.status, "failed");
+        assert_eq!(
+            stored_usage.request_body_state,
+            Some(UsageBodyCaptureState::Inline)
+        );
+        assert_eq!(
+            stored_usage
+                .request_body
+                .as_ref()
+                .and_then(|value| value.get("model"))
+                .and_then(|value| value.as_str()),
+            Some("gpt-5.4")
+        );
+        assert!(stored_usage.provider_request_body.is_none());
+        assert_eq!(
+            stored_usage
+                .request_metadata
+                .as_ref()
+                .and_then(|value| value.get("trace_id"))
+                .and_then(|value| value.as_str()),
+            Some("trace-claude-cli-usage-local-miss-large-123")
+        );
 
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(
-        response
-            .headers()
-            .get(LOCAL_EXECUTION_RUNTIME_MISS_REASON_HEADER)
-            .and_then(|value| value.to_str().ok()),
-        Some("all_candidates_skipped")
-    );
+        let stored_candidates = request_candidate_repository
+            .list_by_request_id("trace-claude-cli-usage-local-miss-large-123")
+            .await
+            .expect("request candidate trace should read");
+        assert_eq!(stored_candidates.len(), 1);
+        assert_eq!(stored_candidates[0].status, RequestCandidateStatus::Skipped);
+        assert_eq!(
+            stored_candidates[0].skip_reason.as_deref(),
+            Some("format_conversion_disabled")
+        );
 
-    let stored_usage = wait_for_usage_status(
-        usage_repository.as_ref(),
-        "trace-claude-cli-usage-local-miss-large-123",
-        "failed",
-    )
-    .await;
-    assert_eq!(stored_usage.status, "failed");
-    assert_eq!(
-        stored_usage.request_body_state,
-        Some(UsageBodyCaptureState::Inline)
-    );
-    assert_eq!(
-        stored_usage
-            .request_body
-            .as_ref()
-            .and_then(|value| value.get("model"))
-            .and_then(|value| value.as_str()),
-        Some("gpt-5.4")
-    );
-    assert!(stored_usage.provider_request_body.is_none());
-    assert_eq!(
-        stored_usage
-            .request_metadata
-            .as_ref()
-            .and_then(|value| value.get("trace_id"))
-            .and_then(|value| value.as_str()),
-        Some("trace-claude-cli-usage-local-miss-large-123")
-    );
-
-    let stored_candidates = request_candidate_repository
-        .list_by_request_id("trace-claude-cli-usage-local-miss-large-123")
-        .await
-        .expect("request candidate trace should read");
-    assert_eq!(stored_candidates.len(), 1);
-    assert_eq!(stored_candidates[0].status, RequestCandidateStatus::Skipped);
-    assert_eq!(
-        stored_candidates[0].skip_reason.as_deref(),
-        Some("format_conversion_disabled")
-    );
-
-    gateway_handle.abort();
-    execution_runtime_handle.abort();
+        gateway_handle.abort();
+        execution_runtime_handle.abort();
+    });
 }

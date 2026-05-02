@@ -44,7 +44,11 @@ fn classifies_claude_messages_cli_when_bearer_without_api_key() {
         classify_control_route(&http::Method::POST, &uri, &headers).expect("route should classify");
 
     assert_eq!(decision.route_family.as_deref(), Some("claude"));
-    assert_eq!(decision.route_kind.as_deref(), Some("cli"));
+    assert_eq!(decision.route_kind.as_deref(), Some("messages"));
+    assert_eq!(
+        decision.request_auth_channel.as_deref(),
+        Some("bearer_like")
+    );
     assert_eq!(
         decision.auth_endpoint_signature.as_deref(),
         Some("claude:messages")
@@ -63,7 +67,11 @@ fn classifies_claude_messages_cli_when_bearer_is_present_even_with_api_key() {
         classify_control_route(&http::Method::POST, &uri, &headers).expect("route should classify");
 
     assert_eq!(decision.route_family.as_deref(), Some("claude"));
-    assert_eq!(decision.route_kind.as_deref(), Some("cli"));
+    assert_eq!(decision.route_kind.as_deref(), Some("messages"));
+    assert_eq!(
+        decision.request_auth_channel.as_deref(),
+        Some("bearer_like")
+    );
     assert_eq!(
         decision.auth_endpoint_signature.as_deref(),
         Some("claude:messages")
@@ -80,6 +88,7 @@ fn classifies_claude_messages_when_api_key_without_bearer() {
 
     assert_eq!(decision.route_family.as_deref(), Some("claude"));
     assert_eq!(decision.route_kind.as_deref(), Some("messages"));
+    assert_eq!(decision.request_auth_channel.as_deref(), Some("api_key"));
     assert_eq!(
         decision.auth_endpoint_signature.as_deref(),
         Some("claude:messages")
@@ -97,7 +106,30 @@ fn classifies_gemini_cli_generate_content_when_x_app_contains_cli() {
         classify_control_route(&http::Method::POST, &uri, &headers).expect("route should classify");
 
     assert_eq!(decision.route_family.as_deref(), Some("gemini"));
-    assert_eq!(decision.route_kind.as_deref(), Some("cli"));
+    assert_eq!(decision.route_kind.as_deref(), Some("generate_content"));
+    assert_eq!(
+        decision.request_auth_channel.as_deref(),
+        Some("bearer_like")
+    );
+    assert_eq!(
+        decision.auth_endpoint_signature.as_deref(),
+        Some("gemini:generate_content")
+    );
+    assert!(decision.is_execution_runtime_candidate());
+}
+
+#[test]
+fn classifies_gemini_generate_content_api_key_without_cli_marker() {
+    let headers = headers(&[("x-goog-api-key", "gemini-key")]);
+    let uri: Uri = "/v1beta/models/gemini-2.5-pro:generateContent"
+        .parse()
+        .expect("uri should parse");
+    let decision =
+        classify_control_route(&http::Method::POST, &uri, &headers).expect("route should classify");
+
+    assert_eq!(decision.route_family.as_deref(), Some("gemini"));
+    assert_eq!(decision.route_kind.as_deref(), Some("generate_content"));
+    assert_eq!(decision.request_auth_channel.as_deref(), Some("api_key"));
     assert_eq!(
         decision.auth_endpoint_signature.as_deref(),
         Some("gemini:generate_content")

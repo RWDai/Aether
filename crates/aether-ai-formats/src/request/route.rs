@@ -20,6 +20,7 @@ pub fn resolve_execution_runtime_stream_plan_kind(
     route_class: Option<&str>,
     route_family: Option<&str>,
     route_kind: Option<&str>,
+    request_auth_channel: Option<&str>,
     method: &Method,
     path: &str,
 ) -> Option<&'static str> {
@@ -48,15 +49,11 @@ pub fn resolve_execution_runtime_stream_plan_kind(
         && *method == Method::POST
         && path == "/v1/messages"
     {
-        return Some(CLAUDE_CHAT_STREAM_PLAN_KIND);
-    }
-
-    if route_family == Some("claude")
-        && route_kind == Some("cli")
-        && *method == Method::POST
-        && path == "/v1/messages"
-    {
-        return Some(CLAUDE_CLI_STREAM_PLAN_KIND);
+        return Some(resolve_claude_messages_plan_kind(
+            request_auth_channel,
+            CLAUDE_CHAT_STREAM_PLAN_KIND,
+            CLAUDE_CLI_STREAM_PLAN_KIND,
+        ));
     }
 
     if route_family == Some("gemini")
@@ -64,15 +61,11 @@ pub fn resolve_execution_runtime_stream_plan_kind(
         && *method == Method::POST
         && path.ends_with(":streamGenerateContent")
     {
-        return Some(GEMINI_CHAT_STREAM_PLAN_KIND);
-    }
-
-    if route_family == Some("gemini")
-        && route_kind == Some("cli")
-        && *method == Method::POST
-        && path.ends_with(":streamGenerateContent")
-    {
-        return Some(GEMINI_CLI_STREAM_PLAN_KIND);
+        return Some(resolve_gemini_generate_content_plan_kind(
+            request_auth_channel,
+            GEMINI_CHAT_STREAM_PLAN_KIND,
+            GEMINI_CLI_STREAM_PLAN_KIND,
+        ));
     }
 
     if route_family == Some("openai")
@@ -114,6 +107,7 @@ pub fn resolve_execution_runtime_sync_plan_kind(
     route_class: Option<&str>,
     route_family: Option<&str>,
     route_kind: Option<&str>,
+    request_auth_channel: Option<&str>,
     method: &Method,
     path: &str,
 ) -> Option<&'static str> {
@@ -211,15 +205,11 @@ pub fn resolve_execution_runtime_sync_plan_kind(
         && *method == Method::POST
         && path == "/v1/messages"
     {
-        return Some(CLAUDE_CHAT_SYNC_PLAN_KIND);
-    }
-
-    if route_family == Some("claude")
-        && route_kind == Some("cli")
-        && *method == Method::POST
-        && path == "/v1/messages"
-    {
-        return Some(CLAUDE_CLI_SYNC_PLAN_KIND);
+        return Some(resolve_claude_messages_plan_kind(
+            request_auth_channel,
+            CLAUDE_CHAT_SYNC_PLAN_KIND,
+            CLAUDE_CLI_SYNC_PLAN_KIND,
+        ));
     }
 
     if route_family == Some("gemini")
@@ -227,15 +217,11 @@ pub fn resolve_execution_runtime_sync_plan_kind(
         && *method == Method::POST
         && path.ends_with(":generateContent")
     {
-        return Some(GEMINI_CHAT_SYNC_PLAN_KIND);
-    }
-
-    if route_family == Some("gemini")
-        && route_kind == Some("cli")
-        && *method == Method::POST
-        && path.ends_with(":generateContent")
-    {
-        return Some(GEMINI_CLI_SYNC_PLAN_KIND);
+        return Some(resolve_gemini_generate_content_plan_kind(
+            request_auth_channel,
+            GEMINI_CHAT_SYNC_PLAN_KIND,
+            GEMINI_CLI_SYNC_PLAN_KIND,
+        ));
     }
 
     if route_family == Some("gemini") && route_kind == Some("files") {
@@ -276,6 +262,30 @@ fn is_claude_messages_route_kind(route_kind: Option<&str>) -> bool {
 
 fn is_gemini_generate_content_route_kind(route_kind: Option<&str>) -> bool {
     matches!(route_kind, Some("generate_content") | Some("chat"))
+}
+
+fn resolve_claude_messages_plan_kind(
+    request_auth_channel: Option<&str>,
+    chat_plan_kind: &'static str,
+    cli_plan_kind: &'static str,
+) -> &'static str {
+    if request_auth_channel == Some("bearer_like") {
+        cli_plan_kind
+    } else {
+        chat_plan_kind
+    }
+}
+
+fn resolve_gemini_generate_content_plan_kind(
+    request_auth_channel: Option<&str>,
+    chat_plan_kind: &'static str,
+    cli_plan_kind: &'static str,
+) -> &'static str {
+    if request_auth_channel == Some("bearer_like") {
+        cli_plan_kind
+    } else {
+        chat_plan_kind
+    }
 }
 
 pub fn is_matching_stream_request(
@@ -364,10 +374,12 @@ mod tests {
         supports_stream_execution_decision_kind, supports_sync_execution_decision_kind,
     };
     use crate::contracts::{
-        OPENAI_CHAT_STREAM_PLAN_KIND, OPENAI_CHAT_SYNC_PLAN_KIND, OPENAI_IMAGE_STREAM_PLAN_KIND,
-        OPENAI_IMAGE_SYNC_PLAN_KIND, OPENAI_RESPONSES_COMPACT_STREAM_PLAN_KIND,
-        OPENAI_RESPONSES_COMPACT_SYNC_PLAN_KIND, OPENAI_RESPONSES_STREAM_PLAN_KIND,
-        OPENAI_RESPONSES_SYNC_PLAN_KIND,
+        CLAUDE_CHAT_STREAM_PLAN_KIND, CLAUDE_CHAT_SYNC_PLAN_KIND, CLAUDE_CLI_STREAM_PLAN_KIND,
+        CLAUDE_CLI_SYNC_PLAN_KIND, GEMINI_CHAT_STREAM_PLAN_KIND, GEMINI_CHAT_SYNC_PLAN_KIND,
+        GEMINI_CLI_STREAM_PLAN_KIND, GEMINI_CLI_SYNC_PLAN_KIND, OPENAI_CHAT_STREAM_PLAN_KIND,
+        OPENAI_CHAT_SYNC_PLAN_KIND, OPENAI_IMAGE_STREAM_PLAN_KIND, OPENAI_IMAGE_SYNC_PLAN_KIND,
+        OPENAI_RESPONSES_COMPACT_STREAM_PLAN_KIND, OPENAI_RESPONSES_COMPACT_SYNC_PLAN_KIND,
+        OPENAI_RESPONSES_STREAM_PLAN_KIND, OPENAI_RESPONSES_SYNC_PLAN_KIND,
     };
 
     #[test]
@@ -377,6 +389,7 @@ mod tests {
                 Some("ai_public"),
                 Some("openai"),
                 Some("chat"),
+                None,
                 &Method::POST,
                 "/v1/chat/completions",
             ),
@@ -387,6 +400,7 @@ mod tests {
                 Some("ai_public"),
                 Some("openai"),
                 Some("chat"),
+                None,
                 &Method::POST,
                 "/v1/chat/completions",
             ),
@@ -401,6 +415,7 @@ mod tests {
                 Some("ai_public"),
                 Some("openai"),
                 Some("responses"),
+                None,
                 &Method::POST,
                 "/v1/responses",
             ),
@@ -411,6 +426,7 @@ mod tests {
                 Some("ai_public"),
                 Some("openai"),
                 Some("responses"),
+                None,
                 &Method::POST,
                 "/v1/responses",
             ),
@@ -421,6 +437,7 @@ mod tests {
                 Some("ai_public"),
                 Some("openai"),
                 Some("cli"),
+                None,
                 &Method::POST,
                 "/v1/responses",
             ),
@@ -441,6 +458,7 @@ mod tests {
                 Some("ai_public"),
                 Some("openai"),
                 Some("responses:compact"),
+                None,
                 &Method::POST,
                 "/v1/responses/compact",
             ),
@@ -451,6 +469,7 @@ mod tests {
                 Some("ai_public"),
                 Some("openai"),
                 Some("responses:compact"),
+                None,
                 &Method::POST,
                 "/v1/responses/compact",
             ),
@@ -461,6 +480,7 @@ mod tests {
                 Some("ai_public"),
                 Some("openai"),
                 Some("compact"),
+                None,
                 &Method::POST,
                 "/v1/responses/compact",
             ),
@@ -472,6 +492,102 @@ mod tests {
         assert!(supports_stream_execution_decision_kind(
             OPENAI_RESPONSES_COMPACT_STREAM_PLAN_KIND
         ));
+    }
+
+    #[test]
+    fn resolves_claude_messages_plan_kinds_by_request_auth_channel() {
+        assert_eq!(
+            resolve_execution_runtime_sync_plan_kind(
+                Some("ai_public"),
+                Some("claude"),
+                Some("messages"),
+                Some("api_key"),
+                &Method::POST,
+                "/v1/messages",
+            ),
+            Some(CLAUDE_CHAT_SYNC_PLAN_KIND)
+        );
+        assert_eq!(
+            resolve_execution_runtime_stream_plan_kind(
+                Some("ai_public"),
+                Some("claude"),
+                Some("messages"),
+                Some("api_key"),
+                &Method::POST,
+                "/v1/messages",
+            ),
+            Some(CLAUDE_CHAT_STREAM_PLAN_KIND)
+        );
+        assert_eq!(
+            resolve_execution_runtime_sync_plan_kind(
+                Some("ai_public"),
+                Some("claude"),
+                Some("messages"),
+                Some("bearer_like"),
+                &Method::POST,
+                "/v1/messages",
+            ),
+            Some(CLAUDE_CLI_SYNC_PLAN_KIND)
+        );
+        assert_eq!(
+            resolve_execution_runtime_stream_plan_kind(
+                Some("ai_public"),
+                Some("claude"),
+                Some("messages"),
+                Some("bearer_like"),
+                &Method::POST,
+                "/v1/messages",
+            ),
+            Some(CLAUDE_CLI_STREAM_PLAN_KIND)
+        );
+    }
+
+    #[test]
+    fn resolves_gemini_generate_content_plan_kinds_by_request_auth_channel() {
+        assert_eq!(
+            resolve_execution_runtime_sync_plan_kind(
+                Some("ai_public"),
+                Some("gemini"),
+                Some("generate_content"),
+                Some("api_key"),
+                &Method::POST,
+                "/v1beta/models/gemini-2.5-pro:generateContent",
+            ),
+            Some(GEMINI_CHAT_SYNC_PLAN_KIND)
+        );
+        assert_eq!(
+            resolve_execution_runtime_stream_plan_kind(
+                Some("ai_public"),
+                Some("gemini"),
+                Some("generate_content"),
+                Some("api_key"),
+                &Method::POST,
+                "/v1beta/models/gemini-2.5-pro:streamGenerateContent",
+            ),
+            Some(GEMINI_CHAT_STREAM_PLAN_KIND)
+        );
+        assert_eq!(
+            resolve_execution_runtime_sync_plan_kind(
+                Some("ai_public"),
+                Some("gemini"),
+                Some("generate_content"),
+                Some("bearer_like"),
+                &Method::POST,
+                "/v1beta/models/gemini-2.5-pro:generateContent",
+            ),
+            Some(GEMINI_CLI_SYNC_PLAN_KIND)
+        );
+        assert_eq!(
+            resolve_execution_runtime_stream_plan_kind(
+                Some("ai_public"),
+                Some("gemini"),
+                Some("generate_content"),
+                Some("bearer_like"),
+                &Method::POST,
+                "/v1beta/models/gemini-2.5-pro:streamGenerateContent",
+            ),
+            Some(GEMINI_CLI_STREAM_PLAN_KIND)
+        );
     }
 
     #[test]
@@ -501,6 +617,7 @@ mod tests {
                 Some("ai_public"),
                 Some("openai"),
                 Some("image"),
+                None,
                 &Method::POST,
                 "/v1/images/generations",
             ),
@@ -511,6 +628,7 @@ mod tests {
                 Some("ai_public"),
                 Some("openai"),
                 Some("image"),
+                None,
                 &Method::POST,
                 "/v1/images/edits",
             ),
@@ -521,6 +639,7 @@ mod tests {
                 Some("ai_public"),
                 Some("openai"),
                 Some("image"),
+                None,
                 &Method::POST,
                 "/v1/images/variations",
             ),
@@ -538,6 +657,7 @@ mod tests {
                 Some("ai_public"),
                 Some("openai"),
                 Some("image"),
+                None,
                 &Method::POST,
                 "/v1/images/generations",
             ),
@@ -548,6 +668,7 @@ mod tests {
                 Some("ai_public"),
                 Some("openai"),
                 Some("image"),
+                None,
                 &Method::POST,
                 "/v1/images/edits",
             ),

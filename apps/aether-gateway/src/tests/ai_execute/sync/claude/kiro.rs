@@ -288,7 +288,8 @@ async fn gateway_executes_kiro_claude_cli_sync_via_local_provider_catalog_candid
                     "action": "proxy_public",
                     "route_class": "ai_public",
                     "route_family": "claude",
-                    "route_kind": "cli",
+                    "route_kind": "messages",
+                    "request_auth_channel": "bearer_like",
                     "auth_endpoint_signature": "claude:messages",
                     "execution_runtime_candidate": true,
                     "auth_context": {
@@ -872,7 +873,8 @@ async fn gateway_executes_kiro_claude_cli_sync_via_local_provider_catalog_candid
                     "action": "proxy_public",
                     "route_class": "ai_public",
                     "route_family": "claude",
-                    "route_kind": "cli",
+                    "route_kind": "messages",
+                    "request_auth_channel": "bearer_like",
                     "auth_endpoint_signature": "claude:messages",
                     "execution_runtime_candidate": true,
                     "auth_context": {

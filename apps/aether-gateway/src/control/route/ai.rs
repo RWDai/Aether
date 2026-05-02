@@ -1,6 +1,6 @@
 use super::{
-    classified, is_claude_cli_request, is_gemini_cli_request, is_gemini_models_route,
-    is_gemini_operation_route, ClassifiedRoute,
+    classified, classified_with_request_auth_channel, is_claude_cli_request, is_gemini_cli_request,
+    is_gemini_models_route, is_gemini_operation_route, ClassifiedRoute,
 };
 
 pub(super) fn classify_ai_public_route(
@@ -58,15 +58,16 @@ pub(super) fn classify_ai_public_route(
             false,
         ))
     } else if method == http::Method::POST && normalized_path == "/v1/messages" {
-        let route_kind = if is_claude_cli_request(headers) {
-            "cli"
+        let request_auth_channel = if is_claude_cli_request(headers) {
+            "bearer_like"
         } else {
-            "messages"
+            "api_key"
         };
-        Some(classified(
+        Some(classified_with_request_auth_channel(
             "ai_public",
             "claude",
-            route_kind,
+            "messages",
+            request_auth_channel,
             "claude:messages",
             true,
         ))
@@ -88,18 +89,20 @@ pub(super) fn classify_ai_public_route(
                 true,
             ))
         } else if is_gemini_cli_request(headers) {
-            Some(classified(
+            Some(classified_with_request_auth_channel(
                 "ai_public",
                 "gemini",
-                "cli",
+                "generate_content",
+                "bearer_like",
                 "gemini:generate_content",
                 true,
             ))
         } else {
-            Some(classified(
+            Some(classified_with_request_auth_channel(
                 "ai_public",
                 "gemini",
                 "generate_content",
+                "api_key",
                 "gemini:generate_content",
                 true,
             ))

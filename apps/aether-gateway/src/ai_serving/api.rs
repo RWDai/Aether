@@ -66,6 +66,7 @@ pub(crate) fn resolve_execution_runtime_stream_plan_kind(
         decision.route_class.as_deref(),
         decision.route_family.as_deref(),
         decision.route_kind.as_deref(),
+        decision.request_auth_channel.as_deref(),
         &parts.method,
         parts.uri.path(),
     )
@@ -79,6 +80,7 @@ pub(crate) fn resolve_execution_runtime_sync_plan_kind(
         decision.route_class.as_deref(),
         decision.route_family.as_deref(),
         decision.route_kind.as_deref(),
+        decision.request_auth_channel.as_deref(),
         &parts.method,
         parts.uri.path(),
     )

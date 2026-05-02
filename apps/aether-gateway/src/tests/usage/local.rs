@@ -1645,7 +1645,7 @@ async fn gateway_records_failed_usage_when_all_local_claude_cli_candidates_are_s
     assert_eq!(stored_usage.routing_key_name(), None);
     assert_eq!(stored_usage.routing_planner_kind(), Some("claude_cli_sync"));
     assert_eq!(stored_usage.routing_route_family(), Some("claude"));
-    assert_eq!(stored_usage.routing_route_kind(), Some("cli"));
+    assert_eq!(stored_usage.routing_route_kind(), Some("messages"));
     assert_eq!(
         stored_usage.routing_execution_path(),
         Some("local_execution_runtime_miss")

@@ -15,6 +15,7 @@ pub(crate) fn resolve_execution_runtime_stream_plan_kind(
         decision.route_class.as_deref(),
         decision.route_family.as_deref(),
         decision.route_kind.as_deref(),
+        decision.request_auth_channel.as_deref(),
         &parts.method,
         parts.uri.path(),
     )
@@ -28,6 +29,7 @@ pub(crate) fn resolve_execution_runtime_sync_plan_kind(
         decision.route_class.as_deref(),
         decision.route_family.as_deref(),
         decision.route_kind.as_deref(),
+        decision.request_auth_channel.as_deref(),
         &parts.method,
         parts.uri.path(),
     )
@@ -69,12 +71,23 @@ mod tests {
             route_class: Some("ai_public".to_string()),
             route_family: Some(route_family.to_string()),
             route_kind: Some(route_kind.to_string()),
+            request_auth_channel: None,
             auth_context: None,
             admin_principal: None,
             auth_endpoint_signature: None,
             execution_runtime_candidate: true,
             local_auth_rejection: None,
         }
+    }
+
+    fn sample_decision_with_auth_channel(
+        route_family: &str,
+        route_kind: &str,
+        request_auth_channel: &str,
+    ) -> GatewayControlDecision {
+        let mut decision = sample_decision(route_family, route_kind);
+        decision.request_auth_channel = Some(request_auth_channel.to_string());
+        decision
     }
 
     #[test]
@@ -94,6 +107,47 @@ mod tests {
         assert_eq!(
             resolve_execution_runtime_stream_plan_kind(&parts, &decision),
             Some("openai_chat_stream")
+        );
+    }
+
+    #[test]
+    fn resolves_endpoint_route_kinds_by_request_auth_channel_via_format_crate() {
+        let claude_request = Request::builder()
+            .method(Method::POST)
+            .uri("/v1/messages")
+            .body(())
+            .expect("request should build");
+        let (claude_parts, _) = claude_request.into_parts();
+
+        let claude_api_key = sample_decision_with_auth_channel("claude", "messages", "api_key");
+        let claude_bearer = sample_decision_with_auth_channel("claude", "messages", "bearer_like");
+        assert_eq!(
+            resolve_execution_runtime_sync_plan_kind(&claude_parts, &claude_api_key),
+            Some("claude_chat_sync")
+        );
+        assert_eq!(
+            resolve_execution_runtime_stream_plan_kind(&claude_parts, &claude_bearer),
+            Some("claude_cli_stream")
+        );
+
+        let gemini_request = Request::builder()
+            .method(Method::POST)
+            .uri("/v1beta/models/gemini-2.5-pro:generateContent")
+            .body(())
+            .expect("request should build");
+        let (gemini_parts, _) = gemini_request.into_parts();
+
+        let gemini_api_key =
+            sample_decision_with_auth_channel("gemini", "generate_content", "api_key");
+        let gemini_bearer =
+            sample_decision_with_auth_channel("gemini", "generate_content", "bearer_like");
+        assert_eq!(
+            resolve_execution_runtime_sync_plan_kind(&gemini_parts, &gemini_api_key),
+            Some("gemini_chat_sync")
+        );
+        assert_eq!(
+            resolve_execution_runtime_sync_plan_kind(&gemini_parts, &gemini_bearer),
+            Some("gemini_cli_sync")
         );
     }
 

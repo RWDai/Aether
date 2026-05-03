@@ -1154,8 +1154,7 @@ mod tests {
     use super::{
         build_client, execute_sync_plan, record_manual_proxy_request_failure,
         record_manual_proxy_request_outcome, record_manual_proxy_request_success,
-        record_manual_proxy_stream_error, DirectSyncExecutionRuntime,
-        ExecutionTransportControls,
+        record_manual_proxy_stream_error, DirectSyncExecutionRuntime, ExecutionTransportControls,
     };
     use crate::constants::{
         EXECUTION_RUNTIME_LOOP_GUARD_HEADER, EXECUTION_RUNTIME_LOOP_GUARD_VIA_TOKEN,

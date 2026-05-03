@@ -41,5 +41,9 @@ fn git_describe_version() -> Option<String> {
 }
 
 fn normalize_version(value: &str) -> String {
-    value.trim().strip_prefix('v').unwrap_or(value.trim()).to_string()
+    value
+        .trim()
+        .strip_prefix('v')
+        .unwrap_or(value.trim())
+        .to_string()
 }

@@ -6198,6 +6198,232 @@ async fn gateway_upserts_custom_oidc_with_allowed_domains() {
 }
 
 #[tokio::test]
+async fn gateway_upserts_multiple_custom_oidc_configs() {
+    let upstream_hits = Arc::new(Mutex::new(0usize));
+    let upstream_hits_clone = Arc::clone(&upstream_hits);
+    let upstream = Router::new().fallback(any(move |_request: Request| {
+        let upstream_hits_inner = Arc::clone(&upstream_hits_clone);
+        async move {
+            *upstream_hits_inner.lock().expect("mutex should lock") += 1;
+            (StatusCode::OK, Body::from("unexpected upstream hit"))
+        }
+    }));
+
+    let repository = Arc::new(InMemoryOAuthProviderRepository::default());
+    let (upstream_url, upstream_handle) = start_server(upstream).await;
+    let gateway = build_router_with_state(
+        AppState::new()
+            .expect("gateway should build")
+            .with_data_state_for_tests(GatewayDataState::with_oauth_provider_repository_for_tests(
+                repository.clone(),
+            )),
+    );
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+
+    for (provider_type, display_name, host) in [
+        ("custom_oidc_work", "Work OIDC", "work-idp.example.com"),
+        (
+            "custom_oidc_personal",
+            "Personal OIDC",
+            "personal-idp.example.com",
+        ),
+    ] {
+        let response = reqwest::Client::new()
+            .put(format!(
+                "{gateway_url}/api/admin/oauth/providers/{provider_type}"
+            ))
+            .header(crate::constants::GATEWAY_HEADER, "rust-phase3b")
+            .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+            .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+            .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+            .json(&json!({
+                "display_name": display_name,
+                "client_id": format!("{provider_type}-client"),
+                "authorization_url_override": format!("https://{host}/oauth/authorize"),
+                "token_url_override": format!("https://{host}/oauth/token"),
+                "userinfo_url_override": format!("https://{host}/oauth/userinfo"),
+                "scopes": ["openid", "profile", "email"],
+                "redirect_uri": format!("https://backend.example.com/api/oauth/{provider_type}/callback"),
+                "frontend_callback_url": "https://frontend.example.com/auth/callback",
+                "attribute_mapping": {"sub": "id", "email": "profile.email"},
+                "extra_config": {"allowed_domains": [host]},
+                "is_enabled": true
+            }))
+            .send()
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload: serde_json::Value = response.json().await.expect("json body should parse");
+        assert_eq!(payload["provider_type"], provider_type);
+        assert_eq!(payload["display_name"], display_name);
+    }
+
+    let stored = repository
+        .list_oauth_provider_configs()
+        .await
+        .expect("list should succeed");
+    assert_eq!(stored.len(), 2);
+    assert!(stored
+        .iter()
+        .any(|provider| provider.provider_type == "custom_oidc_work"));
+    assert!(stored
+        .iter()
+        .any(|provider| provider.provider_type == "custom_oidc_personal"));
+    assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
+
+    gateway_handle.abort();
+    upstream_handle.abort();
+}
+
+#[tokio::test]
+async fn gateway_tests_admin_oauth_linuxdo_endpoints_locally_with_configured_secret() {
+    let upstream_hits = Arc::new(Mutex::new(0usize));
+    let upstream_hits_clone = Arc::clone(&upstream_hits);
+    let upstream = Router::new().route(
+        "/api/admin/oauth/providers/linuxdo/test",
+        any(move |_request: Request| {
+            let upstream_hits_inner = Arc::clone(&upstream_hits_clone);
+            async move {
+                *upstream_hits_inner.lock().expect("mutex should lock") += 1;
+                (StatusCode::OK, Body::from("unexpected upstream hit"))
+            }
+        }),
+    );
+
+    let authorization_hits = Arc::new(Mutex::new(0usize));
+    let authorization_hits_clone = Arc::clone(&authorization_hits);
+    let token_hits = Arc::new(Mutex::new(0usize));
+    let token_hits_clone = Arc::clone(&token_hits);
+    let oauth_endpoints = Router::new()
+        .route(
+            "/oauth2/authorize",
+            any(move |_request: Request| {
+                let authorization_hits_inner = Arc::clone(&authorization_hits_clone);
+                async move {
+                    *authorization_hits_inner.lock().expect("mutex should lock") += 1;
+                    (StatusCode::BAD_REQUEST, Body::from("missing query"))
+                }
+            }),
+        )
+        .route(
+            "/oauth2/token",
+            any(move |_request: Request| {
+                let token_hits_inner = Arc::clone(&token_hits_clone);
+                async move {
+                    *token_hits_inner.lock().expect("mutex should lock") += 1;
+                    (
+                        StatusCode::METHOD_NOT_ALLOWED,
+                        Body::from("method not allowed"),
+                    )
+                }
+            }),
+        );
+
+    let repository = Arc::new(InMemoryOAuthProviderRepository::seed(vec![
+        sample_oauth_provider_config("linuxdo"),
+    ]));
+    let (upstream_url, upstream_handle) = start_server(upstream).await;
+    let (oauth_url, oauth_handle) = start_server(oauth_endpoints).await;
+    let gateway = build_router_with_state(
+        AppState::new()
+            .expect("gateway should build")
+            .with_data_state_for_tests(GatewayDataState::with_oauth_provider_repository_for_tests(
+                repository,
+            )),
+    );
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+
+    let response = reqwest::Client::new()
+        .post(format!(
+            "{gateway_url}/api/admin/oauth/providers/linuxdo/test"
+        ))
+        .header(crate::constants::GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .json(&json!({
+            "client_id": "client-id",
+            "authorization_url_override": format!("{oauth_url}/oauth2/authorize"),
+            "token_url_override": format!("{oauth_url}/oauth2/token"),
+            "redirect_uri": "http://localhost:8084/api/oauth/linuxdo/callback"
+        }))
+        .send()
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: serde_json::Value = response.json().await.expect("json body should parse");
+    assert_eq!(payload["authorization_url_reachable"], true);
+    assert_eq!(payload["token_url_reachable"], true);
+    assert_eq!(payload["secret_status"], "configured");
+    assert_eq!(*authorization_hits.lock().expect("mutex should lock"), 1);
+    assert_eq!(*token_hits.lock().expect("mutex should lock"), 1);
+    assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
+
+    gateway_handle.abort();
+    upstream_handle.abort();
+    oauth_handle.abort();
+    let _ = upstream_url;
+}
+
+#[tokio::test]
+async fn gateway_tests_admin_oauth_linuxdo_reports_invalid_endpoint_urls() {
+    let upstream_hits = Arc::new(Mutex::new(0usize));
+    let upstream_hits_clone = Arc::clone(&upstream_hits);
+    let upstream = Router::new().route(
+        "/api/admin/oauth/providers/linuxdo/test",
+        any(move |_request: Request| {
+            let upstream_hits_inner = Arc::clone(&upstream_hits_clone);
+            async move {
+                *upstream_hits_inner.lock().expect("mutex should lock") += 1;
+                (StatusCode::OK, Body::from("unexpected upstream hit"))
+            }
+        }),
+    );
+
+    let repository = Arc::new(InMemoryOAuthProviderRepository::default());
+    let (upstream_url, upstream_handle) = start_server(upstream).await;
+    let gateway = build_router_with_state(
+        AppState::new()
+            .expect("gateway should build")
+            .with_data_state_for_tests(GatewayDataState::with_oauth_provider_repository_for_tests(
+                repository,
+            )),
+    );
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+
+    let response = reqwest::Client::new()
+        .post(format!(
+            "{gateway_url}/api/admin/oauth/providers/linuxdo/test"
+        ))
+        .header(crate::constants::GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .json(&json!({
+            "client_id": "client-id",
+            "authorization_url_override": "not-a-url",
+            "token_url_override": "not-a-url",
+            "redirect_uri": "http://localhost:8084/api/oauth/linuxdo/callback"
+        }))
+        .send()
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: serde_json::Value = response.json().await.expect("json body should parse");
+    assert_eq!(payload["authorization_url_reachable"], false);
+    assert_eq!(payload["token_url_reachable"], false);
+    assert_eq!(payload["secret_status"], "not_provided");
+    assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
+
+    gateway_handle.abort();
+    upstream_handle.abort();
+    let _ = upstream_url;
+}
+
+#[tokio::test]
 async fn gateway_deletes_admin_oauth_provider_locally_with_trusted_admin_principal() {
     let upstream_hits = Arc::new(Mutex::new(0usize));
     let upstream_hits_clone = Arc::clone(&upstream_hits);

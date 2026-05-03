@@ -1,7 +1,8 @@
 use super::oauth_config::{
-    admin_oauth_provider_type_from_path, admin_oauth_test_provider_type_from_path,
-    build_admin_oauth_provider_payload, build_admin_oauth_supported_types_payload,
-    build_admin_oauth_upsert_record, AdminOAuthProviderUpsertRequest,
+    admin_oauth_is_supported_provider, admin_oauth_provider_type_from_path,
+    admin_oauth_test_provider_type_from_path, build_admin_oauth_provider_payload,
+    build_admin_oauth_supported_types_payload, build_admin_oauth_upsert_record,
+    AdminOAuthProviderUpsertRequest,
 };
 use crate::handlers::admin::request::{AdminAppState, AdminRequestContext};
 use crate::handlers::admin::shared::{attach_admin_audit_response, build_proxy_error_response};
@@ -13,6 +14,143 @@ use axum::{
     Json,
 };
 use serde_json::json;
+use std::time::Duration;
+
+const ADMIN_OAUTH_TEST_TIMEOUT_SECS: u64 = 5;
+const LINUXDO_AUTHORIZATION_URL: &str = "https://connect.linux.do/oauth2/authorize";
+const LINUXDO_TOKEN_URL: &str = "https://connect.linux.do/oauth2/token";
+
+fn admin_oauth_payload_string<'a>(payload: &'a serde_json::Value, field: &str) -> Option<&'a str> {
+    payload
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn admin_oauth_secret_status(has_secret: bool) -> &'static str {
+    if has_secret {
+        "configured"
+    } else {
+        "not_provided"
+    }
+}
+
+async fn admin_oauth_endpoint_reachable(client: &reqwest::Client, url: &str) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return false;
+    }
+
+    match client
+        .get(parsed)
+        .header(reqwest::header::ACCEPT, "*/*")
+        .header(
+            reqwest::header::USER_AGENT,
+            "Aether OAuth configuration tester",
+        )
+        .send()
+        .await
+    {
+        Ok(response) => {
+            let status = response.status();
+            status != reqwest::StatusCode::NOT_FOUND && status.as_u16() < 500
+        }
+        Err(_) => false,
+    }
+}
+
+async fn build_admin_oauth_test_payload(
+    state: &AdminAppState<'_>,
+    provider_type: &str,
+    payload: &serde_json::Value,
+) -> Result<serde_json::Value, GatewayError> {
+    if !admin_oauth_is_supported_provider(provider_type) {
+        return Ok(json!({
+            "authorization_url_reachable": false,
+            "token_url_reachable": false,
+            "secret_status": "unknown",
+            "details": "provider 未安装/不可用",
+        }));
+    }
+
+    let provided_secret = admin_oauth_payload_string(payload, "client_secret");
+    let persisted_config = state.get_oauth_provider_config(provider_type).await?;
+    let persisted_secret_configured = persisted_config
+        .as_ref()
+        .and_then(|provider| provider.client_secret_encrypted.as_ref())
+        .is_some();
+    let has_secret = provided_secret.is_some() || persisted_secret_configured;
+
+    let builtin_defaults = provider_type
+        .eq_ignore_ascii_case("linuxdo")
+        .then_some((LINUXDO_AUTHORIZATION_URL, LINUXDO_TOKEN_URL));
+    let authorization_url = admin_oauth_payload_string(payload, "authorization_url_override")
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            persisted_config
+                .as_ref()
+                .and_then(|provider| provider.authorization_url_override.clone())
+        })
+        .or_else(|| builtin_defaults.map(|defaults| defaults.0.to_string()));
+    let token_url = admin_oauth_payload_string(payload, "token_url_override")
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            persisted_config
+                .as_ref()
+                .and_then(|provider| provider.token_url_override.clone())
+        })
+        .or_else(|| builtin_defaults.map(|defaults| defaults.1.to_string()));
+    let Some(authorization_url) = authorization_url else {
+        return Ok(json!({
+            "authorization_url_reachable": false,
+            "token_url_reachable": false,
+            "secret_status": admin_oauth_secret_status(has_secret),
+            "details": "Authorization URL 未配置",
+        }));
+    };
+    let Some(token_url) = token_url else {
+        return Ok(json!({
+            "authorization_url_reachable": false,
+            "token_url_reachable": false,
+            "secret_status": admin_oauth_secret_status(has_secret),
+            "details": "Token URL 未配置",
+        }));
+    };
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(ADMIN_OAUTH_TEST_TIMEOUT_SECS))
+        .redirect(reqwest::redirect::Policy::limited(3))
+        .build();
+    let Ok(client) = client else {
+        return Ok(json!({
+            "authorization_url_reachable": false,
+            "token_url_reachable": false,
+            "secret_status": admin_oauth_secret_status(has_secret),
+            "details": "OAuth 配置测试 HTTP client 初始化失败",
+        }));
+    };
+
+    let (authorization_url_reachable, token_url_reachable) = tokio::join!(
+        admin_oauth_endpoint_reachable(&client, &authorization_url),
+        admin_oauth_endpoint_reachable(&client, &token_url),
+    );
+
+    let details = if authorization_url_reachable && token_url_reachable {
+        "OAuth 端点可达；client_secret 仅在授权回调兑换 code 时校验"
+    } else {
+        "OAuth 端点不可达或返回不可用状态；请检查端点 URL、网络和代理配置"
+    };
+
+    Ok(json!({
+        "authorization_url_reachable": authorization_url_reachable,
+        "token_url_reachable": token_url_reachable,
+        "secret_status": admin_oauth_secret_status(has_secret),
+        "details": details,
+    }))
+}
 
 pub(crate) async fn maybe_build_local_admin_oauth_response(
     state: &AdminAppState<'_>,
@@ -259,16 +397,8 @@ pub(crate) async fn maybe_build_local_admin_oauth_response(
                 ));
             }
         };
-        let client_id = payload
-            .get("client_id")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        let redirect_uri = payload
-            .get("redirect_uri")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
+        let client_id = admin_oauth_payload_string(&payload, "client_id");
+        let redirect_uri = admin_oauth_payload_string(&payload, "redirect_uri");
         if client_id.is_none() || redirect_uri.is_none() {
             return Ok(Some(
                 (
@@ -278,38 +408,9 @@ pub(crate) async fn maybe_build_local_admin_oauth_response(
                     .into_response(),
             ));
         }
-        let provided_secret = payload
-            .get("client_secret")
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        let persisted_secret = state
-            .get_oauth_provider_config(&provider_type)
-            .await?
-            .and_then(|provider| provider.client_secret_encrypted);
-        let supported_provider = provider_type.eq_ignore_ascii_case("linuxdo");
-        let secret_status = if supported_provider {
-            if provided_secret.is_some() || persisted_secret.is_some() {
-                "unsupported"
-            } else {
-                "not_provided"
-            }
-        } else {
-            "unknown"
-        };
-        let details = if supported_provider {
-            "OAuth 配置测试仅支持 Rust execution runtime"
-        } else {
-            "provider 未安装/不可用"
-        };
+        let test_payload = build_admin_oauth_test_payload(state, &provider_type, &payload).await?;
         return Ok(Some(attach_admin_audit_response(
-            Json(json!({
-                "authorization_url_reachable": false,
-                "token_url_reachable": false,
-                "secret_status": secret_status,
-                "details": details,
-            }))
-            .into_response(),
+            Json(test_payload).into_response(),
             "admin_oauth_provider_tested",
             "test_oauth_provider_config",
             "oauth_provider",

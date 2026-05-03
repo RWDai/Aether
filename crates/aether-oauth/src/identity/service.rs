@@ -47,6 +47,11 @@ impl IdentityOAuthService {
     ) -> Result<Arc<dyn IdentityOAuthProvider>, OAuthError> {
         self.registry
             .get(provider_type)
+            .or_else(|| {
+                is_custom_oidc_provider_type(provider_type)
+                    .then(|| self.registry.get("custom_oidc"))
+                    .flatten()
+            })
             .ok_or_else(|| OAuthError::UnsupportedProvider(provider_type.to_string()))
     }
 
@@ -78,6 +83,14 @@ impl IdentityOAuthService {
         let provider = self.provider(&config.provider_type)?;
         bind_oauth_identity(provider.as_ref(), executor, config, ctx).await
     }
+}
+
+fn is_custom_oidc_provider_type(provider_type: &str) -> bool {
+    let normalized = provider_type.trim().to_ascii_lowercase();
+    normalized == "custom_oidc"
+        || normalized.starts_with("custom_oidc_")
+        || normalized.starts_with("custom_")
+        || normalized.starts_with("oidc_")
 }
 
 pub fn start_identity_oauth(
@@ -132,6 +145,7 @@ mod tests {
 
         assert!(service.provider("linuxdo").is_ok());
         assert!(service.provider("custom_oidc").is_ok());
+        assert!(service.provider("custom_oidc_work").is_ok());
         assert!(service.provider("missing").is_err());
     }
 }

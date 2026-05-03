@@ -87,11 +87,36 @@ pub(crate) fn admin_oauth_test_provider_type_from_path(request_path: &str) -> Op
         .map(ToOwned::to_owned)
 }
 
-fn admin_oauth_is_supported_provider(provider_type: &str) -> bool {
-    matches!(
-        provider_type.to_ascii_lowercase().as_str(),
-        "linuxdo" | "custom_oidc"
-    )
+pub(super) fn admin_oauth_normalized_provider_type(provider_type: &str) -> Option<String> {
+    let normalized = provider_type.trim().to_ascii_lowercase();
+    if !(3..=64).contains(&normalized.len()) {
+        return None;
+    }
+    let mut chars = normalized.chars();
+    let first = chars.next()?;
+    if !first.is_ascii_lowercase() {
+        return None;
+    }
+    if !chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_' || ch == '-') {
+        return None;
+    }
+    Some(normalized)
+}
+
+pub(super) fn admin_oauth_is_custom_provider_type(provider_type: &str) -> bool {
+    let Some(provider_type) = admin_oauth_normalized_provider_type(provider_type) else {
+        return false;
+    };
+    provider_type == "custom_oidc"
+        || provider_type.starts_with("custom_oidc_")
+        || provider_type.starts_with("custom_")
+        || provider_type.starts_with("oidc_")
+}
+
+pub(super) fn admin_oauth_is_supported_provider(provider_type: &str) -> bool {
+    admin_oauth_normalized_provider_type(provider_type).is_some_and(|provider_type| {
+        provider_type == "linuxdo" || admin_oauth_is_custom_provider_type(&provider_type)
+    })
 }
 
 fn admin_oauth_builtin_allowed_domains(provider_type: &str) -> Option<&'static [&'static str]> {
@@ -184,7 +209,10 @@ pub(super) fn build_admin_oauth_upsert_record(
     provider_type: &str,
     payload: AdminOAuthProviderUpsertRequest,
 ) -> Result<UpsertOAuthProviderConfigRecord, String> {
-    if !admin_oauth_is_supported_provider(provider_type) {
+    let Some(provider_type) = admin_oauth_normalized_provider_type(provider_type) else {
+        return Err("provider_type 只能包含小写字母、数字、下划线和中划线".to_string());
+    };
+    if !admin_oauth_is_supported_provider(&provider_type) {
         return Err("不支持的 provider_type".to_string());
     }
 
@@ -208,19 +236,19 @@ pub(super) fn build_admin_oauth_upsert_record(
     validate_admin_oauth_frontend_callback_url(frontend_callback_url)?;
     validate_admin_oauth_redirect_uri(redirect_uri)?;
 
-    let is_custom_oidc = provider_type.eq_ignore_ascii_case("custom_oidc");
+    let is_custom_oidc = admin_oauth_is_custom_provider_type(&provider_type);
     let custom_allowed_domains = if is_custom_oidc {
         let domains = admin_oauth_custom_allowed_domains(payload.extra_config.as_ref());
         if domains.is_empty() {
-            return Err(
-                "custom_oidc 必须在 extra_config.allowed_domains 配置域名白名单".to_string(),
-            );
+            return Err(format!(
+                "{provider_type} 必须在 extra_config.allowed_domains 配置域名白名单"
+            ));
         }
         domains
     } else {
         Vec::new()
     };
-    let builtin_allowed_domains = admin_oauth_builtin_allowed_domains(provider_type);
+    let builtin_allowed_domains = admin_oauth_builtin_allowed_domains(&provider_type);
 
     if is_custom_oidc {
         for (field_name, value) in [
@@ -309,7 +337,7 @@ pub(super) fn build_admin_oauth_upsert_record(
     };
 
     Ok(UpsertOAuthProviderConfigRecord {
-        provider_type: provider_type.to_string(),
+        provider_type,
         display_name: display_name.to_string(),
         client_id: client_id.to_string(),
         client_secret_encrypted,

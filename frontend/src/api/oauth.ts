@@ -68,7 +68,7 @@ export interface OAuthProviderUpsertRequest {
 export interface OAuthProviderTestResponse {
   authorization_url_reachable: boolean
   token_url_reachable: boolean
-  secret_status: 'likely_valid' | 'invalid' | 'unknown' | 'not_provided' | string
+  secret_status: 'likely_valid' | 'configured' | 'invalid' | 'unknown' | 'not_provided' | string
   details?: string
 }
 
@@ -118,24 +118,23 @@ export const oauthApi = {
     },
 
     async getProviderConfig(providerType: string): Promise<OAuthProviderAdminConfig> {
-      const response = await apiClient.get<OAuthProviderAdminConfig>(`/api/admin/oauth/providers/${providerType}`)
+      const response = await apiClient.get<OAuthProviderAdminConfig>(`/api/admin/oauth/providers/${encodeURIComponent(providerType)}`)
       return response.data
     },
 
     async upsertProviderConfig(providerType: string, payload: OAuthProviderUpsertRequest): Promise<OAuthProviderAdminConfig> {
-      const response = await apiClient.put<OAuthProviderAdminConfig>(`/api/admin/oauth/providers/${providerType}`, payload)
+      const response = await apiClient.put<OAuthProviderAdminConfig>(`/api/admin/oauth/providers/${encodeURIComponent(providerType)}`, payload)
       return response.data
     },
 
     async deleteProviderConfig(providerType: string): Promise<{ message: string }> {
-      const response = await apiClient.delete<{ message: string }>(`/api/admin/oauth/providers/${providerType}`)
+      const response = await apiClient.delete<{ message: string }>(`/api/admin/oauth/providers/${encodeURIComponent(providerType)}`)
       return response.data
     },
 
     async testProviderConfig(providerType: string, payload: OAuthProviderTestRequest): Promise<OAuthProviderTestResponse> {
-      const response = await apiClient.post<OAuthProviderTestResponse>(`/api/admin/oauth/providers/${providerType}/test`, payload)
+      const response = await apiClient.post<OAuthProviderTestResponse>(`/api/admin/oauth/providers/${encodeURIComponent(providerType)}/test`, payload)
       return response.data
     },
   }
 }
-

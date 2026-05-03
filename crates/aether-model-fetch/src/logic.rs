@@ -58,7 +58,7 @@ pub fn extract_error_message(value: &Value) -> Option<String> {
 }
 
 pub fn build_models_fetch_url(
-    _provider_type: &str,
+    provider_type: &str,
     endpoint_api_format: &str,
     base_url: &str,
 ) -> Option<(String, String)> {
@@ -66,7 +66,10 @@ pub fn build_models_fetch_url(
     if !endpoint_supports_rust_models_fetch(&api_format) {
         return None;
     }
-    let url = if api_format.starts_with("openai:") || api_format.starts_with("claude:") {
+    let provider_type = provider_type.trim().to_ascii_lowercase();
+    let url = if provider_type == "codex" && api_format.starts_with("openai:") {
+        build_codex_models_url(base_url)
+    } else if api_format.starts_with("openai:") || api_format.starts_with("claude:") {
         build_v1_models_url(base_url)
     } else if api_format.starts_with("gemini:") {
         build_gemini_models_url(base_url)
@@ -115,23 +118,20 @@ pub fn parse_models_response_page(
             items
         } else if let Some(items) = body.as_array() {
             items
+        } else if let Some(items) = body.get("models").and_then(Value::as_array) {
+            items
         } else {
             return Err("models response is missing data array".to_string());
         };
         for item in items {
-            let Some(model_id) = item
-                .get("id")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            else {
+            let Some(model_id) = model_id_from_openai_like_item(item) else {
                 continue;
             };
-            if !seen.insert(model_id.to_string()) {
+            if !seen.insert(model_id.clone()) {
                 continue;
             }
-            fetched_model_ids.push(model_id.to_string());
-            cached_models.push(normalize_cached_model(item, model_id, &api_format));
+            fetched_model_ids.push(model_id.clone());
+            cached_models.push(normalize_cached_model(item, &model_id, &api_format));
         }
     } else if api_format.starts_with("gemini:") {
         let items = body
@@ -229,7 +229,7 @@ pub fn endpoint_supports_rust_models_fetch(api_format: &str) -> bool {
 pub fn provider_type_uses_preset_models(provider_type: &str) -> bool {
     matches!(
         provider_type.trim().to_ascii_lowercase().as_str(),
-        "codex" | "kiro" | "claude_code" | "gemini_cli"
+        "kiro" | "claude_code" | "gemini_cli"
     )
 }
 
@@ -258,34 +258,11 @@ pub fn preset_models_for_provider(provider_type: &str) -> Option<Vec<Value>> {
             preset_model("claude-haiku-4-5-20251001", "anthropic", "Claude Haiku 4.5", "claude:messages"),
         ],
         "codex" => vec![
-            preset_model("gpt-5", "openai", "GPT-5", "openai:responses"),
-            preset_model("gpt-image-1", "openai", "GPT Image 1", "openai:image"),
-            preset_model("gpt-image-1.5", "openai", "GPT Image 1.5", "openai:image"),
-            preset_model("gpt-image-1-mini", "openai", "GPT Image 1 Mini", "openai:image"),
-            preset_model("gpt-image-2", "openai", "GPT Image 2", "openai:image"),
-            preset_model("chatgpt-image-latest", "openai", "ChatGPT Image Latest", "openai:image"),
-            preset_model("dall-e-2", "openai", "DALL-E 2", "openai:image"),
-            preset_model("dall-e-3", "openai", "DALL-E 3", "openai:image"),
-            preset_model("gpt-5-codex", "openai", "GPT-5 Codex", "openai:responses"),
-            preset_model("gpt-5-codex-mini", "openai", "GPT-5 Codex Mini", "openai:responses"),
-            preset_model("gpt-5.1", "openai", "GPT-5.1", "openai:responses"),
-            preset_model("gpt-5.1-codex", "openai", "GPT-5.1 Codex", "openai:responses"),
-            preset_model(
-                "gpt-5.1-codex-mini",
-                "openai",
-                "GPT-5.1 Codex Mini",
-                "openai:responses",
-            ),
-            preset_model(
-                "gpt-5.1-codex-max",
-                "openai",
-                "GPT-5.1 Codex Max",
-                "openai:responses",
-            ),
-            preset_model("gpt-5.2", "openai", "GPT-5.2", "openai:responses"),
-            preset_model("gpt-5.2-codex", "openai", "GPT-5.2 Codex", "openai:responses"),
-            preset_model("gpt-5.3-codex", "openai", "GPT-5.3 Codex", "openai:responses"),
+            preset_model("gpt-5.5", "openai", "GPT-5.5", "openai:responses"),
             preset_model("gpt-5.4", "openai", "GPT-5.4", "openai:responses"),
+            preset_model("gpt-5.4-mini", "openai", "GPT-5.4 Mini", "openai:responses"),
+            preset_model("gpt-5.3-codex", "openai", "GPT-5.3 Codex", "openai:responses"),
+            preset_model("gpt-5.3-codex-spark", "openai", "GPT-5.3 Codex Spark", "openai:responses"),
         ],
         _ => return None,
     };
@@ -485,6 +462,37 @@ fn build_v1_models_url(base_url: &str) -> Option<String> {
     Some(url)
 }
 
+fn build_codex_models_url(base_url: &str) -> Option<String> {
+    let (trimmed_base_url, query) = split_url_query(base_url);
+    let trimmed_base_url = trimmed_base_url.trim_end_matches('/');
+    if trimmed_base_url.is_empty() {
+        return None;
+    }
+    let mut url = if trimmed_base_url.ends_with("/models") {
+        trimmed_base_url.to_string()
+    } else {
+        format!("{trimmed_base_url}/models")
+    };
+    let mut has_client_version = false;
+    if let Some(query) = query.filter(|value| !value.trim().is_empty()) {
+        has_client_version = query.split('&').any(|part| {
+            part.split_once('=')
+                .map(|(key, _)| key)
+                .unwrap_or(part)
+                .trim()
+                .eq_ignore_ascii_case("client_version")
+        });
+        url.push('?');
+        url.push_str(query);
+    }
+    if !has_client_version {
+        let separator = if url.contains('?') { '&' } else { '?' };
+        url.push(separator);
+        url.push_str("client_version=0.128.0-alpha.1");
+    }
+    Some(url)
+}
+
 fn build_gemini_models_url(base_url: &str) -> Option<String> {
     let (trimmed_base_url, base_query) = split_url_query(base_url);
     let trimmed_base_url = trimmed_base_url.trim_end_matches('/');
@@ -504,6 +512,24 @@ fn build_gemini_models_url(base_url: &str) -> Option<String> {
         url.push_str(query);
     }
     Some(url)
+}
+
+fn model_id_from_openai_like_item(item: &Value) -> Option<String> {
+    if let Some(value) = item
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Some(value.trim_start_matches("models/").to_string());
+    }
+
+    ["id", "model", "slug", "name"].iter().find_map(|field| {
+        item.get(*field)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.trim_start_matches("models/").to_string())
+    })
 }
 
 fn split_url_query(base_url: &str) -> (&str, Option<&str>) {
@@ -708,6 +734,22 @@ mod tests {
     }
 
     #[test]
+    fn build_models_fetch_url_uses_codex_backend_models_endpoint() {
+        assert_eq!(
+            build_models_fetch_url(
+                "codex",
+                "openai:responses",
+                "https://chatgpt.com/backend-api/codex"
+            ),
+            Some((
+                "https://chatgpt.com/backend-api/codex/models?client_version=0.128.0-alpha.1"
+                    .to_string(),
+                "openai:responses".to_string()
+            ))
+        );
+    }
+
+    #[test]
     fn parse_models_response_normalizes_openai_payload() {
         let parsed = parse_models_response(
             "openai:chat",
@@ -718,6 +760,23 @@ mod tests {
         assert_eq!(
             parsed.cached_models[0]["api_formats"],
             json!(["openai:chat"])
+        );
+    }
+
+    #[test]
+    fn parse_models_response_accepts_codex_models_array_payload() {
+        let parsed = parse_models_response(
+            "openai:responses",
+            &json!({"models": [{"id": "gpt-5-codex"}, {"slug": "gpt-5.4"}]}),
+        )
+        .expect("response should parse");
+        assert_eq!(
+            parsed.fetched_model_ids,
+            vec!["gpt-5-codex".to_string(), "gpt-5.4".to_string()]
+        );
+        assert_eq!(
+            parsed.cached_models[0]["api_formats"],
+            json!(["openai:responses"])
         );
     }
 
@@ -822,6 +881,19 @@ mod tests {
     #[test]
     fn preset_models_cover_codex_catalog() {
         let models = preset_models_for_provider("codex").expect("preset models should exist");
-        assert!(models.iter().any(|model| model["id"] == "gpt-5.4"));
+        let model_ids = models
+            .iter()
+            .map(|model| model["id"].as_str().expect("model id"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            model_ids,
+            vec![
+                "gpt-5.5",
+                "gpt-5.4",
+                "gpt-5.4-mini",
+                "gpt-5.3-codex",
+                "gpt-5.3-codex-spark",
+            ]
+        );
     }
 }

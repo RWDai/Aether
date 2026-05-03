@@ -15,7 +15,7 @@ use aether_provider_transport::{
     GatewayProviderTransportSnapshot, LocalResolvedOAuthRequestAuth,
 };
 use async_trait::async_trait;
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::build_models_fetch_url;
 
@@ -85,7 +85,13 @@ pub async fn build_standard_models_fetch_execution_plan(
 ) -> Result<ExecutionPlan, String> {
     let api_format = transport.endpoint.api_format.trim().to_ascii_lowercase();
     let provider_api_format = api_format.clone();
-    let mut headers = standard_models_fetch_headers(&api_format, &transport.provider.provider_type);
+    let provider_type = transport.provider.provider_type.trim().to_ascii_lowercase();
+    let is_codex_openai_models_fetch =
+        provider_type == "codex" && api_format.starts_with("openai:");
+    let mut headers = standard_models_fetch_headers(&api_format, &provider_type);
+    if is_codex_openai_models_fetch {
+        headers.insert("accept".to_string(), "application/json".to_string());
+    }
     let mut protected_headers = Vec::<String>::new();
 
     if api_format.starts_with("openai:") || api_format.starts_with("claude:") {
@@ -101,6 +107,16 @@ pub async fn build_standard_models_fetch_execution_plan(
             &auth_header_name,
             &auth_header_value,
         );
+        if is_codex_openai_models_fetch {
+            if let Some(account_id) = extract_codex_account_id(transport) {
+                insert_non_empty_auth_header(
+                    &mut headers,
+                    &mut protected_headers,
+                    "chatgpt-account-id",
+                    &account_id,
+                );
+            }
+        }
         headers = apply_fetch_header_rules(transport, headers, &protected_headers)?;
         ensure_upstream_auth_header(&mut headers, &auth_header_name, &auth_header_value);
     } else {
@@ -481,6 +497,23 @@ fn append_query_param(mut url: String, key: &str, value: &str) -> String {
     url
 }
 
+fn extract_codex_account_id(transport: &GatewayProviderTransportSnapshot) -> Option<String> {
+    let raw = transport.key.decrypted_auth_config.as_deref()?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+
+    serde_json::from_str::<Value>(raw).ok().and_then(|value| {
+        value
+            .get("account_id")
+            .or_else(|| value.get("chatgpt_account_id"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    })
+}
+
 fn insert_non_empty_auth_header(
     headers: &mut BTreeMap<String, String>,
     protected_headers: &mut Vec<String>,
@@ -645,6 +678,43 @@ mod tests {
         assert_eq!(
             plan.headers.get("authorization").map(String::as_str),
             Some("Bearer secret")
+        );
+    }
+
+    #[tokio::test]
+    async fn builds_codex_models_fetch_plan_with_account_header() {
+        let runtime = TestRuntime {
+            oauth_auth: Some(
+                aether_provider_transport::LocalResolvedOAuthRequestAuth::Header {
+                    name: "authorization".to_string(),
+                    value: "Bearer access-token".to_string(),
+                },
+            ),
+            proxy: None,
+        };
+        let mut transport = sample_transport("codex", "openai:responses", "oauth");
+        transport.endpoint.base_url = "https://chatgpt.com/backend-api/codex".to_string();
+        transport.key.decrypted_auth_config = Some(r#"{"account_id":"account-1"}"#.to_string());
+
+        let plan = build_models_fetch_execution_plan(&runtime, &transport)
+            .await
+            .expect("plan");
+
+        assert_eq!(
+            plan.url,
+            "https://chatgpt.com/backend-api/codex/models?client_version=0.128.0-alpha.1"
+        );
+        assert_eq!(
+            plan.headers.get("authorization").map(String::as_str),
+            Some("Bearer access-token")
+        );
+        assert_eq!(
+            plan.headers.get("chatgpt-account-id").map(String::as_str),
+            Some("account-1")
+        );
+        assert_eq!(
+            plan.headers.get("accept").map(String::as_str),
+            Some("application/json")
         );
     }
 

@@ -168,8 +168,15 @@ pub(crate) async fn resolve_local_standard_candidate_payload_parts(
             transport.provider.provider_type.as_str(),
             provider_api_format,
         );
-    let provider_request_body =
-        match crate::ai_serving::planner::standard::build_standard_request_body(
+    let enable_model_directives =
+        crate::system_features::reasoning_model_directive_enabled_for_api_format_and_model(
+            state,
+            provider_api_format,
+            Some(&input.requested_model),
+        )
+        .await;
+    let mut provider_request_body =
+        match crate::ai_serving::planner::standard::build_standard_request_body_with_model_directives(
             body_json,
             spec_metadata.api_format,
             &prepared_candidate.mapped_model,
@@ -183,6 +190,7 @@ pub(crate) async fn resolve_local_standard_candidate_payload_parts(
                 transport.endpoint.body_rules.as_ref()
             },
             Some(input.auth_context.api_key_id.as_str()),
+            enable_model_directives,
         ) {
             Some(body) => body,
             None => {
@@ -204,6 +212,19 @@ pub(crate) async fn resolve_local_standard_candidate_payload_parts(
                 return None;
             }
         };
+    if let Some(mapping) =
+        crate::system_features::reasoning_model_directive_mapping_for_api_format_and_model(
+            state,
+            provider_api_format,
+            Some(&input.requested_model),
+        )
+        .await
+    {
+        crate::ai_serving::apply_model_directive_mapping_patch(
+            &mut provider_request_body,
+            &mapping,
+        );
+    }
 
     if let Some(kiro_auth) = kiro_auth.as_ref() {
         return build_kiro_cross_format_payload_parts(

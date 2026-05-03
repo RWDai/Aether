@@ -1,5 +1,7 @@
 use serde_json::{Map, Value};
 
+use super::model_directives::ReasoningEffort;
+
 pub fn parse_openai_stop_sequences(stop: Option<&Value>) -> Option<Vec<Value>> {
     match stop {
         Some(Value::String(value)) if !value.trim().is_empty() => {
@@ -55,23 +57,11 @@ pub fn copy_request_number_field_as(
 }
 
 pub fn map_openai_reasoning_effort_to_claude_output(value: &str) -> Option<&'static str> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "low" => Some("low"),
-        "medium" => Some("medium"),
-        "high" => Some("high"),
-        "xhigh" => Some("max"),
-        _ => None,
-    }
+    ReasoningEffort::parse(value).map(ReasoningEffort::as_claude_output_value)
 }
 
 pub fn map_openai_reasoning_effort_to_thinking_budget(value: &str) -> Option<u64> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "low" => Some(1280),
-        "medium" => Some(2048),
-        "high" => Some(4096),
-        "xhigh" => Some(8192),
-        _ => None,
-    }
+    ReasoningEffort::parse(value).map(ReasoningEffort::thinking_budget_tokens)
 }
 
 pub fn map_openai_reasoning_effort_to_gemini_budget(value: &str) -> Option<u64> {

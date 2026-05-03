@@ -14,6 +14,7 @@ pub(super) async fn enumerate_scheduler_candidates(
     require_streaming: bool,
     required_capabilities: Option<&serde_json::Value>,
     auth_snapshot: Option<&GatewayAuthApiKeySnapshot>,
+    enable_model_directives: bool,
 ) -> Result<Vec<SchedulerMinimalCandidateSelectionCandidate>, GatewayError> {
     enumerate_minimal_candidate_selection_with_required_capabilities(
         selection_row_source,
@@ -22,6 +23,7 @@ pub(super) async fn enumerate_scheduler_candidates(
         require_streaming,
         auth_snapshot,
         required_capabilities,
+        enable_model_directives,
     )
     .await
     .map_err(|err| GatewayError::Internal(err.to_string()))

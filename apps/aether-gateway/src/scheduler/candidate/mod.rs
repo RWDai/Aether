@@ -57,6 +57,7 @@ pub(crate) async fn list_selectable_candidates(
     required_capabilities: Option<&serde_json::Value>,
     auth_snapshot: Option<&GatewayAuthApiKeySnapshot>,
     now_unix_secs: u64,
+    enable_model_directives: bool,
 ) -> Result<Vec<SchedulerMinimalCandidateSelectionCandidate>, GatewayError> {
     collect_selectable_candidates(
         selection_row_source,
@@ -67,6 +68,7 @@ pub(crate) async fn list_selectable_candidates(
         required_capabilities,
         auth_snapshot,
         now_unix_secs,
+        enable_model_directives,
     )
     .await
 }
@@ -87,6 +89,7 @@ pub(crate) async fn list_selectable_candidates_with_skip_reasons(
     required_capabilities: Option<&serde_json::Value>,
     auth_snapshot: Option<&GatewayAuthApiKeySnapshot>,
     now_unix_secs: u64,
+    enable_model_directives: bool,
 ) -> Result<
     (
         Vec<SchedulerMinimalCandidateSelectionCandidate>,
@@ -103,6 +106,7 @@ pub(crate) async fn list_selectable_candidates_with_skip_reasons(
         required_capabilities,
         auth_snapshot,
         now_unix_secs,
+        enable_model_directives,
     )
     .await
 }
@@ -181,6 +185,7 @@ pub(crate) async fn list_selectable_candidates_for_required_capability_without_r
             required_capabilities.as_ref(),
             auth_snapshot,
             now_unix_secs,
+            false,
         )
         .await?;
         all_attempts_blocked_by_auth_limit &=

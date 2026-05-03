@@ -12,9 +12,12 @@ use crate::{
         CanonicalRequest,
     },
     protocol::context::FormatContext,
-    request::openai::{
-        map_openai_reasoning_effort_to_claude_output,
-        map_openai_reasoning_effort_to_thinking_budget,
+    request::{
+        model_directives::claude_model_uses_adaptive_effort,
+        openai::{
+            map_openai_reasoning_effort_to_claude_output,
+            map_openai_reasoning_effort_to_thinking_budget,
+        },
     },
 };
 
@@ -155,14 +158,18 @@ pub fn to_raw(
         let budget_tokens = thinking
             .budget_tokens
             .or_else(|| openai_effort.and_then(map_openai_reasoning_effort_to_thinking_budget));
+        let uses_adaptive = claude_model_uses_adaptive_effort(mapped_model)
+            || claude_model_uses_adaptive_effort(canonical.model.as_str());
         if thinking.enabled || budget_tokens.is_some() {
-            output.insert(
-                "thinking".to_string(),
+            let thinking_config = if uses_adaptive {
+                json!({"type": "adaptive"})
+            } else {
                 json!({
                     "type": "enabled",
                     "budget_tokens": budget_tokens.unwrap_or(1024),
-                }),
-            );
+                })
+            };
+            output.insert("thinking".to_string(), thinking_config);
         }
         if let Some(output_effort) =
             openai_effort.and_then(map_openai_reasoning_effort_to_claude_output)

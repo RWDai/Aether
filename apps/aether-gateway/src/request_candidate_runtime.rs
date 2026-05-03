@@ -72,6 +72,7 @@ pub(crate) async fn resolve_request_candidate_required_capabilities(
     api_key_id: &str,
     requested_model: Option<&str>,
     explicit_required_capabilities: Option<&Value>,
+    enable_model_directives: bool,
 ) -> Option<Value> {
     let mut merged = serde_json::Map::new();
 
@@ -81,7 +82,11 @@ pub(crate) async fn resolve_request_candidate_required_capabilities(
     {
         Ok(settings) => merge_capability_object(
             &mut merged,
-            select_requested_model_capabilities(settings.as_ref(), requested_model),
+            select_requested_model_capabilities(
+                settings.as_ref(),
+                requested_model,
+                enable_model_directives,
+            ),
         ),
         Err(error) => {
             warn!(
@@ -133,12 +138,26 @@ fn merge_capability_object(target: &mut serde_json::Map<String, Value>, source: 
 fn select_requested_model_capabilities<'a>(
     settings: Option<&'a Value>,
     requested_model: Option<&str>,
+    enable_model_directives: bool,
 ) -> Option<&'a Value> {
     let requested_model = requested_model
         .map(str::trim)
         .filter(|value| !value.is_empty())?;
     let settings = settings?.as_object()?;
 
+    find_model_capabilities(settings, requested_model).or_else(|| {
+        enable_model_directives
+            .then(|| crate::ai_serving::model_directive_base_model(requested_model))
+            .flatten()
+            .as_deref()
+            .and_then(|base_model| find_model_capabilities(settings, base_model))
+    })
+}
+
+fn find_model_capabilities<'a>(
+    settings: &'a serde_json::Map<String, Value>,
+    requested_model: &str,
+) -> Option<&'a Value> {
     settings.get(requested_model).or_else(|| {
         settings.iter().find_map(|(model_name, capabilities)| {
             model_name
@@ -961,6 +980,7 @@ mod tests {
             "api-key-1",
             Some("gpt-5"),
             Some(&explicit_required_capabilities),
+            false,
         )
         .await
         .expect("required capabilities should resolve");

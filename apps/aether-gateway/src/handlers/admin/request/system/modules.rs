@@ -84,9 +84,10 @@ impl<'a> AdminAppState<'a> {
             }
         }
 
+        let enabled_config_key = admin_system_modules::admin_module_enabled_config_key(module);
         let _ = self
             .upsert_system_config_json_value(
-                &format!("module.{}.enabled", module.name),
+                &enabled_config_key,
                 &json!(payload.enabled),
                 Some(&format!("模块 [{}] 启用状态", module.display_name)),
             )

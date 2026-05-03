@@ -45,8 +45,8 @@ pub(crate) use crate::ai_serving::{
     SyncCliResponseConversionKind,
 };
 pub(crate) use crate::ai_serving::{
-    build_standard_request_body, convert_openai_chat_request_to_claude_request,
-    convert_openai_chat_request_to_gemini_request,
+    build_standard_request_body, build_standard_request_body_with_model_directives,
+    convert_openai_chat_request_to_claude_request, convert_openai_chat_request_to_gemini_request,
     convert_openai_chat_request_to_openai_responses_request, extract_openai_text_content,
     normalize_openai_responses_request_to_openai_chat_request, parse_openai_tool_result_content,
 };

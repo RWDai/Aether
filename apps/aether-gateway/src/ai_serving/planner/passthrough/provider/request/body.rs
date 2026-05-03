@@ -14,15 +14,19 @@ pub(crate) fn build_same_format_provider_request_body(
     upstream_is_stream: bool,
     kiro_auth: Option<&crate::ai_serving::transport::kiro::KiroRequestAuth>,
     is_claude_code: bool,
+    enable_model_directives: bool,
 ) -> Option<Value> {
     build_same_format_provider_request_body_impl(SameFormatProviderRequestBodyInput {
         body_json,
         mapped_model,
+        provider_api_format: spec.api_format,
+        source_model: body_json.get("model").and_then(Value::as_str),
         family: same_format_provider_family(spec.family),
         body_rules,
         upstream_is_stream,
         kiro_auth_config: kiro_auth.map(|auth| &auth.auth_config),
         is_claude_code,
+        enable_model_directives,
     })
 }
 

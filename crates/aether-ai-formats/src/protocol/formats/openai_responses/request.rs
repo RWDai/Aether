@@ -397,7 +397,7 @@ fn reasoning_config_to_responses(thinking: &CanonicalThinkingConfig) -> Option<V
                 .and_then(Value::as_str)
                 .map(|effort| {
                     json!({
-                        "effort": if effort == "xhigh" { "high" } else { effort },
+                        "effort": openai_responses_reasoning_effort(effort),
                     })
                 })
         })
@@ -408,6 +408,16 @@ fn reasoning_config_to_responses(thinking: &CanonicalThinkingConfig) -> Option<V
                 })
             })
         })
+}
+
+fn openai_responses_reasoning_effort(effort: &str) -> &str {
+    match effort.trim().to_ascii_lowercase().as_str() {
+        "xhigh" | "max" => "xhigh",
+        "low" => "low",
+        "medium" => "medium",
+        "high" => "high",
+        _ => effort,
+    }
 }
 
 fn canonical_text_config_to_responses(canonical: &CanonicalRequest) -> Option<Value> {

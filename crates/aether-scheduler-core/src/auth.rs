@@ -64,22 +64,43 @@ pub fn auth_constraints_allow_model(
     requested_model_name: &str,
     resolved_global_model_name: &str,
 ) -> bool {
+    auth_constraints_allow_model_with_model_directives(
+        constraints,
+        requested_model_name,
+        resolved_global_model_name,
+        false,
+    )
+}
+
+pub fn auth_constraints_allow_model_with_model_directives(
+    constraints: Option<&SchedulerAuthConstraints>,
+    requested_model_name: &str,
+    resolved_global_model_name: &str,
+    enable_model_directives: bool,
+) -> bool {
     let Some(allowed) = constraints.and_then(|constraints| constraints.allowed_models.as_deref())
     else {
         return true;
     };
 
-    allowed
-        .iter()
-        .any(|value| value == requested_model_name || value == resolved_global_model_name)
+    let base_model = enable_model_directives
+        .then(|| aether_ai_formats::model_directive_base_model(requested_model_name))
+        .flatten();
+    allowed.iter().any(|value| {
+        value == requested_model_name
+            || value == resolved_global_model_name
+            || base_model
+                .as_ref()
+                .is_some_and(|base_model| value == base_model)
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         api_format_matches_allowed_value, auth_constraints_allow_api_format,
-        auth_constraints_allow_model, auth_constraints_allow_provider,
-        provider_matches_allowed_value, SchedulerAuthConstraints,
+        auth_constraints_allow_model, auth_constraints_allow_model_with_model_directives,
+        auth_constraints_allow_provider, provider_matches_allowed_value, SchedulerAuthConstraints,
     };
 
     fn sample_constraints() -> SchedulerAuthConstraints {
@@ -197,6 +218,23 @@ mod tests {
             Some(&constraints),
             "gpt-4.1",
             "gpt-4.1"
+        ));
+    }
+
+    #[test]
+    fn model_directive_base_model_requires_explicit_enablement() {
+        let constraints = sample_constraints();
+
+        assert!(!auth_constraints_allow_model(
+            Some(&constraints),
+            "gpt-5-high",
+            "gpt-5-high"
+        ));
+        assert!(auth_constraints_allow_model_with_model_directives(
+            Some(&constraints),
+            "gpt-5-high",
+            "gpt-5-high",
+            true
         ));
     }
 

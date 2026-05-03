@@ -63,8 +63,15 @@ pub(crate) async fn resolve_local_same_format_provider_candidate_payload_parts(
         spec,
     )
     .await?;
+    let enable_model_directives =
+        crate::system_features::reasoning_model_directive_enabled_for_api_format_and_model(
+            state,
+            spec.api_format,
+            Some(&input.requested_model),
+        )
+        .await;
 
-    let Some(base_provider_request_body) =
+    let Some(mut base_provider_request_body) =
         super::super::request::build_same_format_provider_request_body(
             body_json,
             &prepared.mapped_model,
@@ -73,6 +80,7 @@ pub(crate) async fn resolve_local_same_format_provider_candidate_payload_parts(
             prepared.upstream_is_stream,
             prepared.kiro_auth.as_ref(),
             prepared.is_claude_code,
+            enable_model_directives,
         )
     else {
         mark_skipped_local_same_format_provider_candidate_with_extra_data(
@@ -97,6 +105,19 @@ pub(crate) async fn resolve_local_same_format_provider_candidate_payload_parts(
         .await;
         return None;
     };
+    if let Some(mapping) =
+        crate::system_features::reasoning_model_directive_mapping_for_api_format_and_model(
+            state,
+            spec.api_format,
+            Some(&input.requested_model),
+        )
+        .await
+    {
+        crate::ai_serving::apply_model_directive_mapping_patch(
+            &mut base_provider_request_body,
+            &mapping,
+        );
+    }
 
     let antigravity_auth = if prepared.is_antigravity {
         match classify_local_antigravity_request_support(

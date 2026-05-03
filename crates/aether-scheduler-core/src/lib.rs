@@ -13,13 +13,14 @@ pub use affinity::{
 };
 pub use auth::{
     api_format_matches_allowed_value, auth_constraints_allow_api_format,
-    auth_constraints_allow_model, auth_constraints_allow_provider, provider_matches_allowed_value,
-    SchedulerAuthConstraints,
+    auth_constraints_allow_model, auth_constraints_allow_model_with_model_directives,
+    auth_constraints_allow_provider, provider_matches_allowed_value, SchedulerAuthConstraints,
 };
 pub use candidate::{
     auth_api_key_concurrency_limit_reached, candidate_is_selectable_with_runtime_state,
     candidate_runtime_skip_reason_with_state, candidate_supports_required_capability,
     collect_global_model_names_for_required_capability, enumerate_minimal_candidate_selection,
+    enumerate_minimal_candidate_selection_with_model_directives,
     requested_capability_priority_for_candidate, CandidateRuntimeSelectabilityInput,
     EnumerateMinimalCandidateSelectionInput, SchedulerMinimalCandidateSelectionCandidate,
     SchedulerPriorityMode,
@@ -35,8 +36,11 @@ pub use health::{
 };
 pub use model::{
     candidate_model_names, extract_global_priority_for_format, matches_model_mapping,
-    normalize_api_format, resolve_provider_model_name, resolve_requested_global_model_name,
-    row_supports_requested_model, row_supports_required_capability, select_provider_model_name,
+    normalize_api_format, resolve_provider_model_name,
+    resolve_provider_model_name_with_model_directives, resolve_requested_global_model_name,
+    resolve_requested_global_model_name_with_model_directives, row_supports_requested_model,
+    row_supports_requested_model_with_model_directives, row_supports_required_capability,
+    select_provider_model_name,
 };
 pub use provider::{build_provider_concurrent_limit_map, should_skip_provider_quota};
 pub use ranking::{

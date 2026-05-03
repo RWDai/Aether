@@ -90,6 +90,7 @@ fn builds_openai_chat_cross_format_request_body_from_openai_responses_source() {
         "openai",
         None,
         None,
+        false,
     )
     .expect("openai responses to openai chat body should build");
 
@@ -123,6 +124,7 @@ fn local_openai_responses_wrapper_preserves_body_order_after_edits() {
         "openai:responses",
         None,
         Some("key-123"),
+        false,
     )
     .expect("local openai responses body should build");
 
@@ -160,10 +162,39 @@ fn local_openai_responses_compact_wrapper_strips_store_for_same_format_requests(
         "openai:responses:compact",
         None,
         None,
+        false,
     )
     .expect("local openai compact body should build");
 
     assert!(provider_request_body.get("store").is_none());
+}
+
+#[test]
+fn local_openai_responses_wrapper_applies_model_directive_before_body_rules() {
+    let body_json = json!({
+        "model": "gpt-5.4-max",
+        "input": "hello",
+        "reasoning": {"effort": "low", "summary": "auto"}
+    });
+    let body_rules = json!([
+        {"action":"set","path":"metadata.override_seen","value":true}
+    ]);
+
+    let provider_request_body = build_local_openai_responses_request_body(
+        &body_json,
+        "gpt-5.4",
+        false,
+        "openai",
+        "openai:responses",
+        Some(&body_rules),
+        None,
+        true,
+    )
+    .expect("local openai responses body should build");
+
+    assert_eq!(provider_request_body["reasoning"]["effort"], "xhigh");
+    assert_eq!(provider_request_body["reasoning"]["summary"], "auto");
+    assert_eq!(provider_request_body["metadata"]["override_seen"], true);
 }
 
 #[test]
@@ -205,6 +236,7 @@ fn strips_metadata_for_codex_openai_responses_requests() {
         "codex",
         None,
         None,
+        false,
     )
     .expect("claude cli to codex request should build");
 
@@ -237,6 +269,7 @@ fn applies_codex_defaults_unless_body_rules_handle_the_field() {
         "codex",
         Some(&body_rules),
         None,
+        false,
     )
     .expect("claude cli to codex request should build");
 
@@ -264,6 +297,7 @@ fn injects_codex_prompt_cache_key_for_openai_responses_cross_format_requests() {
         "codex",
         None,
         Some("key-123"),
+        false,
     )
     .expect("claude cli to codex request should build");
 
@@ -291,6 +325,7 @@ fn injects_codex_prompt_cache_key_for_openai_chat_cross_format_requests() {
         false,
         None,
         Some("key-123"),
+        false,
     )
     .expect("openai chat to codex request should build");
 

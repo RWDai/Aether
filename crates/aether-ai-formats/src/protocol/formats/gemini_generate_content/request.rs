@@ -15,7 +15,13 @@ use crate::{
         OPENAI_RESPONSES_LEGACY_EXTENSION_NAMESPACE,
     },
     protocol::context::FormatContext,
-    request::openai::map_openai_reasoning_effort_to_gemini_budget,
+    request::{
+        model_directives::{gemini_model_uses_thinking_level, ReasoningEffort},
+        openai::{
+            map_openai_reasoning_effort_to_gemini_budget,
+            map_thinking_budget_to_openai_reasoning_effort,
+        },
+    },
 };
 
 pub fn from(body: &Value, ctx: &FormatContext) -> Option<CanonicalRequest> {
@@ -203,7 +209,8 @@ fn canonical_to_gemini_request_body(
     if let Some(system_instruction) = canonical_system_instruction(canonical) {
         output.insert("systemInstruction".to_string(), system_instruction);
     }
-    if let Some(generation_config) = canonical_generation_config_to_gemini(canonical) {
+    if let Some(generation_config) = canonical_generation_config_to_gemini(canonical, mapped_model)
+    {
         output.insert("generationConfig".to_string(), generation_config);
     }
     if let Some(tools) = canonical_tools_to_gemini(canonical) {
@@ -370,7 +377,10 @@ fn canonical_media_to_gemini_part(
     })
 }
 
-fn canonical_generation_config_to_gemini(canonical: &CanonicalRequest) -> Option<Value> {
+fn canonical_generation_config_to_gemini(
+    canonical: &CanonicalRequest,
+    mapped_model: &str,
+) -> Option<Value> {
     let mut generation_config = Map::new();
     if let Some(value) = canonical.generation.max_tokens {
         generation_config.insert("maxOutputTokens".to_string(), Value::from(value));
@@ -406,19 +416,41 @@ fn canonical_generation_config_to_gemini(canonical: &CanonicalRequest) -> Option
             .and_then(|value| value.get("thinking_config"))
             .cloned()
             .or_else(|| {
-                let budget = thinking.budget_tokens.or_else(|| {
-                    canonical_openai_reasoning_effort(thinking)
-                        .and_then(map_openai_reasoning_effort_to_gemini_budget)
-                })?;
-                Some(json!({
-                    "includeThoughts": true,
-                    "thinkingBudget": budget,
-                }))
+                let effort = canonical_openai_reasoning_effort(thinking);
+                gemini_thinking_config_from_reasoning(mapped_model, effort, thinking.budget_tokens)
             })
     }) {
         generation_config.insert("thinkingConfig".to_string(), thinking_config);
     }
     (!generation_config.is_empty()).then_some(Value::Object(generation_config))
+}
+
+fn gemini_thinking_config_from_reasoning(
+    mapped_model: &str,
+    effort: Option<&str>,
+    budget_tokens: Option<u64>,
+) -> Option<Value> {
+    if gemini_model_uses_thinking_level(mapped_model) {
+        let level = effort
+            .and_then(ReasoningEffort::parse)
+            .or_else(|| {
+                budget_tokens
+                    .map(map_thinking_budget_to_openai_reasoning_effort)
+                    .and_then(ReasoningEffort::parse)
+            })
+            .map(ReasoningEffort::as_gemini_level_value)?;
+        return Some(json!({
+            "includeThoughts": true,
+            "thinkingLevel": level,
+        }));
+    }
+
+    let budget =
+        budget_tokens.or_else(|| effort.and_then(map_openai_reasoning_effort_to_gemini_budget))?;
+    Some(json!({
+        "includeThoughts": true,
+        "thinkingBudget": budget,
+    }))
 }
 
 fn apply_response_format_to_gemini_generation_config(

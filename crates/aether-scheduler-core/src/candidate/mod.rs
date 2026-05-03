@@ -8,6 +8,7 @@ pub use capability::{
 };
 pub use enumeration::{
     collect_global_model_names_for_required_capability, enumerate_minimal_candidate_selection,
+    enumerate_minimal_candidate_selection_with_model_directives,
 };
 pub use selectability::{
     auth_api_key_concurrency_limit_reached, candidate_is_selectable_with_runtime_state,

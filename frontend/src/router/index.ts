@@ -221,6 +221,12 @@ const routes: RouteRecordRaw[] = [
         component: () => importWithRetry(() => import('@/views/admin/ModuleManagement.vue'))
       },
       {
+        path: 'model-directives',
+        name: 'ModelDirectivesManagement',
+        component: () => importWithRetry(() => import('@/views/admin/ModelDirectivesManagement.vue')),
+        meta: { module: 'model_directives' }
+      },
+      {
         path: 'email',
         name: 'EmailSettings',
         component: () => importWithRetry(() => import('@/views/admin/EmailSettings.vue'))

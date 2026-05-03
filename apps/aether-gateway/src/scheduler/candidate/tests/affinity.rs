@@ -46,6 +46,7 @@ async fn select_candidate(
         None,
         auth_snapshot,
         now_unix_secs,
+        false,
     )
     .await
 }
@@ -92,7 +93,7 @@ async fn same_priority_candidates_are_distributed_by_affinity_key() {
     let auth_snapshot = sample_auth_snapshot("affinity-key-1");
 
     let (_resolved_global_model_name, rows) =
-        read_requested_model_rows(&state, "openai:chat", "gpt-4.1")
+        read_requested_model_rows(&state, "openai:chat", "gpt-4.1", false)
             .await
             .expect("selection rows should read")
             .expect("selection rows should match requested model");

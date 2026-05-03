@@ -977,6 +977,95 @@ async fn gateway_sets_admin_module_enabled_locally_with_trusted_admin_principal(
 }
 
 #[tokio::test]
+async fn gateway_manages_model_directives_module_from_module_management() {
+    let upstream_hits = Arc::new(Mutex::new(0usize));
+    let upstream_hits_clone = Arc::clone(&upstream_hits);
+    let upstream = Router::new().route(
+        "/api/admin/modules/status/model_directives/enabled",
+        any(move |_request: Request| {
+            let upstream_hits_inner = Arc::clone(&upstream_hits_clone);
+            async move {
+                *upstream_hits_inner.lock().expect("mutex should lock") += 1;
+                (StatusCode::OK, Body::from("unexpected upstream hit"))
+            }
+        }),
+    );
+
+    let auth_module_repository = Arc::new(InMemoryAuthModuleReadRepository::default());
+    let data_state = GatewayDataState::with_auth_module_reader_for_tests(auth_module_repository)
+        .with_system_config_values_for_tests(Vec::<(String, serde_json::Value)>::new());
+
+    let (_upstream_url, upstream_handle) = start_server(upstream).await;
+    let gateway = build_router_with_state(
+        AppState::new()
+            .expect("gateway should build")
+            .with_data_state_for_tests(data_state),
+    );
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+
+    let response = reqwest::Client::new()
+        .get(format!(
+            "{gateway_url}/api/admin/modules/status/model_directives"
+        ))
+        .header(crate::constants::GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .send()
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: serde_json::Value = response.json().await.expect("json body should parse");
+    assert_eq!(payload["name"], "model_directives");
+    assert_eq!(payload["display_name"], "模型后缀参数");
+    assert_eq!(payload["enabled"], json!(false));
+    assert_eq!(payload["active"], json!(false));
+    assert_eq!(payload["config_validated"], json!(true));
+    assert_eq!(payload["admin_route"], "/admin/model-directives");
+
+    let response = reqwest::Client::new()
+        .put(format!(
+            "{gateway_url}/api/admin/modules/status/model_directives/enabled"
+        ))
+        .header(crate::constants::GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .json(&json!({ "enabled": true }))
+        .send()
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: serde_json::Value = response.json().await.expect("json body should parse");
+    assert_eq!(payload["name"], "model_directives");
+    assert_eq!(payload["enabled"], json!(true));
+    assert_eq!(payload["active"], json!(true));
+
+    let response = reqwest::Client::new()
+        .get(format!(
+            "{gateway_url}/api/admin/system/configs/enable_model_directives"
+        ))
+        .header(crate::constants::GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .send()
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: serde_json::Value = response.json().await.expect("json body should parse");
+    assert_eq!(payload["key"], "enable_model_directives");
+    assert_eq!(payload["value"], json!(true));
+    assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
+
+    gateway_handle.abort();
+    upstream_handle.abort();
+}
+
+#[tokio::test]
 async fn gateway_handles_admin_management_tokens_locally_with_trusted_admin_principal() {
     let upstream_hits = Arc::new(Mutex::new(0usize));
     let upstream_hits_clone = Arc::clone(&upstream_hits);

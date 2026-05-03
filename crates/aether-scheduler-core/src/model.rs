@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 use aether_data_contracts::repository::candidate_selection::{
@@ -11,36 +12,76 @@ pub fn resolve_requested_global_model_name(
     requested_model_name: &str,
     api_format: &str,
 ) -> Option<String> {
-    resolve_global_model_name_by(rows, |row| row.global_model_name == requested_model_name)
-        .or_else(|| {
-            resolve_global_model_name_by(rows, |row| {
-                row.model_provider_model_name == requested_model_name
-            })
-        })
-        .or_else(|| {
-            resolve_global_model_name_by(rows, |row| {
-                row.model_provider_model_mappings
-                    .as_ref()
-                    .is_some_and(|mappings| {
-                        mappings.iter().any(|mapping| {
-                            mapping_scope_matches(mapping, api_format)
-                                && mapping.name == requested_model_name
+    resolve_requested_global_model_name_with_model_directives(
+        rows,
+        requested_model_name,
+        api_format,
+        false,
+    )
+}
+
+pub fn resolve_requested_global_model_name_with_model_directives(
+    rows: &[StoredMinimalCandidateSelectionRow],
+    requested_model_name: &str,
+    api_format: &str,
+    enable_model_directives: bool,
+) -> Option<String> {
+    requested_model_name_candidates(requested_model_name, enable_model_directives).find_map(
+        |requested_model_name| {
+            let requested_model_name = requested_model_name.as_ref();
+            resolve_global_model_name_by(rows, |row| row.global_model_name == requested_model_name)
+                .or_else(|| {
+                    resolve_global_model_name_by(rows, |row| {
+                        row.model_provider_model_name == requested_model_name
+                    })
+                })
+                .or_else(|| {
+                    resolve_global_model_name_by(rows, |row| {
+                        row.model_provider_model_mappings
+                            .as_ref()
+                            .is_some_and(|mappings| {
+                                mappings.iter().any(|mapping| {
+                                    mapping_scope_matches(mapping, api_format)
+                                        && mapping.name == requested_model_name
+                                })
+                            })
+                    })
+                })
+                .or_else(|| {
+                    resolve_global_model_name_by(rows, |row| {
+                        row.global_model_mappings.as_ref().is_some_and(|patterns| {
+                            patterns
+                                .iter()
+                                .any(|pattern| matches_model_mapping(pattern, requested_model_name))
                         })
                     })
-            })
-        })
-        .or_else(|| {
-            resolve_global_model_name_by(rows, |row| {
-                row.global_model_mappings.as_ref().is_some_and(|patterns| {
-                    patterns
-                        .iter()
-                        .any(|pattern| matches_model_mapping(pattern, requested_model_name))
                 })
-            })
-        })
+        },
+    )
 }
 
 pub fn row_supports_requested_model(
+    row: &StoredMinimalCandidateSelectionRow,
+    requested_model_name: &str,
+    api_format: &str,
+) -> bool {
+    row_supports_requested_model_with_model_directives(row, requested_model_name, api_format, false)
+}
+
+pub fn row_supports_requested_model_with_model_directives(
+    row: &StoredMinimalCandidateSelectionRow,
+    requested_model_name: &str,
+    api_format: &str,
+    enable_model_directives: bool,
+) -> bool {
+    requested_model_name_candidates(requested_model_name, enable_model_directives).any(
+        |requested_model_name| {
+            row_supports_requested_model_exact(row, requested_model_name.as_ref(), api_format)
+        },
+    )
+}
+
+fn row_supports_requested_model_exact(
     row: &StoredMinimalCandidateSelectionRow,
     requested_model_name: &str,
     api_format: &str,
@@ -88,6 +129,15 @@ pub fn resolve_provider_model_name(
     requested_model_name: &str,
     api_format: &str,
 ) -> Option<(String, Option<String>)> {
+    resolve_provider_model_name_with_model_directives(row, requested_model_name, api_format, false)
+}
+
+pub fn resolve_provider_model_name_with_model_directives(
+    row: &StoredMinimalCandidateSelectionRow,
+    requested_model_name: &str,
+    api_format: &str,
+    enable_model_directives: bool,
+) -> Option<(String, Option<String>)> {
     let selected_provider_model_name = select_provider_model_name(row, api_format);
     let Some(key_allowed_models) = row.key_allowed_models.as_ref() else {
         return Some((selected_provider_model_name, None));
@@ -101,6 +151,16 @@ pub fn resolve_provider_model_name(
         .any(|value| value == requested_model_name)
     {
         return Some((selected_provider_model_name, None));
+    }
+
+    if enable_model_directives {
+        if let Some(base_model) =
+            aether_ai_formats::model_directive_base_model(requested_model_name)
+        {
+            if key_allowed_models.iter().any(|value| value == &base_model) {
+                return Some((selected_provider_model_name, Some(base_model)));
+            }
+        }
     }
 
     let mut sorted_allowed_models = key_allowed_models
@@ -302,9 +362,26 @@ fn api_format_matches(left: &str, right: &str) -> bool {
     normalize_api_format(left) == normalize_api_format(right)
 }
 
+fn requested_model_name_candidates(
+    requested_model_name: &str,
+    enable_model_directives: bool,
+) -> impl Iterator<Item = Cow<'_, str>> {
+    let requested_model_name = requested_model_name.trim();
+    let base_model = enable_model_directives
+        .then(|| aether_ai_formats::model_directive_base_model(requested_model_name))
+        .flatten();
+    std::iter::once(Cow::Borrowed(requested_model_name)).chain(base_model.map(Cow::Owned))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::matches_model_mapping;
+    use super::{
+        matches_model_mapping, resolve_provider_model_name,
+        resolve_provider_model_name_with_model_directives,
+        resolve_requested_global_model_name_with_model_directives, row_supports_requested_model,
+        row_supports_requested_model_with_model_directives,
+    };
+    use aether_data_contracts::repository::candidate_selection::StoredMinimalCandidateSelectionRow;
 
     #[test]
     fn model_mapping_match_is_case_insensitive() {
@@ -321,5 +398,104 @@ mod tests {
     #[test]
     fn invalid_model_mapping_pattern_returns_false() {
         assert!(!matches_model_mapping("([a-z", "gpt-4o"));
+    }
+
+    #[test]
+    fn model_directive_suffix_matches_base_model_as_fallback() {
+        let row = sample_row("gpt-5.4", "gpt-5.4-upstream");
+
+        assert!(!row_supports_requested_model(
+            &row,
+            "gpt-5.4-xhigh",
+            "openai:chat"
+        ));
+        assert!(row_supports_requested_model_with_model_directives(
+            &row,
+            "gpt-5.4-xhigh",
+            "openai:chat",
+            true
+        ));
+        assert_eq!(
+            resolve_requested_global_model_name_with_model_directives(
+                &[row],
+                "gpt-5.4-xhigh",
+                "openai:chat",
+                true
+            )
+            .as_deref(),
+            Some("gpt-5.4")
+        );
+    }
+
+    #[test]
+    fn model_directive_suffix_prefers_exact_model_before_base_fallback() {
+        let exact = sample_row("gpt-5.4-high", "gpt-5.4-high-upstream");
+        let base = sample_row("gpt-5.4", "gpt-5.4-upstream");
+
+        assert_eq!(
+            resolve_requested_global_model_name_with_model_directives(
+                &[base, exact],
+                "gpt-5.4-high",
+                "openai:chat",
+                true
+            )
+            .as_deref(),
+            Some("gpt-5.4-high")
+        );
+    }
+
+    #[test]
+    fn model_directive_base_model_satisfies_key_allowed_models() {
+        let mut row = sample_row("gpt-5.4", "gpt-5.4-upstream");
+        row.key_allowed_models = Some(vec!["gpt-5.4".to_string()]);
+
+        assert!(resolve_provider_model_name(&row, "gpt-5.4-max", "openai:chat").is_none());
+        let resolved = resolve_provider_model_name_with_model_directives(
+            &row,
+            "gpt-5.4-max",
+            "openai:chat",
+            true,
+        )
+        .expect("base model should satisfy key allowed models");
+
+        assert_eq!(resolved.0, "gpt-5.4-upstream");
+        assert_eq!(resolved.1.as_deref(), Some("gpt-5.4"));
+    }
+
+    fn sample_row(
+        global_model_name: &str,
+        model_provider_model_name: &str,
+    ) -> StoredMinimalCandidateSelectionRow {
+        StoredMinimalCandidateSelectionRow {
+            provider_id: "provider-1".to_string(),
+            provider_name: "Provider".to_string(),
+            provider_type: "openai".to_string(),
+            provider_priority: 0,
+            provider_is_active: true,
+            endpoint_id: "endpoint-1".to_string(),
+            endpoint_api_format: "openai:chat".to_string(),
+            endpoint_api_family: None,
+            endpoint_kind: None,
+            endpoint_is_active: true,
+            key_id: "key-1".to_string(),
+            key_name: "Key".to_string(),
+            key_auth_type: "api_key".to_string(),
+            key_is_active: true,
+            key_api_formats: None,
+            key_allowed_models: None,
+            key_capabilities: None,
+            key_internal_priority: 0,
+            key_global_priority_by_format: None,
+            model_id: format!("model-{global_model_name}"),
+            global_model_id: format!("global-{global_model_name}"),
+            global_model_name: global_model_name.to_string(),
+            global_model_mappings: None,
+            global_model_supports_streaming: Some(true),
+            model_provider_model_name: model_provider_model_name.to_string(),
+            model_provider_model_mappings: None,
+            model_supports_streaming: Some(true),
+            model_is_active: true,
+            model_is_available: true,
+        }
     }
 }

@@ -3,6 +3,7 @@ use aether_ai_serving::{
 };
 use aether_scheduler_core::SchedulerMinimalCandidateSelectionCandidate;
 use async_trait::async_trait;
+use std::collections::BTreeSet;
 
 use crate::ai_serving::planner::candidate_resolution::SkippedLocalExecutionCandidate;
 use crate::ai_serving::{GatewayAuthApiKeySnapshot, PlannerAppState};
@@ -25,6 +26,8 @@ struct GatewayLocalCandidatePreselectionPort<'a> {
     auth_snapshot: &'a GatewayAuthApiKeySnapshot,
     use_api_format_alias_match: bool,
     key_mode: LocalCandidatePreselectionKeyMode,
+    candidate_api_formats: Vec<String>,
+    model_directive_enabled_api_formats: BTreeSet<String>,
 }
 
 #[async_trait]
@@ -34,13 +37,7 @@ impl AiCandidatePreselectionPort for GatewayLocalCandidatePreselectionPort<'_> {
     type Error = GatewayError;
 
     fn candidate_api_formats(&self) -> Vec<String> {
-        crate::ai_serving::request_candidate_api_formats(
-            self.client_api_format,
-            self.require_streaming,
-        )
-        .into_iter()
-        .map(str::to_string)
-        .collect()
+        self.candidate_api_formats.clone()
     }
 
     fn candidate_api_format_matches_client(&self, candidate_api_format: &str) -> bool {
@@ -84,28 +81,36 @@ impl AiCandidatePreselectionPort for GatewayLocalCandidatePreselectionPort<'_> {
     fn candidate_allowed(
         &self,
         candidate: &Self::Candidate,
-        _candidate_api_format: &str,
+        candidate_api_format: &str,
         matches_client_format: bool,
     ) -> bool {
+        let enable_model_directives = self.model_directive_enabled_api_formats.contains(
+            &crate::ai_serving::normalize_api_format_alias(candidate_api_format),
+        );
         matches_client_format
             || auth_snapshot_allows_cross_format_candidate(
                 self.auth_snapshot,
                 self.requested_model,
                 candidate,
+                enable_model_directives,
             )
     }
 
     fn skipped_candidate_allowed(
         &self,
         skipped_candidate: &Self::Skipped,
-        _candidate_api_format: &str,
+        candidate_api_format: &str,
         matches_client_format: bool,
     ) -> bool {
+        let enable_model_directives = self.model_directive_enabled_api_formats.contains(
+            &crate::ai_serving::normalize_api_format_alias(candidate_api_format),
+        );
         matches_client_format
             || auth_snapshot_allows_cross_format_candidate(
                 self.auth_snapshot,
                 self.requested_model,
                 &skipped_candidate.candidate,
+                enable_model_directives,
             )
     }
 
@@ -135,6 +140,24 @@ pub(crate) async fn preselect_local_execution_candidates_with_serving(
     >,
     GatewayError,
 > {
+    let candidate_api_formats =
+        crate::ai_serving::request_candidate_api_formats(client_api_format, require_streaming)
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+    let mut model_directive_enabled_api_formats = BTreeSet::new();
+    for api_format in &candidate_api_formats {
+        if crate::system_features::reasoning_model_directive_enabled_for_api_format_and_model(
+            state.app(),
+            api_format,
+            Some(requested_model),
+        )
+        .await
+        {
+            model_directive_enabled_api_formats
+                .insert(crate::ai_serving::normalize_api_format_alias(api_format));
+        }
+    }
     let port = GatewayLocalCandidatePreselectionPort {
         state,
         client_api_format,
@@ -144,6 +167,8 @@ pub(crate) async fn preselect_local_execution_candidates_with_serving(
         auth_snapshot,
         use_api_format_alias_match,
         key_mode,
+        candidate_api_formats,
+        model_directive_enabled_api_formats,
     };
 
     run_ai_candidate_preselection(&port).await
@@ -190,6 +215,7 @@ pub(crate) fn auth_snapshot_allows_cross_format_candidate(
     auth_snapshot: &GatewayAuthApiKeySnapshot,
     requested_model: &str,
     candidate: &SchedulerMinimalCandidateSelectionCandidate,
+    enable_model_directives: bool,
 ) -> bool {
     if let Some(allowed_providers) = auth_snapshot.effective_allowed_providers() {
         let provider_allowed = allowed_providers.iter().any(|value| {
@@ -206,9 +232,16 @@ pub(crate) fn auth_snapshot_allows_cross_format_candidate(
     }
 
     if let Some(allowed_models) = auth_snapshot.effective_allowed_models() {
-        let model_allowed = allowed_models
-            .iter()
-            .any(|value| value == requested_model || value == &candidate.global_model_name);
+        let requested_base_model = enable_model_directives
+            .then(|| crate::ai_serving::model_directive_base_model(requested_model))
+            .flatten();
+        let model_allowed = allowed_models.iter().any(|value| {
+            value == requested_model
+                || value == &candidate.global_model_name
+                || requested_base_model
+                    .as_ref()
+                    .is_some_and(|base_model| value == base_model)
+        });
         if !model_allowed {
             return false;
         }

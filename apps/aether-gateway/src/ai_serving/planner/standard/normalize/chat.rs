@@ -4,8 +4,8 @@ use crate::ai_serving::transport::apply_standard_provider_request_body_rules;
 use crate::ai_serving::{
     apply_codex_openai_responses_special_body_edits,
     apply_openai_responses_compact_special_body_edits,
-    build_cross_format_openai_chat_request_body as surface_build_cross_format_openai_chat_request_body,
-    build_local_openai_chat_request_body as surface_build_local_openai_chat_request_body,
+    build_cross_format_openai_chat_request_body_with_model_directives as surface_build_cross_format_openai_chat_request_body,
+    build_local_openai_chat_request_body_with_model_directives as surface_build_local_openai_chat_request_body,
     GatewayProviderTransportSnapshot,
 };
 
@@ -14,9 +14,14 @@ pub(crate) fn build_local_openai_chat_request_body(
     mapped_model: &str,
     upstream_is_stream: bool,
     body_rules: Option<&Value>,
+    enable_model_directives: bool,
 ) -> Option<Value> {
-    let provider_request_body =
-        surface_build_local_openai_chat_request_body(body_json, mapped_model, upstream_is_stream)?;
+    let provider_request_body = surface_build_local_openai_chat_request_body(
+        body_json,
+        mapped_model,
+        upstream_is_stream,
+        enable_model_directives,
+    )?;
     apply_standard_provider_request_body_rules(provider_request_body, body_rules, body_json)
 }
 
@@ -35,12 +40,14 @@ pub(crate) fn build_cross_format_openai_chat_request_body(
     upstream_is_stream: bool,
     body_rules: Option<&Value>,
     user_api_key_id: Option<&str>,
+    enable_model_directives: bool,
 ) -> Option<Value> {
     let provider_request_body = surface_build_cross_format_openai_chat_request_body(
         body_json,
         mapped_model,
         provider_api_format,
         upstream_is_stream,
+        enable_model_directives,
     )?;
     let mut provider_request_body =
         apply_standard_provider_request_body_rules(provider_request_body, body_rules, body_json)?;

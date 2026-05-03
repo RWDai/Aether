@@ -13,8 +13,18 @@ pub use codex::{
     CODEX_OPENAI_IMAGE_DEFAULT_VARIATION_PROMPT, CODEX_OPENAI_IMAGE_INTERNAL_MODEL,
 };
 pub use family::{LocalStandardSourceFamily, LocalStandardSourceMode, LocalStandardSpec};
-pub use matrix::{build_standard_request_body, normalize_standard_request_to_openai_chat_request};
+pub use matrix::{
+    build_standard_request_body, build_standard_request_body_from_canonical_with_model_directives,
+    build_standard_request_body_with_model_directives,
+    normalize_standard_request_to_openai_chat_request,
+};
 pub use normalize::{
-    build_cross_format_openai_chat_request_body, build_cross_format_openai_responses_request_body,
-    build_local_openai_chat_request_body, build_local_openai_responses_request_body,
+    build_cross_format_openai_chat_request_body,
+    build_cross_format_openai_chat_request_body_with_model_directives,
+    build_cross_format_openai_responses_request_body,
+    build_cross_format_openai_responses_request_body_with_model_directives,
+    build_local_openai_chat_request_body,
+    build_local_openai_chat_request_body_with_model_directives,
+    build_local_openai_responses_request_body,
+    build_local_openai_responses_request_body_with_model_directives,
 };

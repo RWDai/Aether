@@ -72,6 +72,13 @@ pub(crate) async fn resolve_local_openai_chat_candidate_payload_parts(
     let candidate = &eligible.candidate;
     let provider_api_format = eligible.provider_api_format.as_str();
     let transport = &eligible.transport;
+    let enable_model_directives =
+        crate::system_features::reasoning_model_directive_enabled_for_api_format_and_model(
+            state,
+            provider_api_format,
+            Some(&input.requested_model),
+        )
+        .await;
 
     if provider_api_format == "openai:chat" {
         if let Some(skip_reason) = local_openai_chat_transport_unsupported_reason(transport) {
@@ -122,6 +129,7 @@ pub(crate) async fn resolve_local_openai_chat_candidate_payload_parts(
             &prepared_candidate.mapped_model,
             upstream_is_stream,
             transport.endpoint.body_rules.as_ref(),
+            enable_model_directives,
         ) else {
             mark_skipped_local_openai_chat_candidate_with_extra_data(
                 state,
@@ -334,7 +342,7 @@ pub(crate) async fn resolve_local_openai_chat_candidate_payload_parts(
         }
     };
 
-    let Some(provider_request_body) = build_cross_format_openai_chat_request_body(
+    let Some(mut provider_request_body) = build_cross_format_openai_chat_request_body(
         body_json,
         &prepared_candidate.mapped_model,
         transport.provider.provider_type.as_str(),
@@ -346,6 +354,7 @@ pub(crate) async fn resolve_local_openai_chat_candidate_payload_parts(
             transport.endpoint.body_rules.as_ref()
         },
         Some(input.auth_context.api_key_id.as_str()),
+        enable_model_directives,
     ) else {
         mark_skipped_local_openai_chat_candidate_with_extra_data(
             state,
@@ -364,6 +373,19 @@ pub(crate) async fn resolve_local_openai_chat_candidate_payload_parts(
         .await;
         return None;
     };
+    if let Some(mapping) =
+        crate::system_features::reasoning_model_directive_mapping_for_api_format_and_model(
+            state,
+            provider_api_format.as_str(),
+            Some(&input.requested_model),
+        )
+        .await
+    {
+        crate::ai_serving::apply_model_directive_mapping_patch(
+            &mut provider_request_body,
+            &mapping,
+        );
+    }
 
     if let Some(kiro_auth) = kiro_auth.as_ref() {
         return build_kiro_openai_chat_cross_format_payload_parts(

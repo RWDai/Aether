@@ -1,5 +1,6 @@
 use crate::handlers::admin::request::AdminAppState;
 use crate::handlers::shared::{module_available_from_env, system_config_bool};
+use crate::system_features::ENABLE_MODEL_DIRECTIVES_CONFIG_KEY;
 use crate::GatewayError;
 use aether_admin::system as admin_system_kernel;
 use serde_json::json;
@@ -67,6 +68,18 @@ pub(crate) const ADMIN_MODULE_DEFINITIONS: &[AdminModuleDefinition] = &[
         admin_menu_order: 58,
     },
     AdminModuleDefinition {
+        name: "model_directives",
+        display_name: "模型后缀参数",
+        description: "允许通过模型名后缀覆盖推理参数",
+        category: "integration",
+        env_key: "MODEL_DIRECTIVES_AVAILABLE",
+        default_available: true,
+        admin_route: Some("/admin/model-directives"),
+        admin_menu_icon: Some("SlidersHorizontal"),
+        admin_menu_group: None,
+        admin_menu_order: 59,
+    },
+    AdminModuleDefinition {
         name: "gemini_files",
         display_name: "文件缓存",
         description: "管理 Gemini Files API 上传的文件，支持文件上传、查看和删除",
@@ -116,6 +129,14 @@ pub(crate) fn admin_module_name_from_status_path(request_path: &str) -> Option<S
 
 pub(crate) fn admin_module_name_from_enabled_path(request_path: &str) -> Option<String> {
     admin_system_kernel::admin_module_name_from_enabled_path(request_path)
+}
+
+pub(crate) fn admin_module_enabled_config_key(module: &AdminModuleDefinition) -> String {
+    if module.name == "model_directives" {
+        ENABLE_MODEL_DIRECTIVES_CONFIG_KEY.to_string()
+    } else {
+        format!("module.{}.enabled", module.name)
+    }
 }
 
 pub(crate) fn oauth_module_config_is_valid(
@@ -220,7 +241,7 @@ pub(crate) async fn build_admin_module_status_payload(
     let available = module_available_from_env(module.env_key, module.default_available);
     let enabled = if available {
         let enabled = state
-            .read_system_config_json_value(&format!("module.{}.enabled", module.name))
+            .read_system_config_json_value(&admin_module_enabled_config_key(module))
             .await?;
         system_config_bool(enabled.as_ref(), false)
     } else {

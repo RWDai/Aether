@@ -42,6 +42,7 @@ pub(super) async fn select_minimal_candidate(
     required_capabilities: Option<&serde_json::Value>,
     auth_snapshot: Option<&GatewayAuthApiKeySnapshot>,
     now_unix_secs: u64,
+    enable_model_directives: bool,
 ) -> Result<Option<SchedulerMinimalCandidateSelectionCandidate>, GatewayError> {
     let affinity_cache_key =
         build_scheduler_affinity_cache_key(auth_snapshot, api_format, global_model_name);
@@ -54,6 +55,7 @@ pub(super) async fn select_minimal_candidate(
         required_capabilities,
         auth_snapshot,
         now_unix_secs,
+        enable_model_directives,
     )
     .await?
     .into_iter()
@@ -73,6 +75,7 @@ pub(super) async fn collect_selectable_candidates(
     required_capabilities: Option<&serde_json::Value>,
     auth_snapshot: Option<&GatewayAuthApiKeySnapshot>,
     now_unix_secs: u64,
+    enable_model_directives: bool,
 ) -> Result<Vec<SchedulerMinimalCandidateSelectionCandidate>, GatewayError> {
     Ok(collect_selectable_candidates_with_skip_reasons(
         selection_row_source,
@@ -83,6 +86,7 @@ pub(super) async fn collect_selectable_candidates(
         required_capabilities,
         auth_snapshot,
         now_unix_secs,
+        enable_model_directives,
     )
     .await?
     .0)
@@ -97,6 +101,7 @@ pub(super) async fn collect_selectable_candidates_with_skip_reasons(
     required_capabilities: Option<&serde_json::Value>,
     auth_snapshot: Option<&GatewayAuthApiKeySnapshot>,
     now_unix_secs: u64,
+    enable_model_directives: bool,
 ) -> Result<
     (
         Vec<SchedulerMinimalCandidateSelectionCandidate>,
@@ -114,6 +119,7 @@ pub(super) async fn collect_selectable_candidates_with_skip_reasons(
         require_streaming,
         required_capabilities,
         auth_snapshot,
+        enable_model_directives,
     )
     .await?;
     let runtime_snapshot =

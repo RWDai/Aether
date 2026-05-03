@@ -57,6 +57,7 @@ mod request_candidate_runtime;
 mod router;
 mod scheduler;
 mod state;
+mod system_features;
 mod tunnel;
 mod usage;
 mod video_tasks;

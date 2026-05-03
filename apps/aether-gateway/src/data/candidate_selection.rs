@@ -2,10 +2,10 @@ use aether_data::DataLayerError;
 use aether_data_contracts::repository::candidate_selection::StoredMinimalCandidateSelectionRow;
 use aether_scheduler_core::{
     auth_constraints_allow_api_format, collect_global_model_names_for_required_capability,
-    enumerate_minimal_candidate_selection, normalize_api_format,
-    resolve_requested_global_model_name, row_supports_requested_model,
-    EnumerateMinimalCandidateSelectionInput, SchedulerAuthConstraints,
-    SchedulerMinimalCandidateSelectionCandidate,
+    enumerate_minimal_candidate_selection_with_model_directives, normalize_api_format,
+    resolve_requested_global_model_name_with_model_directives,
+    row_supports_requested_model_with_model_directives, EnumerateMinimalCandidateSelectionInput,
+    SchedulerAuthConstraints, SchedulerMinimalCandidateSelectionCandidate,
 };
 use async_trait::async_trait;
 use std::collections::BTreeSet;
@@ -30,20 +30,33 @@ pub(crate) async fn read_requested_model_rows(
     state: &(impl MinimalCandidateSelectionRowSource + Sync),
     api_format: &str,
     requested_model_name: &str,
+    enable_model_directives: bool,
 ) -> Result<Option<(String, Vec<StoredMinimalCandidateSelectionRow>)>, DataLayerError> {
     let rows = state
         .read_minimal_candidate_selection_rows_for_api_format(api_format)
         .await?;
     let rows = rows
         .into_iter()
-        .filter(|row| row_supports_requested_model(row, requested_model_name, api_format))
+        .filter(|row| {
+            row_supports_requested_model_with_model_directives(
+                row,
+                requested_model_name,
+                api_format,
+                enable_model_directives,
+            )
+        })
         .collect::<Vec<_>>();
     if rows.is_empty() {
         return Ok(None);
     }
 
     let Some(resolved_global_model_name) =
-        resolve_requested_global_model_name(&rows, requested_model_name, api_format)
+        resolve_requested_global_model_name_with_model_directives(
+            &rows,
+            requested_model_name,
+            api_format,
+            enable_model_directives,
+        )
     else {
         return Ok(None);
     };
@@ -63,6 +76,7 @@ pub(crate) async fn enumerate_minimal_candidate_selection_with_required_capabili
     require_streaming: bool,
     auth_snapshot: Option<&GatewayAuthApiKeySnapshot>,
     required_capabilities: Option<&serde_json::Value>,
+    enable_model_directives: bool,
 ) -> Result<Vec<SchedulerMinimalCandidateSelectionCandidate>, DataLayerError> {
     let normalized_api_format = normalize_api_format(api_format);
     if normalized_api_format.is_empty() {
@@ -76,21 +90,29 @@ pub(crate) async fn enumerate_minimal_candidate_selection_with_required_capabili
         return Ok(Vec::new());
     }
 
-    let Some((resolved_global_model_name, rows)) =
-        read_requested_model_rows(state, &normalized_api_format, requested_model_name).await?
+    let Some((resolved_global_model_name, rows)) = read_requested_model_rows(
+        state,
+        &normalized_api_format,
+        requested_model_name,
+        enable_model_directives,
+    )
+    .await?
     else {
         return Ok(Vec::new());
     };
     let auth_constraints = auth_snapshot.map(auth_snapshot_constraints);
-    enumerate_minimal_candidate_selection(EnumerateMinimalCandidateSelectionInput {
-        rows,
-        normalized_api_format: &normalized_api_format,
-        requested_model_name,
-        resolved_global_model_name: resolved_global_model_name.as_str(),
-        require_streaming,
-        required_capabilities,
-        auth_constraints: auth_constraints.as_ref(),
-    })
+    enumerate_minimal_candidate_selection_with_model_directives(
+        EnumerateMinimalCandidateSelectionInput {
+            rows,
+            normalized_api_format: &normalized_api_format,
+            requested_model_name,
+            resolved_global_model_name: resolved_global_model_name.as_str(),
+            require_streaming,
+            required_capabilities,
+            auth_constraints: auth_constraints.as_ref(),
+        },
+        enable_model_directives,
+    )
 }
 
 pub(crate) async fn read_global_model_names_for_required_capability(

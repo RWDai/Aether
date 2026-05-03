@@ -215,6 +215,13 @@ pub(crate) async fn resolve_local_openai_responses_candidate_payload_parts(
     let auth_header = prepared_candidate.auth_header;
     let auth_value = prepared_candidate.auth_value;
     let mapped_model = prepared_candidate.mapped_model;
+    let enable_model_directives =
+        crate::system_features::reasoning_model_directive_enabled_for_api_format_and_model(
+            state,
+            provider_api_format,
+            Some(&input.requested_model),
+        )
+        .await;
 
     let needs_bidirectional_conversion = !same_format && conversion_kind.is_some();
     let upstream_is_stream = spec_metadata.require_streaming
@@ -223,7 +230,7 @@ pub(crate) async fn resolve_local_openai_responses_candidate_payload_parts(
             transport.provider.provider_type.as_str(),
             provider_api_format,
         );
-    let Some(base_provider_request_body) = (if needs_bidirectional_conversion {
+    let Some(mut base_provider_request_body) = (if needs_bidirectional_conversion {
         build_cross_format_openai_responses_request_body(
             body_json,
             &mapped_model,
@@ -237,6 +244,7 @@ pub(crate) async fn resolve_local_openai_responses_candidate_payload_parts(
                 transport.endpoint.body_rules.as_ref()
             },
             Some(input.auth_context.api_key_id.as_str()),
+            enable_model_directives,
         )
     } else {
         build_local_openai_responses_request_body(
@@ -251,6 +259,7 @@ pub(crate) async fn resolve_local_openai_responses_candidate_payload_parts(
                 transport.endpoint.body_rules.as_ref()
             },
             Some(input.auth_context.api_key_id.as_str()),
+            enable_model_directives,
         )
     }) else {
         mark_skipped_local_openai_responses_candidate_with_extra_data(
@@ -270,6 +279,19 @@ pub(crate) async fn resolve_local_openai_responses_candidate_payload_parts(
         .await;
         return None;
     };
+    if let Some(mapping) =
+        crate::system_features::reasoning_model_directive_mapping_for_api_format_and_model(
+            state,
+            provider_api_format,
+            Some(&input.requested_model),
+        )
+        .await
+    {
+        crate::ai_serving::apply_model_directive_mapping_patch(
+            &mut base_provider_request_body,
+            &mapping,
+        );
+    }
     let antigravity_auth = if is_antigravity {
         match classify_local_antigravity_request_support(
             transport,

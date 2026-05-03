@@ -2503,7 +2503,8 @@ pub(crate) fn claude_output_effort_to_openai_reasoning_effort(value: &str) -> Op
         "low" => Some("low"),
         "medium" => Some("medium"),
         "high" => Some("high"),
-        "max" | "xhigh" => Some("xhigh"),
+        "xhigh" => Some("xhigh"),
+        "max" => Some("max"),
         _ => None,
     }
 }

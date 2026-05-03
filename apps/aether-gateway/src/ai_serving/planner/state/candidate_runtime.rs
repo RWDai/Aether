@@ -11,12 +11,15 @@ impl<'a> PlannerAppState<'a> {
         requested_model: Option<&str>,
         explicit_required_capabilities: Option<&Value>,
     ) -> Option<Value> {
+        let enable_model_directives =
+            crate::system_features::reasoning_model_directive_enabled(self.app()).await;
         crate::request_candidate_runtime::resolve_request_candidate_required_capabilities(
             self.app(),
             user_id,
             api_key_id,
             requested_model,
             explicit_required_capabilities,
+            enable_model_directives,
         )
         .await
     }

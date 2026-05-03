@@ -11,10 +11,12 @@ use aether_ai_formats::protocol::registry::{convert_request, FormatContext};
 use aether_ai_formats::provider_compat::proxy::rules::apply_local_body_rules;
 use serde_json::Value;
 
+use crate::request::model_directives::apply_model_directive_overrides_from_request;
+
 use super::{
     apply_openai_responses_compact_special_body_edits,
     codex::apply_codex_openai_responses_special_body_edits,
-    normalize::build_local_openai_chat_request_body,
+    normalize::build_local_openai_chat_request_body_with_model_directives,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -29,6 +31,33 @@ pub fn build_standard_request_body(
     body_rules: Option<&Value>,
     user_api_key_id: Option<&str>,
 ) -> Option<Value> {
+    build_standard_request_body_with_model_directives(
+        body_json,
+        client_api_format,
+        mapped_model,
+        provider_type,
+        provider_api_format,
+        request_path,
+        upstream_is_stream,
+        body_rules,
+        user_api_key_id,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn build_standard_request_body_with_model_directives(
+    body_json: &Value,
+    client_api_format: &str,
+    mapped_model: &str,
+    provider_type: &str,
+    provider_api_format: &str,
+    request_path: &str,
+    upstream_is_stream: bool,
+    body_rules: Option<&Value>,
+    user_api_key_id: Option<&str>,
+    enable_model_directives: bool,
+) -> Option<Value> {
     let format_context = FormatContext::default()
         .with_mapped_model(mapped_model)
         .with_request_path(request_path)
@@ -40,6 +69,16 @@ pub fn build_standard_request_body(
         &format_context,
     )
     .ok()?;
+
+    if enable_model_directives {
+        apply_model_directive_overrides_from_request(
+            &mut provider_request_body,
+            provider_api_format,
+            mapped_model,
+            body_json,
+            Some(request_path),
+        );
+    }
 
     if !apply_local_body_rules(&mut provider_request_body, body_rules, Some(body_json)) {
         return None;
@@ -64,36 +103,64 @@ pub fn build_standard_request_body_from_canonical(
     provider_api_format: &str,
     upstream_is_stream: bool,
 ) -> Option<Value> {
-    match aether_ai_formats::normalize_api_format_alias(provider_api_format).as_str() {
-        "openai:chat" => build_local_openai_chat_request_body(
-            canonical_request,
+    build_standard_request_body_from_canonical_with_model_directives(
+        canonical_request,
+        mapped_model,
+        provider_api_format,
+        upstream_is_stream,
+        false,
+    )
+}
+
+pub fn build_standard_request_body_from_canonical_with_model_directives(
+    canonical_request: &Value,
+    mapped_model: &str,
+    provider_api_format: &str,
+    upstream_is_stream: bool,
+    enable_model_directives: bool,
+) -> Option<Value> {
+    let mut provider_request_body =
+        match aether_ai_formats::normalize_api_format_alias(provider_api_format).as_str() {
+            "openai:chat" => build_local_openai_chat_request_body_with_model_directives(
+                canonical_request,
+                mapped_model,
+                upstream_is_stream,
+                enable_model_directives,
+            ),
+            "openai:responses" => convert_openai_chat_request_to_openai_responses_request(
+                canonical_request,
+                mapped_model,
+                upstream_is_stream,
+                false,
+            ),
+            "openai:responses:compact" => convert_openai_chat_request_to_openai_responses_request(
+                canonical_request,
+                mapped_model,
+                false,
+                true,
+            ),
+            "claude:messages" => convert_openai_chat_request_to_claude_request(
+                canonical_request,
+                mapped_model,
+                upstream_is_stream,
+            ),
+            "gemini:generate_content" => convert_openai_chat_request_to_gemini_request(
+                canonical_request,
+                mapped_model,
+                upstream_is_stream,
+            ),
+            _ => None,
+        }?;
+    if enable_model_directives {
+        apply_model_directive_overrides_from_request(
+            &mut provider_request_body,
+            provider_api_format,
             mapped_model,
-            upstream_is_stream,
-        ),
-        "openai:responses" => convert_openai_chat_request_to_openai_responses_request(
             canonical_request,
-            mapped_model,
-            upstream_is_stream,
-            false,
-        ),
-        "openai:responses:compact" => convert_openai_chat_request_to_openai_responses_request(
-            canonical_request,
-            mapped_model,
-            false,
-            true,
-        ),
-        "claude:messages" => convert_openai_chat_request_to_claude_request(
-            canonical_request,
-            mapped_model,
-            upstream_is_stream,
-        ),
-        "gemini:generate_content" => convert_openai_chat_request_to_gemini_request(
-            canonical_request,
-            mapped_model,
-            upstream_is_stream,
-        ),
-        _ => None,
+            None,
+        );
     }
+    Some(provider_request_body)
 }
 
 pub fn normalize_standard_request_to_openai_chat_request(
@@ -133,6 +200,7 @@ fn normalize_standard_request_to_openai_chat_request_cow<'a>(
 mod tests {
     use super::{
         build_standard_request_body, build_standard_request_body_from_canonical,
+        build_standard_request_body_with_model_directives,
         normalize_standard_request_to_openai_chat_request,
     };
     use serde_json::{json, Value};
@@ -423,6 +491,60 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn standard_request_body_applies_reasoning_effort_suffix_to_claude_target() {
+        let request = json!({
+            "model": "gpt-5.4-max",
+            "messages": [{"role": "user", "content": "Need high effort"}],
+            "reasoning_effort": "low"
+        });
+
+        let converted = build_standard_request_body_with_model_directives(
+            &request,
+            "openai:chat",
+            "claude-sonnet-4-5",
+            "anthropic",
+            "claude:messages",
+            "/v1/chat/completions",
+            false,
+            None,
+            None,
+            true,
+        )
+        .expect("openai chat should convert to claude chat");
+
+        assert_eq!(converted["model"], "claude-sonnet-4-5");
+        assert_eq!(converted["output_config"]["effort"], "max");
+        assert_eq!(converted["thinking"]["budget_tokens"], 8192);
+    }
+
+    #[test]
+    fn standard_request_body_applies_reasoning_effort_suffix_from_gemini_path() {
+        let request = json!({
+            "contents": [{
+                "role": "user",
+                "parts": [{"text": "Need high effort"}]
+            }]
+        });
+
+        let converted = build_standard_request_body_with_model_directives(
+            &request,
+            "gemini:generate_content",
+            "gpt-5.4",
+            "openai",
+            "openai:chat",
+            "/v1beta/models/gemini-2.5-pro-high:generateContent",
+            false,
+            None,
+            None,
+            true,
+        )
+        .expect("gemini should convert to openai chat");
+
+        assert_eq!(converted["model"], "gpt-5.4");
+        assert_eq!(converted["reasoning_effort"], "high");
     }
 
     #[test]

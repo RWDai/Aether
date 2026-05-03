@@ -52,11 +52,14 @@ pub struct SameFormatProviderRequestBehavior {
 pub struct SameFormatProviderRequestBodyInput<'a> {
     pub body_json: &'a Value,
     pub mapped_model: &'a str,
+    pub provider_api_format: &'a str,
+    pub source_model: Option<&'a str>,
     pub family: SameFormatProviderFamily,
     pub body_rules: Option<&'a Value>,
     pub upstream_is_stream: bool,
     pub kiro_auth_config: Option<&'a KiroAuthConfig>,
     pub is_claude_code: bool,
+    pub enable_model_directives: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -153,6 +156,16 @@ pub fn build_same_format_provider_request_body(
     let mut provider_request_body = Value::Object(provider_request_body);
     if input.is_claude_code {
         crate::claude_code::sanitize_claude_code_request_body(&mut provider_request_body);
+    }
+    if input.enable_model_directives {
+        if let Some(source_model) = input.source_model {
+            aether_ai_formats::apply_model_directive_overrides_from_model(
+                &mut provider_request_body,
+                input.provider_api_format,
+                input.mapped_model,
+                source_model,
+            );
+        }
     }
     if !apply_local_body_rules(
         &mut provider_request_body,
@@ -475,16 +488,46 @@ mod tests {
                 "messages": [{"role": "user", "content": "hello"}]
             }),
             mapped_model: "upstream-model",
+            provider_api_format: "openai:chat",
+            source_model: Some("client-model"),
             family: SameFormatProviderFamily::Standard,
             body_rules: None,
             upstream_is_stream: true,
             kiro_auth_config: None,
             is_claude_code: false,
+            enable_model_directives: false,
         })
         .expect("body should build");
 
         assert_eq!(body.get("model"), Some(&json!("upstream-model")));
         assert_eq!(body.get("stream"), Some(&json!(true)));
+    }
+
+    #[test]
+    fn same_format_body_applies_model_directive_before_body_rules() {
+        let body = build_same_format_provider_request_body(SameFormatProviderRequestBodyInput {
+            body_json: &json!({
+                "model": "gpt-5.4-high",
+                "messages": [{"role": "user", "content": "hello"}],
+                "reasoning_effort": "low"
+            }),
+            mapped_model: "upstream-model",
+            provider_api_format: "openai:chat",
+            source_model: Some("gpt-5.4-high"),
+            family: SameFormatProviderFamily::Standard,
+            body_rules: Some(&json!([
+                {"action":"set","path":"metadata.body_rule_seen","value":true}
+            ])),
+            upstream_is_stream: false,
+            kiro_auth_config: None,
+            is_claude_code: false,
+            enable_model_directives: true,
+        })
+        .expect("body should build");
+
+        assert_eq!(body["model"], "upstream-model");
+        assert_eq!(body["reasoning_effort"], "high");
+        assert_eq!(body["metadata"]["body_rule_seen"], true);
     }
 
     #[test]

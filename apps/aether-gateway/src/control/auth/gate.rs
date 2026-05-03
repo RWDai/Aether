@@ -68,6 +68,16 @@ pub(crate) async fn request_model_local_rejection(
     if contains_string(allowed_models, &requested_model) {
         return Ok(None);
     }
+    if model_directive_base_model_is_allowed_for_request(
+        state,
+        decision,
+        &requested_model,
+        allowed_models,
+    )
+    .await
+    {
+        return Ok(None);
+    }
     if request_model_resolves_to_allowed_model(state, decision, &requested_model, allowed_models)
         .await?
     {
@@ -77,6 +87,40 @@ pub(crate) async fn request_model_local_rejection(
     Ok(Some(GatewayLocalAuthRejection::ModelNotAllowed {
         model: requested_model,
     }))
+}
+
+async fn model_directive_base_model_is_allowed_for_request(
+    state: &AppState,
+    decision: &GatewayControlDecision,
+    requested_model: &str,
+    allowed_models: &[String],
+) -> bool {
+    let Some(base_model) = crate::ai_serving::model_directive_base_model(requested_model) else {
+        return false;
+    };
+    if !contains_string(allowed_models, &base_model) {
+        return false;
+    }
+    let Some(client_api_format) = decision
+        .auth_endpoint_signature
+        .as_deref()
+        .map(crate::ai_serving::normalize_api_format_alias)
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return false;
+    };
+    for api_format in candidate_api_formats_for_model_resolution(&client_api_format) {
+        if crate::system_features::reasoning_model_directive_enabled_for_api_format_and_model(
+            state,
+            &api_format,
+            Some(requested_model),
+        )
+        .await
+        {
+            return true;
+        }
+    }
+    false
 }
 
 async fn request_model_resolves_to_allowed_model(
@@ -95,24 +139,33 @@ async fn request_model_resolves_to_allowed_model(
     };
 
     for api_format in candidate_api_formats_for_model_resolution(&client_api_format) {
+        let enable_model_directives =
+            crate::system_features::reasoning_model_directive_enabled_for_api_format_and_model(
+                state,
+                &api_format,
+                Some(requested_model),
+            )
+            .await;
         let rows = state
             .list_minimal_candidate_selection_rows_for_api_format(&api_format)
             .await?;
         let matching_rows = rows
             .into_iter()
             .filter(|row| {
-                aether_scheduler_core::row_supports_requested_model(
+                aether_scheduler_core::row_supports_requested_model_with_model_directives(
                     row,
                     requested_model,
                     &api_format,
+                    enable_model_directives,
                 )
             })
             .collect::<Vec<_>>();
         let Some(resolved_global_model) =
-            aether_scheduler_core::resolve_requested_global_model_name(
+            aether_scheduler_core::resolve_requested_global_model_name_with_model_directives(
                 &matching_rows,
                 requested_model,
                 &api_format,
+                enable_model_directives,
             )
         else {
             continue;

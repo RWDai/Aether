@@ -983,7 +983,7 @@ pub fn build_admin_module_validation_result(
                 )
             }
         }
-        "management_tokens" | "proxy_nodes" => (true, None),
+        "management_tokens" | "model_directives" | "proxy_nodes" => (true, None),
         _ => (true, None),
     }
 }
@@ -993,7 +993,7 @@ pub fn build_admin_module_health(
     gemini_files_has_capable_key: bool,
 ) -> &'static str {
     match module_name {
-        "management_tokens" | "proxy_nodes" => "healthy",
+        "management_tokens" | "model_directives" | "proxy_nodes" => "healthy",
         "gemini_files" => {
             if gemini_files_has_capable_key {
                 "healthy"
@@ -1225,6 +1225,64 @@ pub fn admin_system_config_default_value(key: &str) -> Option<serde_json::Value>
         "email_suffix_mode" => Some(json!("none")),
         "email_suffix_list" => Some(json!([])),
         "enable_format_conversion" => Some(json!(false)),
+        "enable_model_directives" => Some(json!(false)),
+        "model_directives" => Some(json!({
+            "reasoning_effort": {
+                "enabled": true,
+                "api_formats": {
+                    "openai:chat": {
+                        "enabled": true,
+                        "mappings": {
+                            "low": { "reasoning_effort": "low" },
+                            "medium": { "reasoning_effort": "medium" },
+                            "high": { "reasoning_effort": "high" },
+                            "xhigh": { "reasoning_effort": "xhigh" },
+                            "max": { "reasoning_effort": "xhigh" }
+                        }
+                    },
+                    "openai:responses": {
+                        "enabled": true,
+                        "mappings": {
+                            "low": { "reasoning": { "effort": "low" } },
+                            "medium": { "reasoning": { "effort": "medium" } },
+                            "high": { "reasoning": { "effort": "high" } },
+                            "xhigh": { "reasoning": { "effort": "xhigh" } },
+                            "max": { "reasoning": { "effort": "xhigh" } }
+                        }
+                    },
+                    "openai:responses:compact": {
+                        "enabled": true,
+                        "mappings": {
+                            "low": { "reasoning": { "effort": "low" } },
+                            "medium": { "reasoning": { "effort": "medium" } },
+                            "high": { "reasoning": { "effort": "high" } },
+                            "xhigh": { "reasoning": { "effort": "xhigh" } },
+                            "max": { "reasoning": { "effort": "xhigh" } }
+                        }
+                    },
+                    "claude:messages": {
+                        "enabled": true,
+                        "mappings": {
+                            "low": { "thinking": { "type": "enabled", "budget_tokens": 1024 } },
+                            "medium": { "thinking": { "type": "enabled", "budget_tokens": 4096 } },
+                            "high": { "thinking": { "type": "enabled", "budget_tokens": 8192 } },
+                            "xhigh": { "thinking": { "type": "enabled", "budget_tokens": 16384 } },
+                            "max": { "thinking": { "type": "enabled", "budget_tokens": 32768 } }
+                        }
+                    },
+                    "gemini:generate_content": {
+                        "enabled": true,
+                        "mappings": {
+                            "low": { "generationConfig": { "thinkingConfig": { "thinkingBudget": 1024 } } },
+                            "medium": { "generationConfig": { "thinkingConfig": { "thinkingBudget": 4096 } } },
+                            "high": { "generationConfig": { "thinkingConfig": { "thinkingBudget": 8192 } } },
+                            "xhigh": { "generationConfig": { "thinkingConfig": { "thinkingBudget": 16384 } } },
+                            "max": { "generationConfig": { "thinkingConfig": { "thinkingBudget": -1 } } }
+                        }
+                    }
+                }
+            }
+        })),
         "keep_priority_on_conversion" => Some(json!(false)),
         "audit_log_retention_days" => Some(json!(30)),
         "enable_db_maintenance" => Some(json!(true)),

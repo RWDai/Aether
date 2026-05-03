@@ -48,6 +48,7 @@ async fn select_candidate(
         None,
         auth_snapshot,
         now_unix_secs,
+        false,
     )
     .await
 }
@@ -70,6 +71,7 @@ async fn collect_selectable_candidates(
         None,
         auth_snapshot,
         now_unix_secs,
+        false,
     )
     .await
 }
@@ -98,6 +100,7 @@ async fn collect_selectable_candidates_with_skip_reasons(
         None,
         auth_snapshot,
         now_unix_secs,
+        false,
     )
     .await
 }
@@ -404,6 +407,7 @@ async fn scheduler_selection_prefers_required_capability_matches_before_priority
         Some(&required_capabilities),
         None,
         100,
+        false,
     )
     .await
     .expect("selection should succeed")

@@ -10,6 +10,20 @@ use super::types::{
 pub fn enumerate_minimal_candidate_selection(
     input: EnumerateMinimalCandidateSelectionInput<'_>,
 ) -> Result<Vec<SchedulerMinimalCandidateSelectionCandidate>, DataLayerError> {
+    enumerate_minimal_candidate_selection_inner(input, false)
+}
+
+pub fn enumerate_minimal_candidate_selection_with_model_directives(
+    input: EnumerateMinimalCandidateSelectionInput<'_>,
+    enable_model_directives: bool,
+) -> Result<Vec<SchedulerMinimalCandidateSelectionCandidate>, DataLayerError> {
+    enumerate_minimal_candidate_selection_inner(input, enable_model_directives)
+}
+
+fn enumerate_minimal_candidate_selection_inner(
+    input: EnumerateMinimalCandidateSelectionInput<'_>,
+    enable_model_directives: bool,
+) -> Result<Vec<SchedulerMinimalCandidateSelectionCandidate>, DataLayerError> {
     let EnumerateMinimalCandidateSelectionInput {
         rows,
         normalized_api_format,
@@ -26,10 +40,11 @@ pub fn enumerate_minimal_candidate_selection(
     if !crate::auth_constraints_allow_api_format(auth_constraints, normalized_api_format) {
         return Ok(Vec::new());
     }
-    if !crate::auth_constraints_allow_model(
+    if !crate::auth_constraints_allow_model_with_model_directives(
         auth_constraints,
         requested_model_name,
         resolved_global_model_name,
+        enable_model_directives,
     ) {
         return Ok(Vec::new());
     }
@@ -48,7 +63,12 @@ pub fn enumerate_minimal_candidate_selection(
             continue;
         }
         let Some((selected_provider_model_name, mapping_matched_model)) =
-            crate::resolve_provider_model_name(&row, requested_model_name, normalized_api_format)
+            crate::resolve_provider_model_name_with_model_directives(
+                &row,
+                requested_model_name,
+                normalized_api_format,
+                enable_model_directives,
+            )
         else {
             continue;
         };

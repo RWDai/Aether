@@ -142,6 +142,7 @@ async fn enumerate_minimal_candidate_selection_resolves_provider_model_alias() {
         false,
         None,
         None,
+        false,
     )
     .await
     .expect("selection should succeed");
@@ -191,6 +192,7 @@ async fn enumerate_minimal_candidate_selection_keeps_only_resolved_global_model_
         false,
         None,
         None,
+        false,
     )
     .await
     .expect("selection should succeed");
@@ -231,10 +233,51 @@ async fn enumerate_minimal_candidate_selection_allows_resolved_global_model_in_a
         false,
         Some(&auth_snapshot),
         None,
+        false,
     )
     .await
     .expect("selection should succeed");
 
     assert_eq!(selection.len(), 1);
     assert_eq!(selection[0].global_model_name, "gpt-5");
+}
+
+#[tokio::test]
+async fn enumerate_minimal_candidate_selection_gates_model_directive_fallback() {
+    let mut row = sample_row();
+    row.global_model_name = "gpt-5.4".to_string();
+    row.model_provider_model_name = "gpt-5.4-upstream".to_string();
+
+    let candidates = Arc::new(InMemoryMinimalCandidateSelectionReadRepository::seed(vec![
+        row,
+    ]));
+    let quotas = Arc::new(InMemoryProviderQuotaRepository::seed(vec![]));
+    let state = GatewayDataState::with_candidate_selection_and_quota_for_tests(candidates, quotas);
+
+    let disabled = enumerate_minimal_candidate_selection_with_required_capabilities(
+        &state,
+        "openai:chat",
+        "gpt-5.4-high",
+        false,
+        None,
+        None,
+        false,
+    )
+    .await
+    .expect("selection should succeed");
+    assert!(disabled.is_empty());
+
+    let enabled = enumerate_minimal_candidate_selection_with_required_capabilities(
+        &state,
+        "openai:chat",
+        "gpt-5.4-high",
+        false,
+        None,
+        None,
+        true,
+    )
+    .await
+    .expect("selection should succeed");
+    assert_eq!(enabled.len(), 1);
+    assert_eq!(enabled[0].global_model_name, "gpt-5.4");
 }

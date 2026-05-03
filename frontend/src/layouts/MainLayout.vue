@@ -381,6 +381,7 @@ import {
   Zap,
   FileUp,
   Server,
+  SlidersHorizontal,
   type LucideIcon,
 } from 'lucide-vue-next'
 
@@ -559,6 +560,7 @@ const navigation = computed(() => {
     Shield,
     Puzzle,
     Server,
+    SlidersHorizontal,
   }
 
   // 添加模块菜单项（按 admin_menu_order 排序，只显示已激活的）

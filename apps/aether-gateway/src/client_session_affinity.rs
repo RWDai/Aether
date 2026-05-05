@@ -31,10 +31,11 @@ pub(crate) fn client_session_affinity_from_request(
     let request = ClientSessionAffinityRequest { headers, body_json };
     let client_family = detect_client_family(&request);
     let session_key = explicit_aether_session_key(&request)
+        .or_else(|| extract_session_key_for_client_family(&request, client_family.as_str()))
         .or_else(|| GenericSessionAffinityAdapter.extract_session_key(&request))
-        .or_else(|| CodexSessionAffinityAdapter.extract_session_key(&request))
-        .or_else(|| ClaudeCodeSessionAffinityAdapter.extract_session_key(&request))
-        .or_else(|| OpenCodeSessionAffinityAdapter.extract_session_key(&request));
+        .or_else(|| {
+            extract_session_key_from_other_specific_adapters(&request, client_family.as_str())
+        });
 
     session_key
         .map(|session_key| ClientSessionAffinity::new(Some(client_family), Some(session_key)))
@@ -62,6 +63,26 @@ fn specific_client_session_affinity_adapters() -> [&'static dyn ClientSessionAff
         &ClaudeCodeSessionAffinityAdapter,
         &OpenCodeSessionAffinityAdapter,
     ]
+}
+
+fn extract_session_key_for_client_family(
+    request: &ClientSessionAffinityRequest<'_>,
+    client_family: &str,
+) -> Option<String> {
+    specific_client_session_affinity_adapters()
+        .into_iter()
+        .find(|adapter| adapter.family() == client_family)
+        .and_then(|adapter| adapter.extract_session_key(request))
+}
+
+fn extract_session_key_from_other_specific_adapters(
+    request: &ClientSessionAffinityRequest<'_>,
+    client_family: &str,
+) -> Option<String> {
+    specific_client_session_affinity_adapters()
+        .into_iter()
+        .filter(|adapter| adapter.family() != client_family)
+        .find_map(|adapter| adapter.extract_session_key(request))
 }
 
 impl ClientSessionAffinityAdapter for GenericSessionAffinityAdapter {
@@ -317,6 +338,33 @@ mod tests {
 
         let affinity =
             client_session_affinity_from_request(&headers, None).expect("affinity should build");
+
+        assert_eq!(affinity.client_family.as_deref(), Some("opencode"));
+        assert_eq!(
+            affinity.session_key.as_deref(),
+            Some("session=oc-session;agent=reviewer")
+        );
+    }
+
+    #[test]
+    fn specific_adapter_wins_over_generic_body_session() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            http::header::USER_AGENT,
+            HeaderValue::from_static("OpenCode/0.9"),
+        );
+        headers.insert(
+            "x-opencode-session-id",
+            HeaderValue::from_static("oc-session"),
+        );
+        headers.insert("x-opencode-agent-id", HeaderValue::from_static("reviewer"));
+        let body = json!({
+            "session_id": "body-session",
+            "agent_id": "body-agent"
+        });
+
+        let affinity = client_session_affinity_from_request(&headers, Some(&body))
+            .expect("affinity should build");
 
         assert_eq!(affinity.client_family.as_deref(), Some("opencode"));
         assert_eq!(

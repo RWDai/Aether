@@ -1,10 +1,11 @@
 use aether_scheduler_core::ClientSessionAffinity;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::headers::header_value_str;
 
 pub(crate) const AETHER_SESSION_ID_HEADER: &str = "x-aether-session-id";
 pub(crate) const AETHER_AGENT_ID_HEADER: &str = "x-aether-agent-id";
+pub(crate) const CLIENT_SESSION_AFFINITY_REPORT_CONTEXT_FIELD: &str = "client_session_affinity";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ClientSessionSignalSource {
@@ -45,7 +46,11 @@ impl ClientSessionScope {
             return None;
         }
 
-        Some(normalize_session_key(session_id, self.agent_id.as_deref()))
+        Some(normalize_session_key(
+            self.account_hint.as_deref(),
+            session_id,
+            self.agent_id.as_deref(),
+        ))
     }
 
     pub(crate) fn scheduler_affinity(&self) -> Option<ClientSessionAffinity> {
@@ -111,6 +116,53 @@ pub(crate) fn client_session_scope_from_parts(
     body_json: Option<&Value>,
 ) -> Option<ClientSessionScope> {
     client_session_scope_from_request(&parts.headers, body_json)
+}
+
+pub(crate) fn client_session_affinity_report_context_value(
+    affinity: &ClientSessionAffinity,
+) -> Option<Value> {
+    let session_key = affinity
+        .session_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let mut object = Map::new();
+    if let Some(client_family) = affinity
+        .client_family
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        object.insert(
+            "client_family".to_string(),
+            Value::String(client_family.to_ascii_lowercase()),
+        );
+    }
+    object.insert(
+        "session_key".to_string(),
+        Value::String(session_key.to_string()),
+    );
+    Some(Value::Object(object))
+}
+
+pub(crate) fn client_session_affinity_from_report_context_value(
+    value: Option<&Value>,
+) -> Option<ClientSessionAffinity> {
+    let object = value?.as_object()?;
+    let session_key = object
+        .get("session_key")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?
+        .to_string();
+    let client_family = object
+        .get("client_family")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_ascii_lowercase);
+
+    Some(ClientSessionAffinity::new(client_family, Some(session_key)))
 }
 
 fn detect_client_family(request: &ClientSessionRequest<'_>) -> String {
@@ -350,12 +402,24 @@ fn explicit_aether_session_scope(
     ))
 }
 
-fn normalize_session_key(root_session: &str, agent_id: Option<&str>) -> String {
+fn normalize_session_key(
+    account_hint: Option<&str>,
+    root_session: &str,
+    agent_id: Option<&str>,
+) -> String {
     let root_session = root_session.trim();
-    match agent_id.map(str::trim).filter(|value| !value.is_empty()) {
-        Some(agent_id) => format!("session={root_session};agent={agent_id}"),
-        None => format!("session={root_session}"),
+    let mut parts = Vec::new();
+    if let Some(account_hint) = account_hint
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        parts.push(format!("account={account_hint}"));
     }
+    parts.push(format!("session={root_session}"));
+    if let Some(agent_id) = agent_id.map(str::trim).filter(|value| !value.is_empty()) {
+        parts.push(format!("agent={agent_id}"));
+    }
+    parts.join(";")
 }
 
 fn value_at_paths<'a>(body: &'a Value, paths: &[&[&str]]) -> Option<&'a str> {
@@ -382,9 +446,11 @@ fn header_contains(headers: &http::HeaderMap, key: &str, needle: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        client_session_affinity_from_request, client_session_scope_from_request,
+        client_session_affinity_from_report_context_value, client_session_affinity_from_request,
+        client_session_affinity_report_context_value, client_session_scope_from_request,
         ClientSessionSignalSource, AETHER_AGENT_ID_HEADER, AETHER_SESSION_ID_HEADER,
     };
+    use aether_scheduler_core::ClientSessionAffinity;
     use http::{HeaderMap, HeaderValue};
     use serde_json::json;
 
@@ -479,8 +545,23 @@ mod tests {
         assert_eq!(affinity.client_family.as_deref(), Some("codex"));
         assert_eq!(
             affinity.session_key.as_deref(),
-            Some("session=prompt-session-1")
+            Some("account=account-1;session=prompt-session-1")
         );
+    }
+
+    #[test]
+    fn report_context_round_trips_normalized_session_affinity() {
+        let affinity = ClientSessionAffinity::new(
+            Some("codex".to_string()),
+            Some("account=account-1;session=session-1".to_string()),
+        );
+
+        let value = client_session_affinity_report_context_value(&affinity)
+            .expect("report context value should build");
+        let parsed = client_session_affinity_from_report_context_value(Some(&value))
+            .expect("report context value should parse");
+
+        assert_eq!(parsed, affinity);
     }
 
     #[test]

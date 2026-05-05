@@ -19,6 +19,9 @@ use super::{
     project_local_key_circuit_open, project_local_success_health, LocalFailoverClassification,
 };
 use crate::ai_serving::extract_pool_sticky_session_token;
+use crate::client_session_affinity::{
+    client_session_affinity_from_report_context_value, CLIENT_SESSION_AFFINITY_REPORT_CONTEXT_FIELD,
+};
 use crate::clock::current_unix_secs;
 use crate::handlers::shared::provider_pool::admin_provider_pool_config_from_config_value;
 use crate::handlers::shared::provider_pool::{
@@ -163,6 +166,12 @@ fn local_scheduler_affinity_cache_key(report_context: Option<&Value>) -> Option<
 
 fn local_client_session_affinity(report_context: Option<&Value>) -> Option<ClientSessionAffinity> {
     let report_context = report_context?;
+    if let Some(affinity) = client_session_affinity_from_report_context_value(
+        report_context.get(CLIENT_SESSION_AFFINITY_REPORT_CONTEXT_FIELD),
+    ) {
+        return Some(affinity);
+    }
+
     let headers = header_map_from_report_context(report_context.get("original_headers"));
     let body_json = report_context
         .get("original_request_body")
@@ -823,9 +832,13 @@ mod tests {
             "api_key_id": "api-key-1",
             "client_api_format": "openai:chat",
             "model": "gpt-5",
+            "client_session_affinity": {
+                "client_family": "generic",
+                "session_key": "session=session-1;agent=coder"
+            },
             "original_headers": {
-                "x-aether-session-id": "session-1",
-                "x-aether-agent-id": "coder"
+                "x-aether-session-id": "raw-session",
+                "x-aether-agent-id": "raw-agent"
             },
             "original_request_body": {
                 "model": "gpt-5"

@@ -1394,7 +1394,7 @@ SELECT
   COALESCE(SUM(input_tokens), 0)::BIGINT AS input_tokens,
   COALESCE(SUM(effective_input_tokens), 0)::BIGINT AS effective_input_tokens,
   COALESCE(SUM(output_tokens), 0)::BIGINT AS output_tokens,
-  COALESCE(SUM(input_tokens + output_tokens), 0)::BIGINT AS total_tokens,
+  COALESCE(SUM(effective_input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0)::BIGINT AS total_tokens,
   COALESCE(SUM(cache_creation_tokens), 0)::BIGINT AS cache_creation_tokens,
   COALESCE(SUM(cache_read_tokens), 0)::BIGINT AS cache_read_tokens,
   COALESCE(SUM(total_input_context), 0)::BIGINT AS total_input_context,
@@ -1425,7 +1425,7 @@ SELECT
   COALESCE(SUM(input_tokens), 0)::BIGINT AS input_tokens,
   COALESCE(SUM(effective_input_tokens), 0)::BIGINT AS effective_input_tokens,
   COALESCE(SUM(output_tokens), 0)::BIGINT AS output_tokens,
-  COALESCE(SUM(input_tokens + output_tokens), 0)::BIGINT AS total_tokens,
+  COALESCE(SUM(effective_input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0)::BIGINT AS total_tokens,
   COALESCE(SUM(cache_creation_tokens), 0)::BIGINT AS cache_creation_tokens,
   COALESCE(SUM(cache_read_tokens), 0)::BIGINT AS cache_read_tokens,
   COALESCE(SUM(total_input_context), 0)::BIGINT AS total_input_context,
@@ -1482,7 +1482,33 @@ SELECT
     END
   ), 0)::BIGINT AS effective_input_tokens,
   COALESCE(SUM(GREATEST(COALESCE("usage".output_tokens, 0), 0)), 0)::BIGINT AS output_tokens,
-  COALESCE(SUM(GREATEST(COALESCE("usage".total_tokens, 0), 0)), 0)::BIGINT AS total_tokens,
+  COALESCE(SUM(
+    CASE
+      WHEN GREATEST(COALESCE("usage".input_tokens, 0), 0) <= 0 THEN 0
+      WHEN GREATEST(COALESCE("usage".cache_read_input_tokens, 0), 0) <= 0
+      THEN GREATEST(COALESCE("usage".input_tokens, 0), 0)
+      WHEN split_part(lower(COALESCE(COALESCE("usage".endpoint_api_format, "usage".api_format), '')), ':', 1)
+           IN ('openai', 'gemini', 'google')
+      THEN GREATEST(
+        GREATEST(COALESCE("usage".input_tokens, 0), 0)
+          - GREATEST(COALESCE("usage".cache_read_input_tokens, 0), 0),
+        0
+      )
+      ELSE GREATEST(COALESCE("usage".input_tokens, 0), 0)
+    END
+    + GREATEST(COALESCE("usage".output_tokens, 0), 0)
+    + CASE
+        WHEN COALESCE("usage".cache_creation_input_tokens, 0) = 0
+             AND (
+               COALESCE("usage".cache_creation_input_tokens_5m, 0)
+               + COALESCE("usage".cache_creation_input_tokens_1h, 0)
+             ) > 0
+        THEN COALESCE("usage".cache_creation_input_tokens_5m, 0)
+           + COALESCE("usage".cache_creation_input_tokens_1h, 0)
+        ELSE COALESCE("usage".cache_creation_input_tokens, 0)
+      END
+    + GREATEST(COALESCE("usage".cache_read_input_tokens, 0), 0)
+  ), 0)::BIGINT AS total_tokens,
   COALESCE(SUM(
     CASE
       WHEN COALESCE("usage".cache_creation_input_tokens, 0) = 0
@@ -3740,7 +3766,33 @@ SELECT
   "usage".model AS model,
   "usage".provider_name AS provider,
   COUNT(*)::BIGINT AS requests,
-  COALESCE(SUM(GREATEST(COALESCE("usage".total_tokens, 0), 0)), 0)::BIGINT AS total_tokens,
+  COALESCE(SUM(
+    CASE
+      WHEN GREATEST(COALESCE("usage".input_tokens, 0), 0) <= 0 THEN 0
+      WHEN GREATEST(COALESCE("usage".cache_read_input_tokens, 0), 0) <= 0
+      THEN GREATEST(COALESCE("usage".input_tokens, 0), 0)
+      WHEN split_part(lower(COALESCE(COALESCE("usage".endpoint_api_format, "usage".api_format), '')), ':', 1)
+           IN ('openai', 'gemini', 'google')
+      THEN GREATEST(
+        GREATEST(COALESCE("usage".input_tokens, 0), 0)
+          - GREATEST(COALESCE("usage".cache_read_input_tokens, 0), 0),
+        0
+      )
+      ELSE GREATEST(COALESCE("usage".input_tokens, 0), 0)
+    END
+    + GREATEST(COALESCE("usage".output_tokens, 0), 0)
+    + CASE
+        WHEN COALESCE("usage".cache_creation_input_tokens, 0) = 0
+             AND (
+               COALESCE("usage".cache_creation_input_tokens_5m, 0)
+               + COALESCE("usage".cache_creation_input_tokens_1h, 0)
+             ) > 0
+        THEN COALESCE("usage".cache_creation_input_tokens_5m, 0)
+           + COALESCE("usage".cache_creation_input_tokens_1h, 0)
+        ELSE COALESCE("usage".cache_creation_input_tokens, 0)
+      END
+    + GREATEST(COALESCE("usage".cache_read_input_tokens, 0), 0)
+  ), 0)::BIGINT AS total_tokens,
   COALESCE(SUM(COALESCE(CAST("usage".total_cost_usd AS DOUBLE PRECISION), 0)), 0)
     AS total_cost_usd,
   COALESCE(SUM(
@@ -3944,7 +3996,7 @@ SELECT
   {group_column} AS group_key,
   COALESCE(SUM(total_requests), 0)::BIGINT AS request_count,
   COALESCE(SUM(input_tokens), 0)::BIGINT AS input_tokens,
-  COALESCE(SUM(total_tokens), 0)::BIGINT AS total_tokens,
+  COALESCE(SUM(effective_input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0)::BIGINT AS total_tokens,
   COALESCE(SUM(output_tokens), 0)::BIGINT AS output_tokens,
   COALESCE(SUM(effective_input_tokens), 0)::BIGINT AS effective_input_tokens,
   COALESCE(SUM(total_input_context), 0)::BIGINT AS total_input_context,
@@ -4951,7 +5003,7 @@ SELECT
     AS cache_creation_cost_usd,
   COALESCE(SUM(
     COALESCE(
-      CAST("usage".output_price_per_1m AS DOUBLE PRECISION),
+      CAST("usage".input_price_per_1m AS DOUBLE PRECISION),
       0
     ) * GREATEST(COALESCE("usage".cache_read_input_tokens, 0), 0)::DOUBLE PRECISION / 1000000.0
   ), 0) AS estimated_full_cost_usd

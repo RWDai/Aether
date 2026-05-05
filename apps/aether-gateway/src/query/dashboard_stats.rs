@@ -54,7 +54,7 @@ SELECT
   COALESCE(SUM(input_tokens), 0)::BIGINT AS input_tokens,
   COALESCE(SUM(effective_input_tokens), 0)::BIGINT AS effective_input_tokens,
   COALESCE(SUM(output_tokens), 0)::BIGINT AS output_tokens,
-  COALESCE(SUM(input_tokens + output_tokens), 0)::BIGINT AS total_tokens,
+  COALESCE(SUM(effective_input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0)::BIGINT AS total_tokens,
   COALESCE(SUM(cache_creation_tokens), 0)::BIGINT AS cache_creation_tokens,
   COALESCE(SUM(cache_read_tokens), 0)::BIGINT AS cache_read_tokens,
   COALESCE(SUM(total_input_context), 0)::BIGINT AS total_input_context,
@@ -85,7 +85,7 @@ SELECT
   COALESCE(SUM(input_tokens), 0)::BIGINT AS input_tokens,
   COALESCE(SUM(effective_input_tokens), 0)::BIGINT AS effective_input_tokens,
   COALESCE(SUM(output_tokens), 0)::BIGINT AS output_tokens,
-  COALESCE(SUM(input_tokens + output_tokens), 0)::BIGINT AS total_tokens,
+  COALESCE(SUM(effective_input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0)::BIGINT AS total_tokens,
   COALESCE(SUM(cache_creation_tokens), 0)::BIGINT AS cache_creation_tokens,
   COALESCE(SUM(cache_read_tokens), 0)::BIGINT AS cache_read_tokens,
   COALESCE(SUM(total_input_context), 0)::BIGINT AS total_input_context,
@@ -196,8 +196,7 @@ pub(crate) async fn list_admin_dashboard_daily_totals_aggregates(
 SELECT
   date,
   total_requests,
-  input_tokens,
-  output_tokens,
+  effective_input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens AS total_tokens,
   COALESCE(total_cost, 0)::DOUBLE PRECISION AS total_cost,
   response_time_sum_ms,
   response_time_samples
@@ -220,19 +219,16 @@ ORDER BY date ASC
         let date = row
             .try_get::<DateTime<Utc>, _>("date")
             .map_err(|err| internal(format!("daily aggregate totals decode failed: {err}")))?;
-        let input_tokens = row
-            .try_get::<i64, _>("input_tokens")
-            .map_err(|err| internal(format!("daily aggregate totals decode failed: {err}")))?;
-        let output_tokens = row
-            .try_get::<i64, _>("output_tokens")
-            .map_err(|err| internal(format!("daily aggregate totals decode failed: {err}")))?;
         items.push(DashboardDailyTotalsAggregateRow {
             date: date.date_naive().to_string(),
             requests: row
                 .try_get::<i32, _>("total_requests")
                 .map_err(|err| internal(format!("daily aggregate totals decode failed: {err}")))?
                 .max(0) as u64,
-            total_tokens: input_tokens.saturating_add(output_tokens).max(0) as u64,
+            total_tokens: row
+                .try_get::<i64, _>("total_tokens")
+                .map_err(|err| internal(format!("daily aggregate totals decode failed: {err}")))?
+                .max(0) as u64,
             total_cost_usd: row
                 .try_get::<f64, _>("total_cost")
                 .map_err(|err| internal(format!("daily aggregate totals decode failed: {err}")))?,
@@ -260,7 +256,7 @@ pub(crate) async fn list_admin_dashboard_hourly_totals_aggregates(
 SELECT
   CAST(DATE(hour_utc + ($3::integer * INTERVAL '1 minute')) AS TEXT) AS date,
   COALESCE(SUM(total_requests), 0)::BIGINT AS total_requests,
-  COALESCE(SUM(input_tokens + output_tokens), 0)::BIGINT AS total_tokens,
+  COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0)::BIGINT AS total_tokens,
   CAST(COALESCE(SUM(total_cost), 0) AS DOUBLE PRECISION) AS total_cost,
   CAST(COALESCE(SUM(response_time_sum_ms), 0) AS DOUBLE PRECISION) AS response_time_sum_ms,
   COALESCE(SUM(response_time_samples), 0)::BIGINT AS response_time_samples
@@ -321,8 +317,7 @@ SELECT
   date,
   model,
   total_requests,
-  input_tokens,
-  output_tokens,
+  input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens AS total_tokens,
   COALESCE(total_cost, 0)::DOUBLE PRECISION AS total_cost,
   response_time_sum_ms,
   response_time_samples
@@ -345,12 +340,6 @@ ORDER BY date ASC, total_cost DESC, model ASC
         let date = row
             .try_get::<DateTime<Utc>, _>("date")
             .map_err(|err| internal(format!("daily aggregate model decode failed: {err}")))?;
-        let input_tokens = row
-            .try_get::<i64, _>("input_tokens")
-            .map_err(|err| internal(format!("daily aggregate model decode failed: {err}")))?;
-        let output_tokens = row
-            .try_get::<i64, _>("output_tokens")
-            .map_err(|err| internal(format!("daily aggregate model decode failed: {err}")))?;
         items.push(DashboardDailyModelAggregateRow {
             date: date.date_naive().to_string(),
             model: row
@@ -360,7 +349,10 @@ ORDER BY date ASC, total_cost DESC, model ASC
                 .try_get::<i32, _>("total_requests")
                 .map_err(|err| internal(format!("daily aggregate model decode failed: {err}")))?
                 .max(0) as u64,
-            total_tokens: input_tokens.saturating_add(output_tokens).max(0) as u64,
+            total_tokens: row
+                .try_get::<i64, _>("total_tokens")
+                .map_err(|err| internal(format!("daily aggregate model decode failed: {err}")))?
+                .max(0) as u64,
             total_cost_usd: row
                 .try_get::<f64, _>("total_cost")
                 .map_err(|err| internal(format!("daily aggregate model decode failed: {err}")))?,
@@ -453,8 +445,7 @@ SELECT
   date,
   provider_name,
   total_requests,
-  input_tokens,
-  output_tokens,
+  input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens AS total_tokens,
   COALESCE(total_cost, 0)::DOUBLE PRECISION AS total_cost
 FROM stats_daily_provider
 WHERE date >= $1
@@ -475,12 +466,6 @@ ORDER BY date ASC, total_cost DESC, provider_name ASC
         let date = row
             .try_get::<DateTime<Utc>, _>("date")
             .map_err(|err| internal(format!("daily aggregate provider decode failed: {err}")))?;
-        let input_tokens = row
-            .try_get::<i64, _>("input_tokens")
-            .map_err(|err| internal(format!("daily aggregate provider decode failed: {err}")))?;
-        let output_tokens = row
-            .try_get::<i64, _>("output_tokens")
-            .map_err(|err| internal(format!("daily aggregate provider decode failed: {err}")))?;
         items.push(DashboardDailyProviderAggregateRow {
             date: date.date_naive().to_string(),
             provider: row.try_get::<String, _>("provider_name").map_err(|err| {
@@ -490,7 +475,10 @@ ORDER BY date ASC, total_cost DESC, provider_name ASC
                 .try_get::<i32, _>("total_requests")
                 .map_err(|err| internal(format!("daily aggregate provider decode failed: {err}")))?
                 .max(0) as u64,
-            total_tokens: input_tokens.saturating_add(output_tokens).max(0) as u64,
+            total_tokens: row
+                .try_get::<i64, _>("total_tokens")
+                .map_err(|err| internal(format!("daily aggregate provider decode failed: {err}")))?
+                .max(0) as u64,
             total_cost_usd: row.try_get::<f64, _>("total_cost").map_err(|err| {
                 internal(format!("daily aggregate provider decode failed: {err}"))
             })?,
@@ -567,8 +555,7 @@ pub(crate) async fn list_user_dashboard_daily_totals_aggregates(
 SELECT
   date,
   total_requests,
-  input_tokens,
-  output_tokens,
+  effective_input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens AS total_tokens,
   COALESCE(total_cost, 0)::DOUBLE PRECISION AS total_cost,
   response_time_sum_ms,
   response_time_samples
@@ -593,12 +580,6 @@ ORDER BY date ASC
         let date = row
             .try_get::<DateTime<Utc>, _>("date")
             .map_err(|err| internal(format!("user daily aggregate totals decode failed: {err}")))?;
-        let input_tokens = row
-            .try_get::<i64, _>("input_tokens")
-            .map_err(|err| internal(format!("user daily aggregate totals decode failed: {err}")))?;
-        let output_tokens = row
-            .try_get::<i64, _>("output_tokens")
-            .map_err(|err| internal(format!("user daily aggregate totals decode failed: {err}")))?;
         items.push(DashboardDailyTotalsAggregateRow {
             date: date.date_naive().to_string(),
             requests: row
@@ -607,7 +588,12 @@ ORDER BY date ASC
                     internal(format!("user daily aggregate totals decode failed: {err}"))
                 })?
                 .max(0) as u64,
-            total_tokens: input_tokens.saturating_add(output_tokens).max(0) as u64,
+            total_tokens: row
+                .try_get::<i64, _>("total_tokens")
+                .map_err(|err| {
+                    internal(format!("user daily aggregate totals decode failed: {err}"))
+                })?
+                .max(0) as u64,
             total_cost_usd: row.try_get::<f64, _>("total_cost").map_err(|err| {
                 internal(format!("user daily aggregate totals decode failed: {err}"))
             })?,
@@ -640,7 +626,7 @@ pub(crate) async fn list_user_dashboard_hourly_totals_aggregates(
 SELECT
   CAST(DATE(hour_utc + ($4::integer * INTERVAL '1 minute')) AS TEXT) AS date,
   COALESCE(SUM(total_requests), 0)::BIGINT AS total_requests,
-  COALESCE(SUM(input_tokens + output_tokens), 0)::BIGINT AS total_tokens,
+  COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0)::BIGINT AS total_tokens,
   CAST(COALESCE(SUM(total_cost), 0) AS DOUBLE PRECISION) AS total_cost,
   CAST(COALESCE(SUM(response_time_sum_ms), 0) AS DOUBLE PRECISION) AS response_time_sum_ms,
   COALESCE(SUM(response_time_samples), 0)::BIGINT AS response_time_samples
@@ -712,8 +698,7 @@ SELECT
   date,
   model,
   total_requests,
-  input_tokens,
-  output_tokens,
+  effective_input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens AS total_tokens,
   COALESCE(total_cost, 0)::DOUBLE PRECISION AS total_cost,
   response_time_sum_ms,
   response_time_samples
@@ -738,12 +723,6 @@ ORDER BY date ASC, total_cost DESC, model ASC
         let date = row
             .try_get::<DateTime<Utc>, _>("date")
             .map_err(|err| internal(format!("user daily aggregate model decode failed: {err}")))?;
-        let input_tokens = row
-            .try_get::<i64, _>("input_tokens")
-            .map_err(|err| internal(format!("user daily aggregate model decode failed: {err}")))?;
-        let output_tokens = row
-            .try_get::<i64, _>("output_tokens")
-            .map_err(|err| internal(format!("user daily aggregate model decode failed: {err}")))?;
         items.push(DashboardDailyModelAggregateRow {
             date: date.date_naive().to_string(),
             model: row.try_get::<String, _>("model").map_err(|err| {
@@ -755,7 +734,12 @@ ORDER BY date ASC, total_cost DESC, model ASC
                     internal(format!("user daily aggregate model decode failed: {err}"))
                 })?
                 .max(0) as u64,
-            total_tokens: input_tokens.saturating_add(output_tokens).max(0) as u64,
+            total_tokens: row
+                .try_get::<i64, _>("total_tokens")
+                .map_err(|err| {
+                    internal(format!("user daily aggregate model decode failed: {err}"))
+                })?
+                .max(0) as u64,
             total_cost_usd: row.try_get::<f64, _>("total_cost").map_err(|err| {
                 internal(format!("user daily aggregate model decode failed: {err}"))
             })?,

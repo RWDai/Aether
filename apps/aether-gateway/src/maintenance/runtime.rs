@@ -1521,8 +1521,8 @@ WITH aggregated AS (
             COALESCE(
                 SUM(
                     COALESCE(
-                        CAST(usage_settlement_snapshots.output_price_per_1m AS DOUBLE PRECISION),
-                        CAST(usage.output_price_per_1m AS DOUBLE PRECISION),
+                        CAST(usage_settlement_snapshots.input_price_per_1m AS DOUBLE PRECISION),
+                        CAST(usage.input_price_per_1m AS DOUBLE PRECISION),
                         0
                     ) * GREATEST(COALESCE(usage.cache_read_input_tokens, 0), 0)::DOUBLE PRECISION
                         / 1000000.0
@@ -1587,8 +1587,8 @@ WITH aggregated AS (
             COALESCE(
                 SUM(
                     COALESCE(
-                        CAST(usage_settlement_snapshots.output_price_per_1m AS DOUBLE PRECISION),
-                        CAST(usage.output_price_per_1m AS DOUBLE PRECISION),
+                        CAST(usage_settlement_snapshots.input_price_per_1m AS DOUBLE PRECISION),
+                        CAST(usage.input_price_per_1m AS DOUBLE PRECISION),
                         0
                     ) * GREATEST(COALESCE(usage.cache_read_input_tokens, 0), 0)::DOUBLE PRECISION
                         / 1000000.0
@@ -1663,8 +1663,8 @@ WITH aggregated AS (
             COALESCE(
                 SUM(
                     COALESCE(
-                        CAST(usage_settlement_snapshots.output_price_per_1m AS DOUBLE PRECISION),
-                        CAST(usage.output_price_per_1m AS DOUBLE PRECISION),
+                        CAST(usage_settlement_snapshots.input_price_per_1m AS DOUBLE PRECISION),
+                        CAST(usage.input_price_per_1m AS DOUBLE PRECISION),
                         0
                     ) * GREATEST(COALESCE(usage.cache_read_input_tokens, 0), 0)::DOUBLE PRECISION
                         / 1000000.0
@@ -1740,8 +1740,8 @@ WITH aggregated AS (
             COALESCE(
                 SUM(
                     COALESCE(
-                        CAST(usage_settlement_snapshots.output_price_per_1m AS DOUBLE PRECISION),
-                        CAST(usage.output_price_per_1m AS DOUBLE PRECISION),
+                        CAST(usage_settlement_snapshots.input_price_per_1m AS DOUBLE PRECISION),
+                        CAST(usage.input_price_per_1m AS DOUBLE PRECISION),
                         0
                     ) * GREATEST(COALESCE(usage.cache_read_input_tokens, 0), 0)::DOUBLE PRECISION
                         / 1000000.0
@@ -3216,8 +3216,8 @@ WITH aggregated AS (
             COALESCE(
                 SUM(
                     COALESCE(
-                        CAST(usage_settlement_snapshots.output_price_per_1m AS DOUBLE PRECISION),
-                        CAST(usage.output_price_per_1m AS DOUBLE PRECISION),
+                        CAST(usage_settlement_snapshots.input_price_per_1m AS DOUBLE PRECISION),
+                        CAST(usage.input_price_per_1m AS DOUBLE PRECISION),
                         0
                     ) * GREATEST(COALESCE(usage.cache_read_input_tokens, 0), 0)::DOUBLE PRECISION
                         / 1000000.0
@@ -3298,8 +3298,8 @@ WITH aggregated AS (
             COALESCE(
                 SUM(
                     COALESCE(
-                        CAST(usage_settlement_snapshots.output_price_per_1m AS DOUBLE PRECISION),
-                        CAST(usage.output_price_per_1m AS DOUBLE PRECISION),
+                        CAST(usage_settlement_snapshots.input_price_per_1m AS DOUBLE PRECISION),
+                        CAST(usage.input_price_per_1m AS DOUBLE PRECISION),
                         0
                     ) * GREATEST(COALESCE(usage.cache_read_input_tokens, 0), 0)::DOUBLE PRECISION
                         / 1000000.0
@@ -3384,8 +3384,8 @@ WITH aggregated AS (
             COALESCE(
                 SUM(
                     COALESCE(
-                        CAST(usage_settlement_snapshots.output_price_per_1m AS DOUBLE PRECISION),
-                        CAST(usage.output_price_per_1m AS DOUBLE PRECISION),
+                        CAST(usage_settlement_snapshots.input_price_per_1m AS DOUBLE PRECISION),
+                        CAST(usage.input_price_per_1m AS DOUBLE PRECISION),
                         0
                     ) * GREATEST(COALESCE(usage.cache_read_input_tokens, 0), 0)::DOUBLE PRECISION
                         / 1000000.0
@@ -3471,8 +3471,8 @@ WITH aggregated AS (
             COALESCE(
                 SUM(
                     COALESCE(
-                        CAST(usage_settlement_snapshots.output_price_per_1m AS DOUBLE PRECISION),
-                        CAST(usage.output_price_per_1m AS DOUBLE PRECISION),
+                        CAST(usage_settlement_snapshots.input_price_per_1m AS DOUBLE PRECISION),
+                        CAST(usage.input_price_per_1m AS DOUBLE PRECISION),
                         0
                     ) * GREATEST(COALESCE(usage.cache_read_input_tokens, 0), 0)::DOUBLE PRECISION
                         / 1000000.0

@@ -453,6 +453,14 @@ export interface ProviderPerformanceSummary {
   avg_output_tps: number | null
   avg_first_byte_time_ms: number | null
   avg_response_time_ms: number | null
+  p90_response_time_ms?: number | null
+  p99_response_time_ms?: number | null
+  p90_first_byte_time_ms?: number | null
+  p99_first_byte_time_ms?: number | null
+  tps_sample_count?: number
+  response_time_sample_count?: number
+  first_byte_sample_count?: number
+  slow_request_count?: number
 }
 
 export interface ProviderPerformanceItem {
@@ -467,9 +475,13 @@ export interface ProviderPerformanceItem {
   avg_first_byte_time_ms: number | null
   avg_response_time_ms: number | null
   p90_response_time_ms: number | null
+  p99_response_time_ms?: number | null
   p90_first_byte_time_ms: number | null
+  p99_first_byte_time_ms?: number | null
   tps_sample_count: number
+  response_time_sample_count?: number
   first_byte_sample_count: number
+  slow_request_count?: number
 }
 
 export interface ProviderPerformanceTimelineItem {
@@ -482,6 +494,7 @@ export interface ProviderPerformanceTimelineItem {
   avg_first_byte_time_ms: number | null
   avg_response_time_ms: number | null
   success_rate: number
+  slow_request_count?: number
 }
 
 export interface ProviderPerformanceResponse {
@@ -983,6 +996,13 @@ export const adminApi = {
     tz_offset_minutes?: number
     granularity?: 'day' | 'hour'
     limit?: number
+    provider_id?: string
+    model?: string
+    api_format?: string
+    endpoint_kind?: string
+    is_stream?: boolean
+    has_format_conversion?: boolean
+    slow_threshold_ms?: number
   }): Promise<ProviderPerformanceResponse> {
     const cacheKey = buildCacheKey('admin:stats:performance:providers', params)
     return cachedRequest(

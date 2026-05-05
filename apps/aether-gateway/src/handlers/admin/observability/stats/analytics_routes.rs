@@ -1,7 +1,7 @@
 use super::range::{build_comparison_range, parse_bounded_u32};
 use super::resolve_admin_usage_time_range;
 use crate::handlers::admin::request::{AdminAppState, AdminRequestContext};
-use crate::handlers::admin::shared::query_param_value;
+use crate::handlers::admin::shared::{query_param_optional_bool, query_param_value};
 use crate::GatewayError;
 use aether_admin::observability::stats::{
     admin_stats_bad_request_response, admin_stats_comparison_empty_response,
@@ -203,6 +203,14 @@ pub(super) async fn maybe_build_local_admin_stats_analytics_response(
             Ok(value) => value.unwrap_or(8) as usize,
             Err(detail) => return Ok(Some(admin_stats_bad_request_response(detail))),
         };
+        let slow_threshold_ms =
+            match query_param_value(request_context.query_string(), "slow_threshold_ms")
+                .map(|value| parse_bounded_u32("slow_threshold_ms", &value, 1, 600_000))
+                .transpose()
+            {
+                Ok(value) => u64::from(value.unwrap_or(10_000)),
+                Err(detail) => return Ok(Some(admin_stats_bad_request_response(detail))),
+            };
         if !state.has_usage_data_reader() {
             return Ok(Some(admin_stats_provider_performance_empty_response()));
         }
@@ -218,6 +226,16 @@ pub(super) async fn maybe_build_local_admin_stats_analytics_response(
                 granularity,
                 tz_offset_minutes: time_range.tz_offset_minutes,
                 limit,
+                provider_id: query_param_value(request_context.query_string(), "provider_id"),
+                model: query_param_value(request_context.query_string(), "model"),
+                api_format: query_param_value(request_context.query_string(), "api_format"),
+                endpoint_kind: query_param_value(request_context.query_string(), "endpoint_kind"),
+                is_stream: query_param_optional_bool(request_context.query_string(), "is_stream"),
+                has_format_conversion: query_param_optional_bool(
+                    request_context.query_string(),
+                    "has_format_conversion",
+                ),
+                slow_threshold_ms,
             })
             .await?;
         return Ok(Some(build_admin_stats_provider_performance_response(

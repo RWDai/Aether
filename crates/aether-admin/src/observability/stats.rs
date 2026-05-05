@@ -1110,9 +1110,13 @@ pub fn build_admin_stats_provider_performance_response(
                 "avg_first_byte_time_ms": rounded_option(row.avg_first_byte_time_ms, 2),
                 "avg_response_time_ms": rounded_option(row.avg_response_time_ms, 2),
                 "p90_response_time_ms": row.p90_response_time_ms,
+                "p99_response_time_ms": row.p99_response_time_ms,
                 "p90_first_byte_time_ms": row.p90_first_byte_time_ms,
+                "p99_first_byte_time_ms": row.p99_first_byte_time_ms,
                 "tps_sample_count": row.tps_sample_count,
+                "response_time_sample_count": row.response_time_sample_count,
                 "first_byte_sample_count": row.first_byte_sample_count,
+                "slow_request_count": row.slow_request_count,
             })
         })
         .collect::<Vec<_>>();
@@ -1129,6 +1133,7 @@ pub fn build_admin_stats_provider_performance_response(
                 "avg_output_tps": rounded_option(row.avg_output_tps, 2),
                 "avg_first_byte_time_ms": rounded_option(row.avg_first_byte_time_ms, 2),
                 "avg_response_time_ms": rounded_option(row.avg_response_time_ms, 2),
+                "slow_request_count": row.slow_request_count,
                 "success_rate": success_rate(row.request_count, row.success_count),
             })
         })
@@ -1141,6 +1146,14 @@ pub fn build_admin_stats_provider_performance_response(
             "avg_output_tps": rounded_option(summary.avg_output_tps, 2),
             "avg_first_byte_time_ms": rounded_option(summary.avg_first_byte_time_ms, 2),
             "avg_response_time_ms": rounded_option(summary.avg_response_time_ms, 2),
+            "p90_response_time_ms": summary.p90_response_time_ms,
+            "p99_response_time_ms": summary.p99_response_time_ms,
+            "p90_first_byte_time_ms": summary.p90_first_byte_time_ms,
+            "p99_first_byte_time_ms": summary.p99_first_byte_time_ms,
+            "tps_sample_count": summary.tps_sample_count,
+            "response_time_sample_count": summary.response_time_sample_count,
+            "first_byte_sample_count": summary.first_byte_sample_count,
+            "slow_request_count": summary.slow_request_count,
         },
         "providers": providers,
         "timeline": timeline,

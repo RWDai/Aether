@@ -958,6 +958,9 @@ async fn gateway_handles_admin_stats_provider_performance_locally_with_trusted_a
     assert_eq!(payload["summary"]["avg_output_tps"], 18.46);
     assert_eq!(payload["summary"]["avg_first_byte_time_ms"], 55.0);
     assert_eq!(payload["summary"]["avg_response_time_ms"], 590.91);
+    assert_eq!(payload["summary"]["p99_response_time_ms"], 1000);
+    assert_eq!(payload["summary"]["response_time_sample_count"], 11);
+    assert_eq!(payload["summary"]["slow_request_count"], 0);
 
     assert_eq!(payload["providers"].as_array().map(Vec::len), Some(2));
     assert_eq!(payload["providers"][0]["provider_id"], "provider-1");
@@ -971,9 +974,13 @@ async fn gateway_handles_admin_stats_provider_performance_locally_with_trusted_a
     assert_eq!(payload["providers"][0]["avg_first_byte_time_ms"], 55.0);
     assert_eq!(payload["providers"][0]["avg_response_time_ms"], 550.0);
     assert_eq!(payload["providers"][0]["p90_response_time_ms"], 910);
+    assert_eq!(payload["providers"][0]["p99_response_time_ms"], 991);
     assert_eq!(payload["providers"][0]["p90_first_byte_time_ms"], 91);
+    assert_eq!(payload["providers"][0]["p99_first_byte_time_ms"], 99);
     assert_eq!(payload["providers"][0]["tps_sample_count"], 10);
+    assert_eq!(payload["providers"][0]["response_time_sample_count"], 10);
     assert_eq!(payload["providers"][0]["first_byte_sample_count"], 10);
+    assert_eq!(payload["providers"][0]["slow_request_count"], 0);
 
     assert_eq!(payload["providers"][1]["provider_id"], "provider-2");
     assert_eq!(payload["providers"][1]["provider"], "Anthropic");
@@ -992,6 +999,7 @@ async fn gateway_handles_admin_stats_provider_performance_locally_with_trusted_a
     assert_eq!(payload["timeline"][0]["provider_id"], "provider-1");
     assert_eq!(payload["timeline"][0]["avg_output_tps"], 18.18);
     assert_eq!(payload["timeline"][0]["success_rate"], 90.91);
+    assert_eq!(payload["timeline"][0]["slow_request_count"], 0);
     assert_eq!(payload["timeline"][1]["provider_id"], "provider-2");
     assert_eq!(
         payload["timeline"][1]["avg_first_byte_time_ms"],

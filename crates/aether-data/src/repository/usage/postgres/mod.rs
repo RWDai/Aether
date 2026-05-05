@@ -829,6 +829,38 @@ fn decode_usage_provider_performance_summary(
         avg_response_time_ms: row
             .try_get::<Option<f64>, _>("avg_response_time_ms")
             .map_postgres_err()?,
+        p90_response_time_ms: row
+            .try_get::<Option<i64>, _>("p90_response_time_ms")
+            .map_postgres_err()?
+            .map(|value| value.max(0) as u64),
+        p99_response_time_ms: row
+            .try_get::<Option<i64>, _>("p99_response_time_ms")
+            .map_postgres_err()?
+            .map(|value| value.max(0) as u64),
+        p90_first_byte_time_ms: row
+            .try_get::<Option<i64>, _>("p90_first_byte_time_ms")
+            .map_postgres_err()?
+            .map(|value| value.max(0) as u64),
+        p99_first_byte_time_ms: row
+            .try_get::<Option<i64>, _>("p99_first_byte_time_ms")
+            .map_postgres_err()?
+            .map(|value| value.max(0) as u64),
+        tps_sample_count: row
+            .try_get::<i64, _>("tps_sample_count")
+            .map_postgres_err()?
+            .max(0) as u64,
+        response_time_sample_count: row
+            .try_get::<i64, _>("response_time_sample_count")
+            .map_postgres_err()?
+            .max(0) as u64,
+        first_byte_sample_count: row
+            .try_get::<i64, _>("first_byte_sample_count")
+            .map_postgres_err()?
+            .max(0) as u64,
+        slow_request_count: row
+            .try_get::<i64, _>("slow_request_count")
+            .map_postgres_err()?
+            .max(0) as u64,
     })
 }
 
@@ -863,16 +895,32 @@ fn decode_usage_provider_performance_provider_row(
             .try_get::<Option<i64>, _>("p90_response_time_ms")
             .map_postgres_err()?
             .map(|value| value.max(0) as u64),
+        p99_response_time_ms: row
+            .try_get::<Option<i64>, _>("p99_response_time_ms")
+            .map_postgres_err()?
+            .map(|value| value.max(0) as u64),
         p90_first_byte_time_ms: row
             .try_get::<Option<i64>, _>("p90_first_byte_time_ms")
+            .map_postgres_err()?
+            .map(|value| value.max(0) as u64),
+        p99_first_byte_time_ms: row
+            .try_get::<Option<i64>, _>("p99_first_byte_time_ms")
             .map_postgres_err()?
             .map(|value| value.max(0) as u64),
         tps_sample_count: row
             .try_get::<i64, _>("tps_sample_count")
             .map_postgres_err()?
             .max(0) as u64,
+        response_time_sample_count: row
+            .try_get::<i64, _>("response_time_sample_count")
+            .map_postgres_err()?
+            .max(0) as u64,
         first_byte_sample_count: row
             .try_get::<i64, _>("first_byte_sample_count")
+            .map_postgres_err()?
+            .max(0) as u64,
+        slow_request_count: row
+            .try_get::<i64, _>("slow_request_count")
             .map_postgres_err()?
             .max(0) as u64,
     })
@@ -906,7 +954,62 @@ fn decode_usage_provider_performance_timeline_row(
         avg_response_time_ms: row
             .try_get::<Option<f64>, _>("avg_response_time_ms")
             .map_postgres_err()?,
+        slow_request_count: row
+            .try_get::<i64, _>("slow_request_count")
+            .map_postgres_err()?
+            .max(0) as u64,
     })
+}
+
+fn push_usage_provider_performance_text_filter(
+    builder: &mut QueryBuilder<'_, Postgres>,
+    column: &'static str,
+    value: &Option<String>,
+) {
+    let Some(value) = value
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    builder
+        .push(" AND NULLIF(BTRIM(COALESCE(")
+        .push(column)
+        .push(", '')), '') = ")
+        .push_bind(value.to_string());
+}
+
+fn push_usage_provider_performance_filters(
+    builder: &mut QueryBuilder<'_, Postgres>,
+    query: &UsageProviderPerformanceQuery,
+) {
+    push_usage_provider_performance_text_filter(
+        builder,
+        r#""usage".provider_id"#,
+        &query.provider_id,
+    );
+    push_usage_provider_performance_text_filter(builder, r#""usage".model"#, &query.model);
+    push_usage_provider_performance_text_filter(
+        builder,
+        r#""usage".api_format"#,
+        &query.api_format,
+    );
+    push_usage_provider_performance_text_filter(
+        builder,
+        r#""usage".endpoint_kind"#,
+        &query.endpoint_kind,
+    );
+    if let Some(is_stream) = query.is_stream {
+        builder
+            .push(r#" AND "usage".is_stream = "#)
+            .push_bind(is_stream);
+    }
+    if let Some(has_format_conversion) = query.has_format_conversion {
+        builder
+            .push(r#" AND "usage".has_format_conversion = "#)
+            .push_bind(has_format_conversion);
+    }
 }
 
 fn decode_usage_time_series_bucket_row(
@@ -4604,6 +4707,11 @@ WITH filtered_usage AS (
     AND NULLIF(BTRIM(COALESCE("usage".provider_id, '')), '') IS NOT NULL
     AND lower(BTRIM(COALESCE("usage".provider_id, ''))) NOT IN ('unknown', 'pending')
     AND lower(BTRIM(COALESCE("usage".provider_name, ''))) NOT IN ('unknown', 'pending')
+"#,
+        );
+        push_usage_provider_performance_filters(&mut builder, query);
+        builder.push(
+            r#"
 )
 SELECT
   COUNT(*)::BIGINT AS request_count,
@@ -4628,7 +4736,49 @@ SELECT
   AVG(first_byte_time_ms::DOUBLE PRECISION)
     FILTER (WHERE success_flag = 1 AND has_first_byte_time) AS avg_first_byte_time_ms,
   AVG(response_time_ms::DOUBLE PRECISION)
-    FILTER (WHERE success_flag = 1 AND has_response_time) AS avg_response_time_ms
+    FILTER (WHERE success_flag = 1 AND has_response_time) AS avg_response_time_ms,
+  CASE
+    WHEN COUNT(response_time_ms) FILTER (WHERE success_flag = 1 AND has_response_time) >= 10
+    THEN FLOOR(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY response_time_ms)
+      FILTER (WHERE success_flag = 1 AND has_response_time))::BIGINT
+    ELSE NULL
+  END AS p90_response_time_ms,
+  CASE
+    WHEN COUNT(response_time_ms) FILTER (WHERE success_flag = 1 AND has_response_time) >= 10
+    THEN FLOOR(PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY response_time_ms)
+      FILTER (WHERE success_flag = 1 AND has_response_time))::BIGINT
+    ELSE NULL
+  END AS p99_response_time_ms,
+  CASE
+    WHEN COUNT(first_byte_time_ms) FILTER (WHERE success_flag = 1 AND has_first_byte_time) >= 10
+    THEN FLOOR(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY first_byte_time_ms)
+      FILTER (WHERE success_flag = 1 AND has_first_byte_time))::BIGINT
+    ELSE NULL
+  END AS p90_first_byte_time_ms,
+  CASE
+    WHEN COUNT(first_byte_time_ms) FILTER (WHERE success_flag = 1 AND has_first_byte_time) >= 10
+    THEN FLOOR(PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY first_byte_time_ms)
+      FILTER (WHERE success_flag = 1 AND has_first_byte_time))::BIGINT
+    ELSE NULL
+  END AS p99_first_byte_time_ms,
+  COALESCE(SUM(CASE
+    WHEN success_flag = 1 AND response_time_ms > 0 AND output_tokens > 0
+    THEN 1
+    ELSE 0
+  END), 0)::BIGINT AS tps_sample_count,
+  (COUNT(response_time_ms) FILTER (WHERE success_flag = 1 AND has_response_time))::BIGINT
+    AS response_time_sample_count,
+  (COUNT(first_byte_time_ms) FILTER (WHERE success_flag = 1 AND has_first_byte_time))::BIGINT
+    AS first_byte_sample_count,
+  COALESCE(SUM(CASE
+    WHEN has_response_time AND response_time_ms >= "#,
+        );
+        builder.push_bind(query.slow_threshold_ms as i64);
+        builder.push(
+            r#"
+    THEN 1
+    ELSE 0
+  END), 0)::BIGINT AS slow_request_count
 FROM filtered_usage
 "#,
         );
@@ -4677,6 +4827,11 @@ WITH filtered_usage AS (
     AND NULLIF(BTRIM(COALESCE("usage".provider_id, '')), '') IS NOT NULL
     AND lower(BTRIM(COALESCE("usage".provider_id, ''))) NOT IN ('unknown', 'pending')
     AND lower(BTRIM(COALESCE("usage".provider_name, ''))) NOT IN ('unknown', 'pending')
+"#,
+        );
+        push_usage_provider_performance_filters(&mut builder, query);
+        builder.push(
+            r#"
 )
 SELECT
   provider_id,
@@ -4712,18 +4867,41 @@ SELECT
     ELSE NULL
   END AS p90_response_time_ms,
   CASE
+    WHEN COUNT(response_time_ms) FILTER (WHERE success_flag = 1 AND has_response_time) >= 10
+    THEN FLOOR(PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY response_time_ms)
+      FILTER (WHERE success_flag = 1 AND has_response_time))::BIGINT
+    ELSE NULL
+  END AS p99_response_time_ms,
+  CASE
     WHEN COUNT(first_byte_time_ms) FILTER (WHERE success_flag = 1 AND has_first_byte_time) >= 10
     THEN FLOOR(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY first_byte_time_ms)
       FILTER (WHERE success_flag = 1 AND has_first_byte_time))::BIGINT
     ELSE NULL
   END AS p90_first_byte_time_ms,
+  CASE
+    WHEN COUNT(first_byte_time_ms) FILTER (WHERE success_flag = 1 AND has_first_byte_time) >= 10
+    THEN FLOOR(PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY first_byte_time_ms)
+      FILTER (WHERE success_flag = 1 AND has_first_byte_time))::BIGINT
+    ELSE NULL
+  END AS p99_first_byte_time_ms,
   COALESCE(SUM(CASE
     WHEN success_flag = 1 AND response_time_ms > 0 AND output_tokens > 0
     THEN 1
     ELSE 0
   END), 0)::BIGINT AS tps_sample_count,
+  (COUNT(response_time_ms) FILTER (WHERE success_flag = 1 AND has_response_time))::BIGINT
+    AS response_time_sample_count,
   (COUNT(first_byte_time_ms) FILTER (WHERE success_flag = 1 AND has_first_byte_time))::BIGINT
-    AS first_byte_sample_count
+    AS first_byte_sample_count,
+  COALESCE(SUM(CASE
+    WHEN has_response_time AND response_time_ms >= "#,
+        );
+        builder.push_bind(query.slow_threshold_ms as i64);
+        builder.push(
+            r#"
+    THEN 1
+    ELSE 0
+  END), 0)::BIGINT AS slow_request_count
 FROM filtered_usage
 GROUP BY provider_id
 ORDER BY request_count DESC, provider_id ASC
@@ -4792,6 +4970,11 @@ ORDER BY request_count DESC, provider_id ASC
     AND NULLIF(BTRIM(COALESCE("usage".provider_id, '')), '') IS NOT NULL
     AND lower(BTRIM(COALESCE("usage".provider_id, ''))) NOT IN ('unknown', 'pending')
     AND lower(BTRIM(COALESCE("usage".provider_name, ''))) NOT IN ('unknown', 'pending')
+"#,
+        );
+        push_usage_provider_performance_filters(&mut builder, query);
+        builder.push(
+            r#"
     AND "usage".provider_id = ANY("#,
         );
         builder.push_bind(provider_ids.to_vec());
@@ -4825,7 +5008,16 @@ SELECT
   AVG(first_byte_time_ms::DOUBLE PRECISION)
     FILTER (WHERE success_flag = 1 AND has_first_byte_time) AS avg_first_byte_time_ms,
   AVG(response_time_ms::DOUBLE PRECISION)
-    FILTER (WHERE success_flag = 1 AND has_response_time) AS avg_response_time_ms
+    FILTER (WHERE success_flag = 1 AND has_response_time) AS avg_response_time_ms,
+  COALESCE(SUM(CASE
+    WHEN has_response_time AND response_time_ms >= "#,
+        );
+        builder.push_bind(query.slow_threshold_ms as i64);
+        builder.push(
+            r#"
+    THEN 1
+    ELSE 0
+  END), 0)::BIGINT AS slow_request_count
 FROM filtered_usage
 GROUP BY date, provider_id
 ORDER BY date ASC, provider_id ASC

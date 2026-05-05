@@ -21,7 +21,10 @@
           title="刷新实时与历史性能数据"
           @click="handleManualRefresh"
         />
-        <TimeRangePicker v-model="timeRange" />
+        <TimeRangePicker
+          v-model="timeRange"
+          :show-granularity="false"
+        />
       </div>
     </div>
 
@@ -30,10 +33,10 @@
         <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 class="text-sm font-semibold">
-              实时性能面板
+              实时运行状态
             </h2>
             <p class="text-xs text-muted-foreground">
-              聚合系统状态、并发门、Tunnel 与 fallback 指标
+              聚合系统健康、并发保护、代理通道与降级切换
             </p>
           </div>
           <div class="flex flex-wrap items-center gap-2">
@@ -98,91 +101,104 @@
 
           <div class="grid grid-cols-1 gap-4 xl:grid-cols-3">
             <div class="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:col-span-2">
-              <section class="rounded-xl border border-border/70 bg-card/60 p-4">
+              <section class="rounded-xl border border-border/70 bg-card/60 p-4 lg:col-span-2">
                 <div class="flex items-center justify-between gap-3">
                   <h3 class="text-sm font-semibold">
-                    本地并发门
+                    并发保护
                   </h3>
                   <Badge variant="outline">
-                    gateway_requests
+                    全局 {{ distributedGateText }}
                   </Badge>
                 </div>
-                <div class="mt-4 grid grid-cols-2 gap-3 text-sm">
-                  <div>
-                    <div class="text-xs text-muted-foreground">
-                      In Flight
-                    </div>
-                    <div class="mt-1 text-lg font-semibold">
-                      {{ formatMetricNumber(gatewayMetrics?.local.inFlight) }}
-                    </div>
-                  </div>
-                  <div>
-                    <div class="text-xs text-muted-foreground">
-                      Available
-                    </div>
-                    <div class="mt-1 text-lg font-semibold">
-                      {{ formatMetricNumber(gatewayMetrics?.local.availablePermits) }}
-                    </div>
-                  </div>
-                  <div>
-                    <div class="text-xs text-muted-foreground">
-                      High Watermark
-                    </div>
-                    <div class="mt-1 text-lg font-semibold">
-                      {{ formatMetricNumber(gatewayMetrics?.local.highWatermark) }}
-                    </div>
-                  </div>
-                  <div>
-                    <div class="text-xs text-muted-foreground">
-                      Rejected Total
-                    </div>
-                    <div class="mt-1 text-lg font-semibold">
-                      {{ formatMetricNumber(gatewayMetrics?.local.rejectedTotal) }}
-                    </div>
-                  </div>
-                </div>
-              </section>
 
-              <section class="rounded-xl border border-border/70 bg-card/60 p-4">
-                <div class="flex items-center justify-between gap-3">
-                  <h3 class="text-sm font-semibold">
-                    分布式并发门
-                  </h3>
-                  <Badge :variant="distributedGateVariant">
-                    {{ distributedGateText }}
-                  </Badge>
-                </div>
-                <div class="mt-4 grid grid-cols-2 gap-3 text-sm">
-                  <div>
-                    <div class="text-xs text-muted-foreground">
-                      In Flight
+                <div class="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2">
+                  <div class="rounded-lg border border-border/60 bg-background/50 px-3 py-3">
+                    <div class="flex items-center justify-between gap-3">
+                      <div class="text-sm font-medium">
+                        当前节点
+                      </div>
+                      <Badge variant="outline">
+                        本机
+                      </Badge>
                     </div>
-                    <div class="mt-1 text-lg font-semibold">
-                      {{ formatMetricNumber(gatewayMetrics?.distributed.inFlight) }}
+                    <div class="mt-4 grid grid-cols-2 gap-3 text-sm">
+                      <div>
+                        <div class="text-xs text-muted-foreground">
+                          处理中
+                        </div>
+                        <div class="mt-1 text-lg font-semibold">
+                          {{ formatMetricNumber(gatewayMetrics?.local.inFlight) }}
+                        </div>
+                      </div>
+                      <div>
+                        <div class="text-xs text-muted-foreground">
+                          可接入
+                        </div>
+                        <div class="mt-1 text-lg font-semibold">
+                          {{ formatMetricNumber(gatewayMetrics?.local.availablePermits) }}
+                        </div>
+                      </div>
+                      <div>
+                        <div class="text-xs text-muted-foreground">
+                          峰值并发
+                        </div>
+                        <div class="mt-1 text-lg font-semibold">
+                          {{ formatMetricNumber(gatewayMetrics?.local.highWatermark) }}
+                        </div>
+                      </div>
+                      <div>
+                        <div class="text-xs text-muted-foreground">
+                          被限流
+                        </div>
+                        <div class="mt-1 text-lg font-semibold">
+                          {{ formatMetricNumber(gatewayMetrics?.local.rejectedTotal) }}
+                        </div>
+                      </div>
                     </div>
                   </div>
-                  <div>
-                    <div class="text-xs text-muted-foreground">
-                      Available
+
+                  <div class="rounded-lg border border-border/60 bg-background/50 px-3 py-3">
+                    <div class="flex items-center justify-between gap-3">
+                      <div class="text-sm font-medium">
+                        全局保护
+                      </div>
+                      <Badge :variant="distributedGateVariant">
+                        {{ distributedGateText }}
+                      </Badge>
                     </div>
-                    <div class="mt-1 text-lg font-semibold">
-                      {{ formatMetricNumber(gatewayMetrics?.distributed.availablePermits) }}
-                    </div>
-                  </div>
-                  <div>
-                    <div class="text-xs text-muted-foreground">
-                      High Watermark
-                    </div>
-                    <div class="mt-1 text-lg font-semibold">
-                      {{ formatMetricNumber(gatewayMetrics?.distributed.highWatermark) }}
-                    </div>
-                  </div>
-                  <div>
-                    <div class="text-xs text-muted-foreground">
-                      Rejected Total
-                    </div>
-                    <div class="mt-1 text-lg font-semibold">
-                      {{ formatMetricNumber(gatewayMetrics?.distributed.rejectedTotal) }}
+                    <div class="mt-4 grid grid-cols-2 gap-3 text-sm">
+                      <div>
+                        <div class="text-xs text-muted-foreground">
+                          处理中
+                        </div>
+                        <div class="mt-1 text-lg font-semibold">
+                          {{ formatMetricNumber(gatewayMetrics?.distributed.inFlight) }}
+                        </div>
+                      </div>
+                      <div>
+                        <div class="text-xs text-muted-foreground">
+                          可接入
+                        </div>
+                        <div class="mt-1 text-lg font-semibold">
+                          {{ formatMetricNumber(gatewayMetrics?.distributed.availablePermits) }}
+                        </div>
+                      </div>
+                      <div>
+                        <div class="text-xs text-muted-foreground">
+                          峰值并发
+                        </div>
+                        <div class="mt-1 text-lg font-semibold">
+                          {{ formatMetricNumber(gatewayMetrics?.distributed.highWatermark) }}
+                        </div>
+                      </div>
+                      <div>
+                        <div class="text-xs text-muted-foreground">
+                          被限流
+                        </div>
+                        <div class="mt-1 text-lg font-semibold">
+                          {{ formatMetricNumber(gatewayMetrics?.distributed.rejectedTotal) }}
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -190,14 +206,14 @@
                   v-if="gatewayMetrics?.distributed.unavailable"
                   class="mt-3 text-xs text-yellow-700 dark:text-yellow-300"
                 >
-                  Redis 分布式并发快照当前不可用，需要检查 gate 后端连接。
+                  全局并发保护暂不可用，请检查 Redis 连接。
                 </p>
               </section>
 
               <section class="rounded-xl border border-border/70 bg-card/60 p-4">
                 <div class="flex items-center justify-between gap-3">
                   <h3 class="text-sm font-semibold">
-                    Tunnel / 代理
+                    代理通道
                   </h3>
                   <Badge variant="outline">
                     实时连接
@@ -206,7 +222,7 @@
                 <div class="mt-4 grid grid-cols-2 gap-3 text-sm">
                   <div>
                     <div class="text-xs text-muted-foreground">
-                      Nodes
+                      节点数
                     </div>
                     <div class="mt-1 text-lg font-semibold">
                       {{ formatMetricNumber(currentTunnelNodes) }}
@@ -214,15 +230,15 @@
                   </div>
                   <div>
                     <div class="text-xs text-muted-foreground">
-                      Proxy Connections
+                      可用连接
                     </div>
                     <div class="mt-1 text-lg font-semibold">
-                      {{ formatMetricNumber(currentProxyConnections) }}
+                      {{ formatMetricNumber(gatewayMetrics?.tunnel.availableProxyConnections) }}
                     </div>
                   </div>
                   <div>
                     <div class="text-xs text-muted-foreground">
-                      Active Streams
+                      活跃流
                     </div>
                     <div class="mt-1 text-lg font-semibold">
                       {{ formatMetricNumber(currentActiveStreams) }}
@@ -230,10 +246,10 @@
                   </div>
                   <div>
                     <div class="text-xs text-muted-foreground">
-                      Service Up
+                      避让连接
                     </div>
                     <div class="mt-1 text-lg font-semibold">
-                      {{ gatewayMetrics?.serviceUp === 1 ? '在线' : '未知' }}
+                      {{ formatMetricNumber(gatewayMetrics?.tunnel.softAvoidProxyConnections) }}
                     </div>
                   </div>
                 </div>
@@ -242,43 +258,43 @@
               <section class="rounded-xl border border-border/70 bg-card/60 p-4">
                 <div class="flex items-center justify-between gap-3">
                   <h3 class="text-sm font-semibold">
-                    今日请求概况
+                    代理通道压力
                   </h3>
                   <Badge variant="outline">
-                    {{ systemStatus?.internal_gateway.status || 'gateway' }}
+                    排队 {{ tunnelQueueUtilizationText }}
                   </Badge>
                 </div>
                 <div class="mt-4 grid grid-cols-2 gap-3 text-sm">
                   <div>
                     <div class="text-xs text-muted-foreground">
-                      Requests
+                      排队中
                     </div>
                     <div class="mt-1 text-lg font-semibold">
-                      {{ formatMetricNumber(systemStatus?.today_stats.requests) }}
+                      {{ formatMetricNumber(gatewayMetrics?.tunnel.outboundQueueDepthTotal) }}
                     </div>
                   </div>
                   <div>
                     <div class="text-xs text-muted-foreground">
-                      Tokens
+                      峰值排队
                     </div>
                     <div class="mt-1 text-lg font-semibold">
-                      {{ formatTokens(systemStatus?.today_stats.tokens) }}
+                      {{ formatMetricNumber(gatewayMetrics?.tunnel.outboundQueueDepthMax) }}
                     </div>
                   </div>
                   <div>
                     <div class="text-xs text-muted-foreground">
-                      Cost
+                      队列满拒绝
                     </div>
                     <div class="mt-1 text-lg font-semibold">
-                      {{ systemStatus?.today_stats.cost_usd || '-' }}
+                      {{ formatMetricNumber(tunnelQueueRejectedTotal) }}
                     </div>
                   </div>
                   <div>
                     <div class="text-xs text-muted-foreground">
-                      Active Providers / Keys
+                      无可用通道
                     </div>
                     <div class="mt-1 text-lg font-semibold">
-                      {{ providerAndKeySummary }}
+                      {{ formatMetricNumber(tunnelSelectionPressureTotal) }}
                     </div>
                   </div>
                 </div>
@@ -288,7 +304,7 @@
             <section class="rounded-xl border border-border/70 bg-card/60 p-4">
               <div class="flex items-center justify-between gap-3">
                 <h3 class="text-sm font-semibold">
-                  Fallback 统计
+                  降级切换统计
                 </h3>
                 <span class="text-xs text-muted-foreground">
                   总计 {{ formatMetricNumber(gatewayMetrics?.fallbackTotal) }}
@@ -299,7 +315,7 @@
                 v-if="!fallbackRows.length"
                 class="mt-4 rounded-lg border border-dashed border-border/70 px-3 py-4 text-sm text-muted-foreground"
               >
-                当前没有记录到 fallback 计数。
+                当前没有记录到降级切换。
               </div>
 
               <div
@@ -372,7 +388,7 @@
                       HTTP {{ item.context.status_code ?? '-' }}
                     </Badge>
                     <Badge variant="outline">
-                      {{ item.context.provider_name || item.context.provider_id || '未知 Provider' }}
+                      {{ item.context.provider_name || item.context.provider_id || '未知上游' }}
                     </Badge>
                     <Badge variant="outline">
                       {{ item.context.api_format || item.context.model || '未知格式' }}
@@ -495,15 +511,90 @@
       <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h3 class="text-sm font-semibold">
-            Provider 性能
+            上游服务性能
           </h3>
           <p class="text-xs text-muted-foreground">
             {{ providerPerformanceSubtitle }}
           </p>
         </div>
-        <Badge variant="outline">
-          Top {{ providerPerformanceRows.length || 0 }}
-        </Badge>
+        <div class="flex items-center gap-2">
+          <Badge variant="outline">
+            Top {{ providerPerformanceRows.length || 0 }}
+          </Badge>
+          <Button
+            v-if="hasProviderPerformanceFilters"
+            variant="ghost"
+            size="sm"
+            class="h-8 gap-1 px-2 text-xs"
+            title="清除上游服务性能筛选"
+            @click="resetProviderPerformanceFilters"
+          >
+            <FilterX class="h-3.5 w-3.5" />
+            清除
+          </Button>
+        </div>
+      </div>
+      <div class="grid grid-cols-1 gap-2 pt-1 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
+        <Input
+          v-model="providerPerformanceProviderId"
+          size="sm"
+          placeholder="上游 ID"
+        />
+        <Input
+          v-model="providerPerformanceModel"
+          size="sm"
+          placeholder="模型"
+        />
+        <Input
+          v-model="providerPerformanceApiFormat"
+          size="sm"
+          placeholder="API 格式"
+        />
+        <Input
+          v-model="providerPerformanceEndpointKind"
+          size="sm"
+          placeholder="端点类型"
+        />
+        <Select v-model="providerPerformanceIsStream">
+          <SelectTrigger class="h-8 text-xs border-border/60">
+            <SelectValue placeholder="流式" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">
+              全部流式
+            </SelectItem>
+            <SelectItem value="true">
+              仅流式
+            </SelectItem>
+            <SelectItem value="false">
+              非流式
+            </SelectItem>
+          </SelectContent>
+        </Select>
+        <Select v-model="providerPerformanceHasFormatConversion">
+          <SelectTrigger class="h-8 text-xs border-border/60">
+            <SelectValue placeholder="格式转换" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">
+              全部转换
+            </SelectItem>
+            <SelectItem value="true">
+              仅转换
+            </SelectItem>
+            <SelectItem value="false">
+              不转换
+            </SelectItem>
+          </SelectContent>
+        </Select>
+        <Input
+          v-model="providerPerformanceSlowThresholdMs"
+          size="sm"
+          type="number"
+          min="1"
+          max="600000"
+          placeholder="慢请求阈值 ms"
+        />
       </div>
 
       <div
@@ -548,13 +639,16 @@
             <thead class="bg-muted/30 text-xs text-muted-foreground">
               <tr>
                 <th class="px-3 py-2 text-left font-medium">
-                  Provider
+                  上游服务
                 </th>
                 <th class="px-3 py-2 text-right font-medium">
                   请求
                 </th>
                 <th class="px-3 py-2 text-right font-medium">
                   成功率
+                </th>
+                <th class="px-3 py-2 text-right font-medium">
+                  错误率
                 </th>
                 <th class="px-3 py-2 text-right font-medium">
                   输出 TPS
@@ -566,10 +660,16 @@
                   平均响应
                 </th>
                 <th class="px-3 py-2 text-right font-medium">
-                  P90 响应 / 首字
+                  P90/P99 响应
                 </th>
                 <th class="px-3 py-2 text-right font-medium">
-                  样本
+                  P90/P99 首字
+                </th>
+                <th class="px-3 py-2 text-right font-medium">
+                  慢请求
+                </th>
+                <th class="px-3 py-2 text-right font-medium">
+                  样本覆盖
                 </th>
               </tr>
             </thead>
@@ -594,6 +694,9 @@
                   {{ formatProviderPerformanceMetric(provider.success_rate, '%') }}
                 </td>
                 <td class="px-3 py-2 text-right">
+                  {{ formatErrorRate(provider.success_rate) }}
+                </td>
+                <td class="px-3 py-2 text-right">
                   {{ formatProviderPerformanceMetric(provider.avg_output_tps, '/s') }}
                 </td>
                 <td class="px-3 py-2 text-right">
@@ -605,11 +708,18 @@
                 <td class="px-3 py-2 text-right">
                   {{ formatProviderPerformanceMetric(provider.p90_response_time_ms, 'ms', 0) }}
                   /
+                  {{ formatProviderPerformanceMetric(provider.p99_response_time_ms, 'ms', 0) }}
+                </td>
+                <td class="px-3 py-2 text-right">
                   {{ formatProviderPerformanceMetric(provider.p90_first_byte_time_ms, 'ms', 0) }}
+                  /
+                  {{ formatProviderPerformanceMetric(provider.p99_first_byte_time_ms, 'ms', 0) }}
+                </td>
+                <td class="px-3 py-2 text-right">
+                  {{ formatMetricNumber(provider.slow_request_count) }}
                 </td>
                 <td class="px-3 py-2 text-right text-xs text-muted-foreground">
-                  {{ formatMetricNumber(provider.tps_sample_count) }} /
-                  {{ formatMetricNumber(provider.first_byte_sample_count) }}
+                  {{ providerSampleCoverageText(provider) }}
                 </td>
               </tr>
             </tbody>
@@ -620,7 +730,7 @@
           v-else
           class="rounded-lg border border-dashed border-border/70 px-3 py-4 text-sm text-muted-foreground"
         >
-          当前没有 Provider 性能数据。
+          当前没有上游服务性能数据。
         </div>
       </div>
     </Card>
@@ -695,41 +805,6 @@
       </Card>
     </div>
 
-    <Card class="space-y-3 p-4">
-      <h3 class="text-sm font-semibold">
-        提供商健康度
-      </h3>
-      <div
-        v-if="providerLoading"
-        class="p-4"
-      >
-        <LoadingState />
-      </div>
-      <div
-        v-else-if="providerStatus.length"
-        class="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3"
-      >
-        <div
-          v-for="provider in providerStatus"
-          :key="provider.name"
-          class="rounded-lg border p-3"
-        >
-          <div class="flex items-center justify-between">
-            <span class="font-medium">{{ provider.name }}</span>
-            <span class="text-xs text-muted-foreground">{{ provider.requests }} 请求</span>
-          </div>
-          <div class="mt-1 text-xs text-muted-foreground">
-            状态: {{ provider.status }}
-          </div>
-        </div>
-      </div>
-      <div
-        v-else
-        class="rounded-lg border border-dashed border-border/70 px-3 py-4 text-sm text-muted-foreground"
-      >
-        当前没有提供商状态数据。
-      </div>
-    </Card>
   </div>
 </template>
 
@@ -740,6 +815,7 @@ import {
   AlertTriangle,
   Cable,
   CheckCircle2,
+  FilterX,
   GitBranch,
   Gauge,
   ShieldCheck,
@@ -751,9 +827,9 @@ import {
   adminApi,
   type ErrorDistributionResponse,
   type PercentileItem,
+  type ProviderPerformanceItem,
   type ProviderPerformanceResponse,
 } from '@/api/admin'
-import { dashboardApi, type ProviderStatus } from '@/api/dashboard'
 import {
   monitoringApi,
   type AdminMonitoringCircuitHistoryItem,
@@ -765,12 +841,19 @@ import LineChart from '@/components/charts/LineChart.vue'
 import { LoadingState, TimeRangePicker } from '@/components/common'
 import { ErrorDistributionChart, PercentileChart } from '@/components/stats'
 import Badge from '@/components/ui/badge.vue'
+import Button from '@/components/ui/button.vue'
 import Card from '@/components/ui/card.vue'
+import Input from '@/components/ui/input.vue'
 import RefreshButton from '@/components/ui/refresh-button.vue'
+import Select from '@/components/ui/select.vue'
+import SelectContent from '@/components/ui/select-content.vue'
+import SelectItem from '@/components/ui/select-item.vue'
+import SelectTrigger from '@/components/ui/select-trigger.vue'
+import SelectValue from '@/components/ui/select-value.vue'
 import { useToast } from '@/composables/useToast'
 import { getDateRangeFromPeriod } from '@/features/usage/composables'
 import type { DateRangeParams } from '@/features/usage/types'
-import { formatDate, formatNumber, formatTokens } from '@/utils/format'
+import { formatDate, formatNumber } from '@/utils/format'
 import { log } from '@/utils/logger'
 import {
   buildProviderPerformanceChartData,
@@ -778,6 +861,10 @@ import {
 } from './performanceAnalysisHelpers'
 
 const LIVE_REFRESH_INTERVAL_MS = 10_000
+const DEFAULT_PROVIDER_PERFORMANCE_SLOW_THRESHOLD_MS = 10_000
+
+type ProviderPerformanceBooleanFilter = 'all' | 'true' | 'false'
+type ProviderPerformanceParams = NonNullable<Parameters<typeof adminApi.getProviderPerformance>[0]>
 
 const timeRange = ref<DateRangeParams>(getDateRangeFromPeriod('last30days'))
 const { error: showError } = useToast()
@@ -789,10 +876,15 @@ const errorDistribution = ref<ErrorDistributionResponse['distribution']>([])
 const errorTrend = ref<ErrorDistributionResponse['trend']>([])
 const errorLoading = ref(false)
 
-const providerStatus = ref<ProviderStatus[]>([])
-const providerLoading = ref(false)
 const providerPerformance = ref<ProviderPerformanceResponse | null>(null)
 const providerPerformanceLoading = ref(false)
+const providerPerformanceProviderId = ref('')
+const providerPerformanceModel = ref('')
+const providerPerformanceApiFormat = ref('')
+const providerPerformanceEndpointKind = ref('')
+const providerPerformanceIsStream = ref<ProviderPerformanceBooleanFilter>('all')
+const providerPerformanceHasFormatConversion = ref<ProviderPerformanceBooleanFilter>('all')
+const providerPerformanceSlowThresholdMs = ref(String(DEFAULT_PROVIDER_PERFORMANCE_SLOW_THRESHOLD_MS))
 
 const systemStatus = ref<AdminMonitoringSystemStatus | null>(null)
 const resilienceStatus = ref<AdminMonitoringResilienceStatus | null>(null)
@@ -806,12 +898,12 @@ const liveLastUpdatedAt = ref<string | null>(null)
 
 let percentilesRequestId = 0
 let errorsRequestId = 0
-let providersRequestId = 0
 let providerPerformanceRequestId = 0
 let liveRequestId = 0
 let loadAllPromise: Promise<void> | null = null
 let hasPendingLoadAll = false
 let loadAllDebounceTimer: ReturnType<typeof setTimeout> | null = null
+let providerPerformanceDebounceTimer: ReturnType<typeof setTimeout> | null = null
 let liveRefreshTimer: ReturnType<typeof setInterval> | null = null
 
 function buildTimeRangeParams() {
@@ -824,6 +916,117 @@ function buildTimeRangeParams() {
   }
 }
 
+function normalizeProviderPerformanceFilter(value: string): string | undefined {
+  const trimmed = value.trim()
+  return trimmed ? trimmed : undefined
+}
+
+function parseProviderPerformanceBooleanFilter(
+  value: ProviderPerformanceBooleanFilter
+): boolean | undefined {
+  if (value === 'true') return true
+  if (value === 'false') return false
+  return undefined
+}
+
+function clampProviderPerformanceSlowThreshold(value: string): number {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_PROVIDER_PERFORMANCE_SLOW_THRESHOLD_MS
+  }
+  return Math.min(600_000, Math.max(1, Math.round(parsed)))
+}
+
+function resolveProviderPerformanceGranularity(): 'day' | 'hour' {
+  if (timeRange.value.preset === 'today' || timeRange.value.preset === 'yesterday') {
+    return 'hour'
+  }
+
+  if (!timeRange.value.preset && timeRange.value.start_date && timeRange.value.end_date) {
+    return timeRange.value.start_date === timeRange.value.end_date ? 'hour' : 'day'
+  }
+
+  return 'day'
+}
+
+const providerPerformanceSlowThresholdValue = computed(() => (
+  clampProviderPerformanceSlowThreshold(providerPerformanceSlowThresholdMs.value)
+))
+
+const providerPerformanceSlowThresholdLabel = computed(() => {
+  const value = providerPerformanceSlowThresholdValue.value
+  if (value >= 1000) {
+    const seconds = value / 1000
+    return `${Number.isInteger(seconds) ? seconds.toFixed(0) : seconds.toFixed(1)}s`
+  }
+  return `${value}ms`
+})
+
+const providerPerformanceActiveFilterCount = computed(() => {
+  const textFilterCount = [
+    providerPerformanceProviderId.value,
+    providerPerformanceModel.value,
+    providerPerformanceApiFormat.value,
+    providerPerformanceEndpointKind.value,
+  ].filter(value => normalizeProviderPerformanceFilter(value)).length
+
+  const booleanFilterCount = [
+    providerPerformanceIsStream.value,
+    providerPerformanceHasFormatConversion.value,
+  ].filter(value => value !== 'all').length
+
+  const thresholdFilterCount = providerPerformanceSlowThresholdValue.value === DEFAULT_PROVIDER_PERFORMANCE_SLOW_THRESHOLD_MS
+    ? 0
+    : 1
+
+  return textFilterCount + booleanFilterCount + thresholdFilterCount
+})
+
+const hasProviderPerformanceFilters = computed(() => providerPerformanceActiveFilterCount.value > 0)
+
+function buildProviderPerformanceParams(): ProviderPerformanceParams {
+  const params: ProviderPerformanceParams = {
+    ...buildTimeRangeParams(),
+    granularity: resolveProviderPerformanceGranularity(),
+    limit: 8,
+    slow_threshold_ms: providerPerformanceSlowThresholdValue.value,
+  }
+
+  const providerId = normalizeProviderPerformanceFilter(providerPerformanceProviderId.value)
+  if (providerId) params.provider_id = providerId
+
+  const model = normalizeProviderPerformanceFilter(providerPerformanceModel.value)
+  if (model) params.model = model
+
+  const apiFormat = normalizeProviderPerformanceFilter(providerPerformanceApiFormat.value)
+  if (apiFormat) params.api_format = apiFormat
+
+  const endpointKind = normalizeProviderPerformanceFilter(providerPerformanceEndpointKind.value)
+  if (endpointKind) params.endpoint_kind = endpointKind
+
+  const isStream = parseProviderPerformanceBooleanFilter(providerPerformanceIsStream.value)
+  if (isStream !== undefined) params.is_stream = isStream
+
+  const hasFormatConversion = parseProviderPerformanceBooleanFilter(
+    providerPerformanceHasFormatConversion.value
+  )
+  if (hasFormatConversion !== undefined) {
+    params.has_format_conversion = hasFormatConversion
+  }
+
+  return params
+}
+
+function resetProviderPerformanceFilters() {
+  providerPerformanceProviderId.value = ''
+  providerPerformanceModel.value = ''
+  providerPerformanceApiFormat.value = ''
+  providerPerformanceEndpointKind.value = ''
+  providerPerformanceIsStream.value = 'all'
+  providerPerformanceHasFormatConversion.value = 'all'
+  providerPerformanceSlowThresholdMs.value = String(DEFAULT_PROVIDER_PERFORMANCE_SLOW_THRESHOLD_MS)
+}
+
 function formatMetricNumber(value: number | null | undefined): string {
   if (value == null || Number.isNaN(value)) {
     return '-'
@@ -834,6 +1037,24 @@ function formatMetricNumber(value: number | null | undefined): string {
   }
 
   return formatNumber(value)
+}
+
+function formatErrorRate(successRate: number | null | undefined): string {
+  if (successRate == null || Number.isNaN(successRate)) {
+    return '-'
+  }
+  return `${Math.max(0, 100 - successRate).toFixed(2)}%`
+}
+
+function providerSampleCoverageText(provider: ProviderPerformanceItem): string {
+  if (!provider.request_count) {
+    return '-'
+  }
+  const responseSamples = provider.response_time_sample_count ?? 0
+  const firstByteSamples = provider.first_byte_sample_count ?? 0
+  const responseCoverage = Math.round(responseSamples / provider.request_count * 100)
+  const firstByteCoverage = Math.round(firstByteSamples / provider.request_count * 100)
+  return `${responseCoverage}% / ${firstByteCoverage}%`
 }
 
 async function loadPercentiles() {
@@ -874,39 +1095,17 @@ async function loadErrors() {
   }
 }
 
-async function loadProviders() {
-  const requestId = ++providersRequestId
-  providerLoading.value = true
-  try {
-    const data = await dashboardApi.getProviderStatus()
-    if (requestId !== providersRequestId) return
-    providerStatus.value = data
-  } catch (error) {
-    if (requestId !== providersRequestId) return
-    providerStatus.value = []
-    log.error('加载提供商状态失败', error)
-  } finally {
-    if (requestId === providersRequestId) {
-      providerLoading.value = false
-    }
-  }
-}
-
 async function loadProviderPerformance() {
   const requestId = ++providerPerformanceRequestId
   providerPerformanceLoading.value = true
   try {
-    const data = await adminApi.getProviderPerformance({
-      ...buildTimeRangeParams(),
-      granularity: 'day',
-      limit: 8,
-    })
+    const data = await adminApi.getProviderPerformance(buildProviderPerformanceParams())
     if (requestId !== providerPerformanceRequestId) return
     providerPerformance.value = data
   } catch (error) {
     if (requestId !== providerPerformanceRequestId) return
     providerPerformance.value = null
-    log.error('加载 Provider 性能统计失败', error)
+    log.error('加载上游服务性能统计失败', error)
   } finally {
     if (requestId === providerPerformanceRequestId) {
       providerPerformanceLoading.value = false
@@ -1034,7 +1233,7 @@ const healthStatusText = computed(() => {
 })
 
 const metricsAvailabilityText = computed(() => (
-  gatewayMetrics.value ? 'Prometheus 在线' : 'Prometheus 暂不可达'
+  gatewayMetrics.value ? '网关指标在线' : '网关指标暂不可达'
 ))
 
 const distributedGateVariant = computed<'warning' | 'outline'>(() => (
@@ -1061,11 +1260,26 @@ const currentTunnelNodes = computed(() => (
   gatewayMetrics.value?.tunnel.nodes ?? systemStatus.value?.tunnel.nodes ?? null
 ))
 
-const providerAndKeySummary = computed(() => {
-  if (!systemStatus.value) {
+const tunnelQueueRejectedTotal = computed(() => {
+  const full = gatewayMetrics.value?.tunnel.outboundQueueRejectedFullTotal ?? 0
+  const closed = gatewayMetrics.value?.tunnel.outboundQueueRejectedClosedTotal ?? 0
+  return full + closed
+})
+
+const tunnelSelectionPressureTotal = computed(() => {
+  const congested = gatewayMetrics.value?.tunnel.proxyConnectionCongestedTotal ?? 0
+  const retry = gatewayMetrics.value?.tunnel.selectionRetryTotal ?? 0
+  const unavailable = gatewayMetrics.value?.tunnel.selectionUnavailableTotal ?? 0
+  return congested + retry + unavailable
+})
+
+const tunnelQueueUtilizationText = computed(() => {
+  const depth = gatewayMetrics.value?.tunnel.outboundQueueDepthTotal
+  const capacity = gatewayMetrics.value?.tunnel.outboundQueueCapacityTotal
+  if (depth == null || capacity == null || capacity <= 0) {
     return '-'
   }
-  return `${systemStatus.value.providers.active}/${systemStatus.value.providers.total} · ${systemStatus.value.api_keys.active}/${systemStatus.value.api_keys.total}`
+  return `${Math.round(depth / capacity * 100)}%`
 })
 
 const fallbackRows = computed(() => {
@@ -1085,39 +1299,69 @@ const providerPerformanceRows = computed(() => providerPerformance.value?.provid
 
 const providerPerformanceSubtitle = computed(() => {
   const requests = providerPerformance.value?.summary.request_count ?? 0
-  return `完成窗口内 ${formatMetricNumber(requests)} 个 Provider 请求样本`
+  const filters = providerPerformanceActiveFilterCount.value
+  const filterText = filters > 0 ? ` · ${filters} 个筛选条件` : ''
+  return `完成窗口内 ${formatMetricNumber(requests)} 个上游请求样本${filterText}`
 })
 
 const providerPerformanceSummaryCards = computed(() => {
   const summary = providerPerformance.value?.summary
   return [
     {
+      title: '请求样本',
+      value: formatMetricNumber(summary?.request_count),
+      hint: `${formatMetricNumber(providerPerformanceRows.value.length)} 个上游服务`,
+      icon: Activity,
+      iconClass: 'text-blue-500',
+    },
+    {
+      title: '成功率',
+      value: formatProviderPerformanceMetric(summary?.success_rate, '%'),
+      hint: `错误率 ${formatErrorRate(summary?.success_rate)}`,
+      icon: CheckCircle2,
+      iconClass: 'text-emerald-500',
+    },
+    {
+      title: 'P99 响应',
+      value: formatProviderPerformanceMetric(summary?.p99_response_time_ms, 'ms', 0),
+      hint: `P90 ${formatProviderPerformanceMetric(summary?.p90_response_time_ms, 'ms', 0)}`,
+      icon: Gauge,
+      iconClass: 'text-violet-500',
+    },
+    {
+      title: 'P99 首字',
+      value: formatProviderPerformanceMetric(summary?.p99_first_byte_time_ms, 'ms', 0),
+      hint: `P90 ${formatProviderPerformanceMetric(summary?.p90_first_byte_time_ms, 'ms', 0)}`,
+      icon: Timer,
+      iconClass: 'text-sky-500',
+    },
+    {
       title: '输出 TPS',
       value: formatProviderPerformanceMetric(summary?.avg_output_tps, '/s'),
-      hint: `请求 ${formatMetricNumber(summary?.request_count)}`,
+      hint: `TPS 样本 ${formatMetricNumber(summary?.tps_sample_count)}`,
       icon: Zap,
       iconClass: 'text-amber-500',
     },
     {
       title: '平均首字',
       value: formatProviderPerformanceMetric(summary?.avg_first_byte_time_ms, 'ms'),
-      hint: '成功请求首字样本',
+      hint: `首字样本 ${formatMetricNumber(summary?.first_byte_sample_count)}`,
       icon: Timer,
       iconClass: 'text-sky-500',
     },
     {
       title: '平均响应',
       value: formatProviderPerformanceMetric(summary?.avg_response_time_ms, 'ms'),
-      hint: '成功请求响应耗时',
+      hint: `响应样本 ${formatMetricNumber(summary?.response_time_sample_count)}`,
       icon: Gauge,
       iconClass: 'text-violet-500',
     },
     {
-      title: '成功率',
-      value: formatProviderPerformanceMetric(summary?.success_rate, '%'),
-      hint: `${formatMetricNumber(providerPerformanceRows.value.length)} 个 Provider`,
-      icon: CheckCircle2,
-      iconClass: 'text-emerald-500',
+      title: '慢请求',
+      value: formatMetricNumber(summary?.slow_request_count),
+      hint: `响应耗时 >= ${providerPerformanceSlowThresholdLabel.value}`,
+      icon: AlertTriangle,
+      iconClass: 'text-yellow-500',
     },
   ]
 })
@@ -1162,7 +1406,7 @@ const liveSummaryCards = computed(() => [
   {
     title: '系统健康',
     value: resilienceStatus.value ? `${resilienceStatus.value.health_score}/100` : '-',
-    hint: `${healthStatusText.value} · 开路 ${formatMetricNumber(resilienceStatus.value?.error_statistics.open_circuit_breakers)}`,
+    hint: `${healthStatusText.value} · 熔断打开 ${formatMetricNumber(resilienceStatus.value?.error_statistics.open_circuit_breakers)}`,
     icon: ShieldCheck,
     iconClass: 'text-emerald-500',
   },
@@ -1174,34 +1418,34 @@ const liveSummaryCards = computed(() => [
     iconClass: 'text-yellow-500',
   },
   {
-    title: '当前活跃流',
+    title: '代理活跃流',
     value: formatMetricNumber(currentActiveStreams.value),
     hint: `代理连接 ${formatMetricNumber(currentProxyConnections.value)}`,
     icon: Cable,
     iconClass: 'text-sky-500',
   },
   {
-    title: '本地 In Flight',
+    title: '当前节点处理中',
     value: formatMetricNumber(gatewayMetrics.value?.local.inFlight),
-    hint: `剩余 permit ${formatMetricNumber(gatewayMetrics.value?.local.availablePermits)}`,
+    hint: `可接入 ${formatMetricNumber(gatewayMetrics.value?.local.availablePermits)}`,
     icon: Activity,
     iconClass: 'text-blue-500',
   },
   {
-    title: '分布式 In Flight',
+    title: '全局处理中',
     value: gatewayMetrics.value?.distributed.unavailable
       ? '不可用'
       : formatMetricNumber(gatewayMetrics.value?.distributed.inFlight),
     hint: gatewayMetrics.value?.distributed.unavailable
-      ? '检查 Redis gate 状态'
-      : `剩余 permit ${formatMetricNumber(gatewayMetrics.value?.distributed.availablePermits)}`,
+      ? '检查 Redis 连接'
+      : `可接入 ${formatMetricNumber(gatewayMetrics.value?.distributed.availablePermits)}`,
     icon: Workflow,
     iconClass: 'text-violet-500',
   },
   {
-    title: 'Fallback 累计',
+    title: '降级切换',
     value: formatMetricNumber(gatewayMetrics.value?.fallbackTotal),
-    hint: `今日请求 ${formatMetricNumber(systemStatus.value?.today_stats.requests)}`,
+    hint: '当前进程累计',
     icon: GitBranch,
     iconClass: 'text-rose-500',
   },
@@ -1212,7 +1456,6 @@ const isRefreshing = computed(() => (
   liveRefreshing.value ||
   percentileLoading.value ||
   errorLoading.value ||
-  providerLoading.value ||
   providerPerformanceLoading.value
 ))
 
@@ -1225,7 +1468,6 @@ async function loadAll() {
   loadAllPromise = Promise.all([
     loadPercentiles(),
     loadErrors(),
-    loadProviders(),
     loadProviderPerformance(),
   ])
     .then(() => undefined)
@@ -1255,7 +1497,30 @@ function scheduleLoadAll() {
   }, 120)
 }
 
+function scheduleProviderPerformanceLoad() {
+  if (providerPerformanceDebounceTimer) {
+    clearTimeout(providerPerformanceDebounceTimer)
+  }
+
+  providerPerformanceDebounceTimer = setTimeout(() => {
+    providerPerformanceDebounceTimer = null
+    void loadProviderPerformance()
+  }, 180)
+}
+
 watch(timeRange, scheduleLoadAll, { deep: true })
+watch(
+  [
+    providerPerformanceProviderId,
+    providerPerformanceModel,
+    providerPerformanceApiFormat,
+    providerPerformanceEndpointKind,
+    providerPerformanceIsStream,
+    providerPerformanceHasFormatConversion,
+    providerPerformanceSlowThresholdMs,
+  ],
+  scheduleProviderPerformanceLoad
+)
 
 onMounted(() => {
   void loadLiveData()
@@ -1271,6 +1536,11 @@ onUnmounted(() => {
     loadAllDebounceTimer = null
   }
 
+  if (providerPerformanceDebounceTimer) {
+    clearTimeout(providerPerformanceDebounceTimer)
+    providerPerformanceDebounceTimer = null
+  }
+
   if (liveRefreshTimer) {
     clearInterval(liveRefreshTimer)
     liveRefreshTimer = null
@@ -1280,7 +1550,6 @@ onUnmounted(() => {
   loadAllPromise = null
   percentilesRequestId += 1
   errorsRequestId += 1
-  providersRequestId += 1
   providerPerformanceRequestId += 1
   liveRequestId += 1
 })

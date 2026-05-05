@@ -618,6 +618,36 @@ fn usage_matches_provider_performance_query(
     {
         return None;
     }
+    if let Some(provider_id) = query.provider_id.as_deref() {
+        if item.provider_id.as_deref() != Some(provider_id) {
+            return None;
+        }
+    }
+    if let Some(model) = query.model.as_deref() {
+        if item.model != model {
+            return None;
+        }
+    }
+    if let Some(api_format) = query.api_format.as_deref() {
+        if item.api_format.as_deref() != Some(api_format) {
+            return None;
+        }
+    }
+    if let Some(endpoint_kind) = query.endpoint_kind.as_deref() {
+        if item.endpoint_kind.as_deref() != Some(endpoint_kind) {
+            return None;
+        }
+    }
+    if let Some(is_stream) = query.is_stream {
+        if item.is_stream != is_stream {
+            return None;
+        }
+    }
+    if let Some(has_format_conversion) = query.has_format_conversion {
+        if item.has_format_conversion != has_format_conversion {
+            return None;
+        }
+    }
     usage_provider_performance_identity(item)
 }
 
@@ -1703,12 +1733,19 @@ impl UsageReadRepository for InMemoryUsageReadRepository {
             response_time_sample_count: u64,
             response_times: Vec<u64>,
             first_byte_times: Vec<u64>,
+            slow_request_count: u64,
         }
 
         impl ProviderPerformanceBucket {
-            fn add(&mut self, item: &StoredRequestUsageAudit) {
+            fn add(&mut self, item: &StoredRequestUsageAudit, slow_threshold_ms: u64) {
                 self.request_count = self.request_count.saturating_add(1);
                 self.output_tokens = self.output_tokens.saturating_add(item.output_tokens);
+                if item
+                    .response_time_ms
+                    .is_some_and(|value| value >= slow_threshold_ms)
+                {
+                    self.slow_request_count = self.slow_request_count.saturating_add(1);
+                }
                 if !usage_is_success(item) {
                     return;
                 }
@@ -1771,14 +1808,16 @@ impl UsageReadRepository for InMemoryUsageReadRepository {
             else {
                 continue;
             };
-            summary_bucket.add(item);
+            summary_bucket.add(item, query.slow_threshold_ms);
             let bucket = grouped.entry(provider_id).or_default();
             if bucket.provider.is_empty() {
                 bucket.provider = provider;
             }
-            bucket.add(item);
+            bucket.add(item, query.slow_threshold_ms);
         }
 
+        let mut summary_response_times = summary_bucket.response_times.clone();
+        let mut summary_first_byte_times = summary_bucket.first_byte_times.clone();
         let summary = StoredUsageProviderPerformanceSummary {
             request_count: summary_bucket.request_count,
             success_count: summary_bucket.success_count,
@@ -1794,14 +1833,25 @@ impl UsageReadRepository for InMemoryUsageReadRepository {
                 summary_bucket.response_time_ms_sum,
                 summary_bucket.response_time_sample_count,
             ),
+            p90_response_time_ms: usage_percentile_cont(&mut summary_response_times, 0.9),
+            p99_response_time_ms: usage_percentile_cont(&mut summary_response_times, 0.99),
+            p90_first_byte_time_ms: usage_percentile_cont(&mut summary_first_byte_times, 0.9),
+            p99_first_byte_time_ms: usage_percentile_cont(&mut summary_first_byte_times, 0.99),
+            tps_sample_count: summary_bucket.tps_sample_count,
+            response_time_sample_count: summary_bucket.response_time_sample_count,
+            first_byte_sample_count: summary_bucket.first_byte_sample_count,
+            slow_request_count: summary_bucket.slow_request_count,
         };
 
         let mut providers = grouped
             .into_iter()
             .map(|(provider_id, mut bucket)| {
                 let p90_response_time_ms = usage_percentile_cont(&mut bucket.response_times, 0.9);
+                let p99_response_time_ms = usage_percentile_cont(&mut bucket.response_times, 0.99);
                 let p90_first_byte_time_ms =
                     usage_percentile_cont(&mut bucket.first_byte_times, 0.9);
+                let p99_first_byte_time_ms =
+                    usage_percentile_cont(&mut bucket.first_byte_times, 0.99);
                 StoredUsageProviderPerformanceProviderRow {
                     provider_id,
                     provider: bucket.provider,
@@ -1821,9 +1871,13 @@ impl UsageReadRepository for InMemoryUsageReadRepository {
                         bucket.response_time_sample_count,
                     ),
                     p90_response_time_ms,
+                    p99_response_time_ms,
                     p90_first_byte_time_ms,
+                    p99_first_byte_time_ms,
                     tps_sample_count: bucket.tps_sample_count,
+                    response_time_sample_count: bucket.response_time_sample_count,
                     first_byte_sample_count: bucket.first_byte_sample_count,
+                    slow_request_count: bucket.slow_request_count,
                 }
             })
             .collect::<Vec<_>>();
@@ -1860,7 +1914,7 @@ impl UsageReadRepository for InMemoryUsageReadRepository {
             if bucket.provider.is_empty() {
                 bucket.provider = provider;
             }
-            bucket.add(item);
+            bucket.add(item, query.slow_threshold_ms);
         }
 
         let timeline = timeline_grouped
@@ -1885,6 +1939,7 @@ impl UsageReadRepository for InMemoryUsageReadRepository {
                         bucket.response_time_ms_sum,
                         bucket.response_time_sample_count,
                     ),
+                    slow_request_count: bucket.slow_request_count,
                 },
             )
             .collect();
@@ -4846,6 +4901,13 @@ mod tests {
                 granularity: UsageTimeSeriesGranularity::Hour,
                 tz_offset_minutes: 0,
                 limit: 1,
+                provider_id: None,
+                model: None,
+                api_format: None,
+                endpoint_kind: None,
+                is_stream: None,
+                has_format_conversion: None,
+                slow_threshold_ms: 10_000,
             })
             .await
             .expect("provider performance should summarize");

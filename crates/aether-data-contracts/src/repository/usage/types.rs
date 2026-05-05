@@ -957,6 +957,13 @@ pub struct UsageProviderPerformanceQuery {
     pub granularity: UsageTimeSeriesGranularity,
     pub tz_offset_minutes: i32,
     pub limit: usize,
+    pub provider_id: Option<String>,
+    pub model: Option<String>,
+    pub api_format: Option<String>,
+    pub endpoint_kind: Option<String>,
+    pub is_stream: Option<bool>,
+    pub has_format_conversion: Option<bool>,
+    pub slow_threshold_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
@@ -966,6 +973,14 @@ pub struct StoredUsageProviderPerformanceSummary {
     pub avg_output_tps: Option<f64>,
     pub avg_first_byte_time_ms: Option<f64>,
     pub avg_response_time_ms: Option<f64>,
+    pub p90_response_time_ms: Option<u64>,
+    pub p99_response_time_ms: Option<u64>,
+    pub p90_first_byte_time_ms: Option<u64>,
+    pub p99_first_byte_time_ms: Option<u64>,
+    pub tps_sample_count: u64,
+    pub response_time_sample_count: u64,
+    pub first_byte_sample_count: u64,
+    pub slow_request_count: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
@@ -979,9 +994,13 @@ pub struct StoredUsageProviderPerformanceProviderRow {
     pub avg_first_byte_time_ms: Option<f64>,
     pub avg_response_time_ms: Option<f64>,
     pub p90_response_time_ms: Option<u64>,
+    pub p99_response_time_ms: Option<u64>,
     pub p90_first_byte_time_ms: Option<u64>,
+    pub p99_first_byte_time_ms: Option<u64>,
     pub tps_sample_count: u64,
+    pub response_time_sample_count: u64,
     pub first_byte_sample_count: u64,
+    pub slow_request_count: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
@@ -995,6 +1014,7 @@ pub struct StoredUsageProviderPerformanceTimelineRow {
     pub avg_output_tps: Option<f64>,
     pub avg_first_byte_time_ms: Option<f64>,
     pub avg_response_time_ms: Option<f64>,
+    pub slow_request_count: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]

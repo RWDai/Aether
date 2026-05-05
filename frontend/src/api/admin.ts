@@ -447,6 +447,49 @@ export interface PercentileItem {
   p99_first_byte_time_ms?: number | null
 }
 
+export interface ProviderPerformanceSummary {
+  request_count: number
+  success_rate: number
+  avg_output_tps: number | null
+  avg_first_byte_time_ms: number | null
+  avg_response_time_ms: number | null
+}
+
+export interface ProviderPerformanceItem {
+  provider_id: string
+  provider: string
+  request_count: number
+  success_count: number
+  error_count: number
+  success_rate: number
+  output_tokens: number
+  avg_output_tps: number | null
+  avg_first_byte_time_ms: number | null
+  avg_response_time_ms: number | null
+  p90_response_time_ms: number | null
+  p90_first_byte_time_ms: number | null
+  tps_sample_count: number
+  first_byte_sample_count: number
+}
+
+export interface ProviderPerformanceTimelineItem {
+  date: string
+  provider_id: string
+  provider: string
+  request_count: number
+  output_tokens: number
+  avg_output_tps: number | null
+  avg_first_byte_time_ms: number | null
+  avg_response_time_ms: number | null
+  success_rate: number
+}
+
+export interface ProviderPerformanceResponse {
+  summary: ProviderPerformanceSummary
+  providers: ProviderPerformanceItem[]
+  timeline: ProviderPerformanceTimelineItem[]
+}
+
 export interface ErrorDistributionItem {
   category: string
   count: number
@@ -924,6 +967,28 @@ export const adminApi = {
       cacheKey,
       async () => {
         const response = await apiClient.get<PercentileItem[]>('/api/admin/stats/performance/percentiles', {
+          params
+        })
+        return response.data
+      },
+      20 * 1000
+    )
+  },
+
+  async getProviderPerformance(params?: {
+    start_date?: string
+    end_date?: string
+    preset?: string
+    timezone?: string
+    tz_offset_minutes?: number
+    granularity?: 'day' | 'hour'
+    limit?: number
+  }): Promise<ProviderPerformanceResponse> {
+    const cacheKey = buildCacheKey('admin:stats:performance:providers', params)
+    return cachedRequest(
+      cacheKey,
+      async () => {
+        const response = await apiClient.get<ProviderPerformanceResponse>('/api/admin/stats/performance/providers', {
           params
         })
         return response.data

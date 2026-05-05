@@ -6,95 +6,174 @@ use crate::headers::header_value_str;
 pub(crate) const AETHER_SESSION_ID_HEADER: &str = "x-aether-session-id";
 pub(crate) const AETHER_AGENT_ID_HEADER: &str = "x-aether-agent-id";
 
-struct ClientSessionAffinityRequest<'a> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClientSessionSignalSource {
+    ExplicitAetherHeader,
+    Header,
+    Body,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ClientSessionScope {
+    pub(crate) client_family: String,
+    pub(crate) session_id: String,
+    pub(crate) agent_id: Option<String>,
+    pub(crate) account_hint: Option<String>,
+    pub(crate) source: ClientSessionSignalSource,
+}
+
+impl ClientSessionScope {
+    fn new(
+        client_family: impl Into<String>,
+        session_id: impl Into<String>,
+        agent_id: Option<String>,
+        account_hint: Option<String>,
+        source: ClientSessionSignalSource,
+    ) -> Self {
+        Self {
+            client_family: client_family.into(),
+            session_id: session_id.into(),
+            agent_id,
+            account_hint,
+            source,
+        }
+    }
+
+    fn scheduler_session_key(&self) -> Option<String> {
+        let session_id = self.session_id.trim();
+        if session_id.is_empty() {
+            return None;
+        }
+
+        Some(normalize_session_key(session_id, self.agent_id.as_deref()))
+    }
+
+    pub(crate) fn scheduler_affinity(&self) -> Option<ClientSessionAffinity> {
+        let client_family = self.client_family.trim();
+        let client_family = if client_family.is_empty() {
+            "generic".to_string()
+        } else {
+            client_family.to_ascii_lowercase()
+        };
+        Some(ClientSessionAffinity::new(
+            Some(client_family),
+            Some(self.scheduler_session_key()?),
+        ))
+    }
+}
+
+struct ClientSessionRequest<'a> {
     headers: &'a http::HeaderMap,
     body_json: Option<&'a Value>,
 }
 
-trait ClientSessionAffinityAdapter {
+trait ClientSessionScopeAdapter {
     fn family(&self) -> &'static str;
 
-    fn detect(&self, request: &ClientSessionAffinityRequest<'_>) -> bool;
+    fn detect(&self, request: &ClientSessionRequest<'_>) -> bool;
 
-    fn extract_session_key(&self, request: &ClientSessionAffinityRequest<'_>) -> Option<String>;
+    fn extract_scope(&self, request: &ClientSessionRequest<'_>) -> Option<ClientSessionScope>;
 }
 
-struct GenericSessionAffinityAdapter;
-struct CodexSessionAffinityAdapter;
-struct ClaudeCodeSessionAffinityAdapter;
-struct OpenCodeSessionAffinityAdapter;
+struct GenericSessionScopeAdapter;
+struct CodexSessionScopeAdapter;
+struct ClaudeCodeSessionScopeAdapter;
+struct OpenCodeSessionScopeAdapter;
 
 pub(crate) fn client_session_affinity_from_request(
     headers: &http::HeaderMap,
     body_json: Option<&Value>,
 ) -> Option<ClientSessionAffinity> {
-    let request = ClientSessionAffinityRequest { headers, body_json };
-    let client_family = detect_client_family(&request);
-    let session_key = explicit_aether_session_key(&request)
-        .or_else(|| extract_session_key_for_client_family(&request, client_family.as_str()))
-        .or_else(|| GenericSessionAffinityAdapter.extract_session_key(&request))
-        .or_else(|| {
-            extract_session_key_from_other_specific_adapters(&request, client_family.as_str())
-        });
+    client_session_scope_from_request(headers, body_json)?.scheduler_affinity()
+}
 
-    session_key
-        .map(|session_key| ClientSessionAffinity::new(Some(client_family), Some(session_key)))
+pub(crate) fn client_session_scope_from_request(
+    headers: &http::HeaderMap,
+    body_json: Option<&Value>,
+) -> Option<ClientSessionScope> {
+    let request = ClientSessionRequest { headers, body_json };
+    let client_family = detect_client_family(&request);
+    explicit_aether_session_scope(&request, client_family.as_str())
+        .or_else(|| extract_scope_for_client_family(&request, client_family.as_str()))
+        .or_else(|| extract_generic_scope_for_client_family(&request, client_family.as_str()))
+        .or_else(|| extract_scope_from_other_specific_adapters(&request, client_family.as_str()))
 }
 
 pub(crate) fn client_session_affinity_from_parts(
     parts: &http::request::Parts,
     body_json: Option<&Value>,
 ) -> Option<ClientSessionAffinity> {
-    client_session_affinity_from_request(&parts.headers, body_json)
+    client_session_scope_from_parts(parts, body_json)?.scheduler_affinity()
 }
 
-fn detect_client_family(request: &ClientSessionAffinityRequest<'_>) -> String {
-    for adapter in specific_client_session_affinity_adapters() {
+pub(crate) fn client_session_scope_from_parts(
+    parts: &http::request::Parts,
+    body_json: Option<&Value>,
+) -> Option<ClientSessionScope> {
+    client_session_scope_from_request(&parts.headers, body_json)
+}
+
+fn detect_client_family(request: &ClientSessionRequest<'_>) -> String {
+    for adapter in specific_client_session_scope_adapters() {
         if adapter.detect(request) {
             return adapter.family().to_string();
         }
     }
-    GenericSessionAffinityAdapter.family().to_string()
+    GenericSessionScopeAdapter.family().to_string()
 }
 
-fn specific_client_session_affinity_adapters() -> [&'static dyn ClientSessionAffinityAdapter; 3] {
+fn specific_client_session_scope_adapters() -> [&'static dyn ClientSessionScopeAdapter; 3] {
     [
-        &CodexSessionAffinityAdapter,
-        &ClaudeCodeSessionAffinityAdapter,
-        &OpenCodeSessionAffinityAdapter,
+        &CodexSessionScopeAdapter,
+        &ClaudeCodeSessionScopeAdapter,
+        &OpenCodeSessionScopeAdapter,
     ]
 }
 
-fn extract_session_key_for_client_family(
-    request: &ClientSessionAffinityRequest<'_>,
+fn extract_scope_for_client_family(
+    request: &ClientSessionRequest<'_>,
     client_family: &str,
-) -> Option<String> {
-    specific_client_session_affinity_adapters()
+) -> Option<ClientSessionScope> {
+    specific_client_session_scope_adapters()
         .into_iter()
         .find(|adapter| adapter.family() == client_family)
-        .and_then(|adapter| adapter.extract_session_key(request))
+        .and_then(|adapter| adapter.extract_scope(request))
 }
 
-fn extract_session_key_from_other_specific_adapters(
-    request: &ClientSessionAffinityRequest<'_>,
+fn extract_scope_from_other_specific_adapters(
+    request: &ClientSessionRequest<'_>,
     client_family: &str,
-) -> Option<String> {
-    specific_client_session_affinity_adapters()
+) -> Option<ClientSessionScope> {
+    specific_client_session_scope_adapters()
         .into_iter()
         .filter(|adapter| adapter.family() != client_family)
-        .find_map(|adapter| adapter.extract_session_key(request))
+        .find_map(|adapter| adapter.extract_scope(request))
 }
 
-impl ClientSessionAffinityAdapter for GenericSessionAffinityAdapter {
+fn extract_generic_scope_for_client_family(
+    request: &ClientSessionRequest<'_>,
+    client_family: &str,
+) -> Option<ClientSessionScope> {
+    let generic = GenericSessionScopeAdapter.extract_scope(request)?;
+    Some(ClientSessionScope::new(
+        client_family,
+        generic.session_id,
+        generic.agent_id,
+        generic.account_hint,
+        generic.source,
+    ))
+}
+
+impl ClientSessionScopeAdapter for GenericSessionScopeAdapter {
     fn family(&self) -> &'static str {
         "generic"
     }
 
-    fn detect(&self, _request: &ClientSessionAffinityRequest<'_>) -> bool {
+    fn detect(&self, _request: &ClientSessionRequest<'_>) -> bool {
         true
     }
 
-    fn extract_session_key(&self, request: &ClientSessionAffinityRequest<'_>) -> Option<String> {
+    fn extract_scope(&self, request: &ClientSessionRequest<'_>) -> Option<ClientSessionScope> {
         let body = request.body_json?;
         let root_session = value_at_paths(
             body,
@@ -121,35 +200,58 @@ impl ClientSessionAffinityAdapter for GenericSessionAffinityAdapter {
             ],
         );
 
-        Some(normalize_session_key(root_session, agent_id))
+        Some(ClientSessionScope::new(
+            self.family(),
+            root_session,
+            agent_id.map(ToOwned::to_owned),
+            None,
+            ClientSessionSignalSource::Body,
+        ))
     }
 }
 
-impl ClientSessionAffinityAdapter for CodexSessionAffinityAdapter {
+impl ClientSessionScopeAdapter for CodexSessionScopeAdapter {
     fn family(&self) -> &'static str {
         "codex"
     }
 
-    fn detect(&self, request: &ClientSessionAffinityRequest<'_>) -> bool {
+    fn detect(&self, request: &ClientSessionRequest<'_>) -> bool {
         header_contains(request.headers, http::header::USER_AGENT.as_str(), "codex")
             || header_contains(request.headers, "originator", "codex")
             || header_value_str(request.headers, "chatgpt-account-id").is_some()
     }
 
-    fn extract_session_key(&self, request: &ClientSessionAffinityRequest<'_>) -> Option<String> {
+    fn extract_scope(&self, request: &ClientSessionRequest<'_>) -> Option<ClientSessionScope> {
         header_value_str(request.headers, "session_id")
             .or_else(|| header_value_str(request.headers, "conversation_id"))
-            .or_else(|| header_value_str(request.headers, "x-client-request-id"))
-            .map(|root_session| normalize_session_key(root_session.as_str(), None))
+            .map(|root_session| {
+                ClientSessionScope::new(
+                    self.family(),
+                    root_session,
+                    None,
+                    header_value_str(request.headers, "chatgpt-account-id"),
+                    ClientSessionSignalSource::Header,
+                )
+            })
+            .or_else(|| {
+                let body_session = GenericSessionScopeAdapter.extract_scope(request)?;
+                Some(ClientSessionScope::new(
+                    self.family(),
+                    body_session.session_id,
+                    body_session.agent_id,
+                    header_value_str(request.headers, "chatgpt-account-id"),
+                    body_session.source,
+                ))
+            })
     }
 }
 
-impl ClientSessionAffinityAdapter for ClaudeCodeSessionAffinityAdapter {
+impl ClientSessionScopeAdapter for ClaudeCodeSessionScopeAdapter {
     fn family(&self) -> &'static str {
         "claude_code"
     }
 
-    fn detect(&self, request: &ClientSessionAffinityRequest<'_>) -> bool {
+    fn detect(&self, request: &ClientSessionRequest<'_>) -> bool {
         header_contains(
             request.headers,
             http::header::USER_AGENT.as_str(),
@@ -161,20 +263,48 @@ impl ClientSessionAffinityAdapter for ClaudeCodeSessionAffinityAdapter {
         ) || header_value_str(request.headers, "x-claude-code-session-id").is_some()
     }
 
-    fn extract_session_key(&self, request: &ClientSessionAffinityRequest<'_>) -> Option<String> {
+    fn extract_scope(&self, request: &ClientSessionRequest<'_>) -> Option<ClientSessionScope> {
         header_value_str(request.headers, "x-claude-code-session-id")
             .or_else(|| header_value_str(request.headers, "session_id"))
             .or_else(|| header_value_str(request.headers, "conversation_id"))
-            .map(|root_session| normalize_session_key(root_session.as_str(), None))
+            .map(|root_session| {
+                ClientSessionScope::new(
+                    self.family(),
+                    root_session,
+                    None,
+                    None,
+                    ClientSessionSignalSource::Header,
+                )
+            })
+            .or_else(|| {
+                let root_session = claude_code_session_id_from_body(request.body_json?)?;
+                Some(ClientSessionScope::new(
+                    self.family(),
+                    root_session,
+                    None,
+                    None,
+                    ClientSessionSignalSource::Body,
+                ))
+            })
+            .or_else(|| {
+                let body_session = GenericSessionScopeAdapter.extract_scope(request)?;
+                Some(ClientSessionScope::new(
+                    self.family(),
+                    body_session.session_id,
+                    body_session.agent_id,
+                    body_session.account_hint,
+                    body_session.source,
+                ))
+            })
     }
 }
 
-impl ClientSessionAffinityAdapter for OpenCodeSessionAffinityAdapter {
+impl ClientSessionScopeAdapter for OpenCodeSessionScopeAdapter {
     fn family(&self) -> &'static str {
         "opencode"
     }
 
-    fn detect(&self, request: &ClientSessionAffinityRequest<'_>) -> bool {
+    fn detect(&self, request: &ClientSessionRequest<'_>) -> bool {
         header_contains(
             request.headers,
             http::header::USER_AGENT.as_str(),
@@ -182,23 +312,41 @@ impl ClientSessionAffinityAdapter for OpenCodeSessionAffinityAdapter {
         ) || header_value_str(request.headers, "x-opencode-session-id").is_some()
     }
 
-    fn extract_session_key(&self, request: &ClientSessionAffinityRequest<'_>) -> Option<String> {
+    fn extract_scope(&self, request: &ClientSessionRequest<'_>) -> Option<ClientSessionScope> {
         let root_session = header_value_str(request.headers, "x-opencode-session-id")
             .or_else(|| header_value_str(request.headers, "session_id"))?;
         let agent_id = header_value_str(request.headers, "x-opencode-agent-id");
-        Some(normalize_session_key(
-            root_session.as_str(),
-            agent_id.as_deref(),
+        Some(ClientSessionScope::new(
+            self.family(),
+            root_session,
+            agent_id,
+            None,
+            ClientSessionSignalSource::Header,
         ))
     }
 }
 
-fn explicit_aether_session_key(request: &ClientSessionAffinityRequest<'_>) -> Option<String> {
+fn claude_code_session_id_from_body(body: &Value) -> Option<&str> {
+    value_at_path(body, &["metadata", "user_id"]).and_then(|user_id| {
+        user_id
+            .rsplit_once("_session_")
+            .map(|(_, session_id)| session_id.trim())
+            .filter(|value| !value.is_empty())
+    })
+}
+
+fn explicit_aether_session_scope(
+    request: &ClientSessionRequest<'_>,
+    client_family: &str,
+) -> Option<ClientSessionScope> {
     let root_session = header_value_str(request.headers, AETHER_SESSION_ID_HEADER)?;
     let agent_id = header_value_str(request.headers, AETHER_AGENT_ID_HEADER);
-    Some(normalize_session_key(
-        root_session.as_str(),
-        agent_id.as_deref(),
+    Some(ClientSessionScope::new(
+        client_family,
+        root_session,
+        agent_id,
+        None,
+        ClientSessionSignalSource::ExplicitAetherHeader,
     ))
 }
 
@@ -234,7 +382,8 @@ fn header_contains(headers: &http::HeaderMap, key: &str, needle: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        client_session_affinity_from_request, AETHER_AGENT_ID_HEADER, AETHER_SESSION_ID_HEADER,
+        client_session_affinity_from_request, client_session_scope_from_request,
+        ClientSessionSignalSource, AETHER_AGENT_ID_HEADER, AETHER_SESSION_ID_HEADER,
     };
     use http::{HeaderMap, HeaderValue};
     use serde_json::json;
@@ -302,6 +451,39 @@ mod tests {
     }
 
     #[test]
+    fn codex_adapter_uses_body_session_instead_of_request_id() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            http::header::USER_AGENT,
+            HeaderValue::from_static("codex-tui/0.122.0"),
+        );
+        headers.insert(
+            "x-client-request-id",
+            HeaderValue::from_static("request-only-id"),
+        );
+        headers.insert("chatgpt-account-id", HeaderValue::from_static("account-1"));
+        let body = json!({
+            "prompt_cache_key": "prompt-session-1"
+        });
+
+        let scope = client_session_scope_from_request(&headers, Some(&body))
+            .expect("session scope should build");
+        let affinity = scope
+            .scheduler_affinity()
+            .expect("scheduler affinity should build");
+
+        assert_eq!(scope.client_family, "codex");
+        assert_eq!(scope.source, ClientSessionSignalSource::Body);
+        assert_eq!(scope.session_id, "prompt-session-1");
+        assert_eq!(scope.account_hint.as_deref(), Some("account-1"));
+        assert_eq!(affinity.client_family.as_deref(), Some("codex"));
+        assert_eq!(
+            affinity.session_key.as_deref(),
+            Some("session=prompt-session-1")
+        );
+    }
+
+    #[test]
     fn claude_code_adapter_extracts_session_header() {
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -320,6 +502,66 @@ mod tests {
         assert_eq!(
             affinity.session_key.as_deref(),
             Some("session=claude-session")
+        );
+    }
+
+    #[test]
+    fn claude_code_adapter_extracts_metadata_user_session() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            http::header::USER_AGENT,
+            HeaderValue::from_static("Claude-Code/1.0"),
+        );
+        let body = json!({
+            "metadata": {
+                "user_id": "user-1_session_claude-real-session"
+            }
+        });
+
+        let scope = client_session_scope_from_request(&headers, Some(&body))
+            .expect("session scope should build");
+        let affinity = scope
+            .scheduler_affinity()
+            .expect("scheduler affinity should build");
+
+        assert_eq!(scope.client_family, "claude_code");
+        assert_eq!(scope.source, ClientSessionSignalSource::Body);
+        assert_eq!(scope.session_id, "claude-real-session");
+        assert_eq!(affinity.client_family.as_deref(), Some("claude_code"));
+        assert_eq!(
+            affinity.session_key.as_deref(),
+            Some("session=claude-real-session")
+        );
+    }
+
+    #[test]
+    fn detected_client_family_is_kept_for_generic_body_signal() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            http::header::USER_AGENT,
+            HeaderValue::from_static("OpenCode/0.9"),
+        );
+        let body = json!({
+            "metadata": {
+                "session_id": "body-session",
+                "agent_id": "body-agent"
+            }
+        });
+
+        let scope = client_session_scope_from_request(&headers, Some(&body))
+            .expect("session scope should build");
+        let affinity = scope
+            .scheduler_affinity()
+            .expect("scheduler affinity should build");
+
+        assert_eq!(scope.client_family, "opencode");
+        assert_eq!(scope.source, ClientSessionSignalSource::Body);
+        assert_eq!(scope.session_id, "body-session");
+        assert_eq!(scope.agent_id.as_deref(), Some("body-agent"));
+        assert_eq!(affinity.client_family.as_deref(), Some("opencode"));
+        assert_eq!(
+            affinity.session_key.as_deref(),
+            Some("session=body-session;agent=body-agent")
         );
     }
 

@@ -42,7 +42,7 @@ fn log_maintenance_worker_failure(
 pub(crate) fn spawn_audit_cleanup_worker(
     data: Arc<GatewayDataState>,
 ) -> Option<tokio::task::JoinHandle<()>> {
-    if data.postgres_pool().is_none() {
+    if !data.has_audit_log_reader() {
         return None;
     }
 
@@ -65,7 +65,7 @@ pub(crate) fn spawn_audit_cleanup_worker(
 pub(crate) fn spawn_db_maintenance_worker(
     data: Arc<GatewayDataState>,
 ) -> Option<tokio::task::JoinHandle<()>> {
-    if data.postgres_pool().is_none() {
+    if !data.has_database_maintenance_backend() {
         return None;
     }
 
@@ -83,7 +83,7 @@ pub(crate) fn spawn_db_maintenance_worker(
 pub(crate) fn spawn_wallet_daily_usage_aggregation_worker(
     data: Arc<GatewayDataState>,
 ) -> Option<tokio::task::JoinHandle<()>> {
-    if data.postgres_pool().is_none() {
+    if !data.has_wallet_daily_usage_aggregation_backend() {
         return None;
     }
 
@@ -107,7 +107,7 @@ pub(crate) fn spawn_wallet_daily_usage_aggregation_worker(
 pub(crate) fn spawn_stats_aggregation_worker(
     data: Arc<GatewayDataState>,
 ) -> Option<tokio::task::JoinHandle<()>> {
-    if data.postgres_pool().is_none() {
+    if !data.has_stats_daily_aggregation_backend() {
         return None;
     }
 
@@ -137,7 +137,7 @@ pub(crate) fn spawn_stats_aggregation_worker(
 pub(crate) fn spawn_usage_cleanup_worker(
     data: Arc<GatewayDataState>,
 ) -> Option<tokio::task::JoinHandle<()>> {
-    if data.postgres_pool().is_none() {
+    if !data.has_usage_writer() {
         return None;
     }
 
@@ -224,7 +224,7 @@ pub(crate) fn spawn_gemini_file_mapping_cleanup_worker(
 pub(crate) fn spawn_pending_cleanup_worker(
     data: Arc<GatewayDataState>,
 ) -> Option<tokio::task::JoinHandle<()>> {
-    if data.postgres_pool().is_none() {
+    if !data.has_usage_writer() {
         return None;
     }
 
@@ -296,7 +296,7 @@ pub(crate) fn spawn_proxy_upgrade_rollout_worker(
 pub(crate) fn spawn_pool_monitor_worker(
     data: Arc<GatewayDataState>,
 ) -> Option<tokio::task::JoinHandle<()>> {
-    if data.postgres_pool().is_none() {
+    if !data.has_database_pool_summary() {
         return None;
     }
 
@@ -314,7 +314,7 @@ pub(crate) fn spawn_pool_monitor_worker(
 pub(crate) fn spawn_stats_hourly_aggregation_worker(
     data: Arc<GatewayDataState>,
 ) -> Option<tokio::task::JoinHandle<()>> {
-    if data.postgres_pool().is_none() {
+    if !data.has_stats_hourly_aggregation_backend() {
         return None;
     }
 

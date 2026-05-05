@@ -4701,6 +4701,7 @@ fn retired_api_format_occurrences_are_whitelisted() {
         "crates/aether-ai-formats/src/protocol/matrix.rs",
         "crates/aether-ai-formats/src/protocol/registry.rs",
         "crates/aether-data/src/migrate.rs",
+        "crates/aether-data/src/lifecycle/migrate/tests.rs",
         "crates/aether-usage-runtime/src/report.rs",
         "frontend/src/api/endpoints/types/__tests__/api-format.spec.ts",
     ];

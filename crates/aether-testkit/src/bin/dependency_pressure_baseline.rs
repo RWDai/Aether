@@ -2,11 +2,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use aether_data::postgres::{
+use aether_data::driver::postgres::{
     DatabaseRecordId, PostgresLeaseClaimOptions, PostgresLeaseClaimSpec, PostgresLeaseRunnerConfig,
     PostgresPoolConfig,
 };
-use aether_data::redis::{
+use aether_data::driver::redis::{
     RedisClientConfig, RedisConsumerGroup, RedisConsumerName, RedisLockLease, RedisLockRunner,
     RedisLockRunnerConfig, RedisStreamName, RedisStreamReclaimConfig, RedisStreamRunner,
     RedisStreamRunnerConfig,
@@ -532,7 +532,7 @@ async fn benchmark_redis_stream_ack_into(
 }
 
 async fn benchmark_postgres_lease(
-    runner: &aether_data::postgres::PostgresLeaseRunner,
+    runner: &aether_data::driver::postgres::PostgresLeaseRunner,
     config: &DependencyPressureBaselineConfig,
 ) -> Result<PostgresLeasePressureReport, Box<dyn std::error::Error>> {
     let spec = PostgresLeaseClaimSpec {
@@ -608,7 +608,7 @@ async fn benchmark_postgres_lease(
 }
 
 async fn record_postgres_lease_follow_up(
-    runner: &aether_data::postgres::PostgresLeaseRunner,
+    runner: &aether_data::driver::postgres::PostgresLeaseRunner,
     spec: &PostgresLeaseClaimSpec,
     owner: &str,
     ids: &[DatabaseRecordId],

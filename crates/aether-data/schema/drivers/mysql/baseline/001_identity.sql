@@ -1,0 +1,120 @@
+CREATE TABLE IF NOT EXISTS users (
+    id VARCHAR(64) PRIMARY KEY,
+    external_id VARCHAR(255),
+    email VARCHAR(320),
+    username VARCHAR(255),
+    password_hash VARCHAR(255),
+    role VARCHAR(64),
+    auth_source VARCHAR(64) NOT NULL DEFAULT 'local',
+    email_verified TINYINT(1) NOT NULL DEFAULT 0,
+    is_active TINYINT(1) NOT NULL DEFAULT 1,
+    is_deleted TINYINT(1) NOT NULL DEFAULT 0,
+    allowed_models TEXT,
+    allowed_providers TEXT,
+    allowed_api_formats TEXT,
+    model_capability_settings TEXT,
+    rate_limit INT,
+    metadata TEXT,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL,
+    last_login_at BIGINT,
+    UNIQUE KEY users_email_key (email),
+    UNIQUE KEY users_username_key (username)
+);
+
+CREATE TABLE IF NOT EXISTS api_keys (
+    id VARCHAR(64) PRIMARY KEY,
+    user_id VARCHAR(64) NOT NULL,
+    key_hash VARCHAR(255) NOT NULL,
+    key_encrypted TEXT,
+    name VARCHAR(255),
+    key_prefix VARCHAR(64),
+    status VARCHAR(64) NOT NULL DEFAULT 'active',
+    allowed_models TEXT,
+    allowed_providers TEXT,
+    allowed_api_formats TEXT,
+    rate_limit INT DEFAULT 100,
+    concurrent_limit INT,
+    force_capabilities TEXT,
+    is_active TINYINT(1) NOT NULL DEFAULT 1,
+    is_locked TINYINT(1) NOT NULL DEFAULT 0,
+    is_standalone TINYINT(1) NOT NULL DEFAULT 0,
+    auto_delete_on_expiry TINYINT(1) NOT NULL DEFAULT 0,
+    total_requests BIGINT NOT NULL DEFAULT 0,
+    total_tokens BIGINT NOT NULL DEFAULT 0,
+    total_cost_usd DOUBLE NOT NULL DEFAULT 0,
+    metadata TEXT,
+    expires_at BIGINT,
+    last_used_at BIGINT,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL,
+    UNIQUE KEY api_keys_key_hash_key (key_hash),
+    KEY api_keys_user_id_idx (user_id)
+);
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id VARCHAR(64) PRIMARY KEY,
+    event_type VARCHAR(64) NOT NULL,
+    user_id VARCHAR(64),
+    api_key_id VARCHAR(64),
+    description TEXT NOT NULL,
+    ip_address VARCHAR(64),
+    user_agent VARCHAR(512),
+    request_id VARCHAR(128),
+    event_metadata TEXT,
+    status_code INT,
+    error_message TEXT,
+    created_at BIGINT NOT NULL,
+    KEY audit_logs_created_at_idx (created_at),
+    KEY audit_logs_event_type_idx (event_type),
+    KEY audit_logs_request_id_idx (request_id),
+    KEY audit_logs_user_id_idx (user_id)
+);
+
+CREATE TABLE IF NOT EXISTS announcements (
+    id VARCHAR(64) PRIMARY KEY,
+    title VARCHAR(200) NOT NULL,
+    content TEXT NOT NULL,
+    `type` VARCHAR(32) NOT NULL DEFAULT 'info',
+    priority INT NOT NULL DEFAULT 0,
+    author_id VARCHAR(64),
+    is_active TINYINT(1) NOT NULL DEFAULT 1,
+    is_pinned TINYINT(1) NOT NULL DEFAULT 0,
+    start_time BIGINT,
+    end_time BIGINT,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL,
+    KEY announcements_author_id_idx (author_id),
+    KEY announcements_created_at_idx (created_at),
+    KEY announcements_is_active_idx (is_active)
+);
+
+CREATE TABLE IF NOT EXISTS announcement_reads (
+    id VARCHAR(64) PRIMARY KEY,
+    user_id VARCHAR(64) NOT NULL,
+    announcement_id VARCHAR(64) NOT NULL,
+    read_at BIGINT NOT NULL,
+    UNIQUE KEY uq_user_announcement (user_id, announcement_id),
+    KEY announcement_reads_announcement_id_idx (announcement_id),
+    KEY announcement_reads_user_id_idx (user_id)
+);
+
+CREATE TABLE IF NOT EXISTS management_tokens (
+    id VARCHAR(64) PRIMARY KEY,
+    user_id VARCHAR(64) NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    description TEXT,
+    token_hash VARCHAR(255) NOT NULL,
+    token_prefix VARCHAR(64),
+    allowed_ips TEXT,
+    expires_at BIGINT,
+    last_used_at BIGINT,
+    last_used_ip VARCHAR(255),
+    usage_count BIGINT NOT NULL DEFAULT 0,
+    is_active TINYINT(1) NOT NULL DEFAULT 1,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL,
+    UNIQUE KEY management_tokens_token_hash_key (token_hash),
+    UNIQUE KEY uq_management_tokens_user_name (user_id, name),
+    KEY management_tokens_user_id_idx (user_id)
+);

@@ -4,14 +4,13 @@ use std::time::Duration;
 use aether_gateway::tunnel_protocol as protocol;
 use aether_gateway::GatewayDataConfig;
 use aether_testkit::{
-    init_test_runtime_for, reserve_local_port, run_http_load_probe, wait_until, GatewayHarness,
-    GatewayHarnessConfig, HttpLoadProbeConfig, HttpLoadProbeResponseMode, HttpLoadProbeResult,
-    ManagedPostgresServer, ManagedRedisServer,
+    init_test_runtime_for, prepare_aether_postgres_schema, reserve_local_port, run_http_load_probe,
+    wait_until, GatewayHarness, GatewayHarnessConfig, HttpLoadProbeConfig,
+    HttpLoadProbeResponseMode, HttpLoadProbeResult, ManagedPostgresServer, ManagedRedisServer,
 };
 use futures_util::{SinkExt, StreamExt};
 use reqwest::Method;
 use serde::Serialize;
-use sqlx::{Connection, Executor, PgConnection};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -113,7 +112,7 @@ async fn run_suite(
         })
         .expect("postgres url should be resolved");
 
-    ensure_owner_relay_schema(&postgres_url).await?;
+    prepare_aether_postgres_schema(&postgres_url).await?;
 
     let key_prefix = format!("aether-owner-relay-baseline-{}", std::process::id());
     let shared_data = GatewayDataConfig::from_postgres_url(postgres_url.clone(), false)
@@ -206,89 +205,6 @@ async fn run_suite(
     })
 }
 
-async fn ensure_owner_relay_schema(postgres_url: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let mut connection = PgConnection::connect(postgres_url).await?;
-    connection
-        .execute(
-            r#"
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'proxynodestatus') THEN
-        CREATE TYPE proxynodestatus AS ENUM ('online', 'offline');
-    END IF;
-END
-$$;
-"#,
-        )
-        .await?;
-    connection
-        .execute(
-            r#"
-CREATE TABLE IF NOT EXISTS system_configs (
-    id VARCHAR(36) PRIMARY KEY,
-    key VARCHAR(100) UNIQUE NOT NULL,
-    value JSON NOT NULL,
-    description TEXT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-)
-"#,
-        )
-        .await?;
-    connection
-        .execute(
-            r#"
-CREATE TABLE IF NOT EXISTS proxy_nodes (
-    id VARCHAR(36) PRIMARY KEY,
-    name VARCHAR(100) NOT NULL,
-    ip VARCHAR(512) NOT NULL,
-    port INTEGER NOT NULL,
-    region VARCHAR(100) NULL,
-    is_manual BOOLEAN NOT NULL DEFAULT FALSE,
-    proxy_url VARCHAR(500) NULL,
-    proxy_username VARCHAR(255) NULL,
-    proxy_password VARCHAR(500) NULL,
-    status proxynodestatus NOT NULL DEFAULT 'online',
-    registered_by VARCHAR(36) NULL,
-    last_heartbeat_at TIMESTAMPTZ NULL,
-    heartbeat_interval INTEGER NOT NULL DEFAULT 30,
-    active_connections INTEGER NOT NULL DEFAULT 0,
-    total_requests BIGINT NOT NULL DEFAULT 0,
-    avg_latency_ms DOUBLE PRECISION NULL,
-    failed_requests BIGINT NOT NULL DEFAULT 0,
-    dns_failures BIGINT NOT NULL DEFAULT 0,
-    stream_errors BIGINT NOT NULL DEFAULT 0,
-    proxy_metadata JSON NULL,
-    hardware_info JSON NULL,
-    estimated_max_concurrency INTEGER NULL,
-    tunnel_mode BOOLEAN NOT NULL DEFAULT FALSE,
-    tunnel_connected BOOLEAN NOT NULL DEFAULT FALSE,
-    tunnel_connected_at TIMESTAMPTZ NULL,
-    remote_config JSON NULL,
-    config_version INTEGER NOT NULL DEFAULT 1,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-)
-"#,
-        )
-        .await?;
-    connection
-        .execute(
-            r#"
-CREATE TABLE IF NOT EXISTS proxy_node_events (
-    id BIGSERIAL PRIMARY KEY,
-    node_id VARCHAR(36) NOT NULL,
-    event_type TEXT NOT NULL,
-    detail TEXT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-)
-"#,
-        )
-        .await?;
-    connection.close().await?;
-    Ok(())
-}
-
 async fn wait_for_owner_attachment(forwarder_base_url: &str) -> Result<(), String> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(2))
@@ -340,6 +256,10 @@ fn relay_envelope() -> Vec<u8> {
         timeout: 30,
         follow_redirects: None,
         http1_only: false,
+        provider_id: None,
+        endpoint_id: None,
+        key_id: None,
+        transport_profile: None,
     };
     let meta_json = serde_json::to_vec(&meta).expect("owner relay metadata should serialize");
     let body = br#"{"model":"gpt-5","messages":[{"role":"user","content":"owner relay"}]}"#;

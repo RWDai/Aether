@@ -4303,7 +4303,8 @@ async fn gateway_returns_service_unavailable_for_users_me_detail_update_without_
         ]),
         now + chrono::Duration::hours(1),
     );
-    let user_repository = Arc::new(InMemoryUserReadRepository::seed_auth_users(vec![user]));
+    let user_repository =
+        Arc::new(InMemoryUserReadRepository::seed_auth_users(vec![user]).read_only());
     let (gateway_url, upstream_hits, gateway_handle, upstream_handle) =
         start_auth_gateway_with_builder(|| {
             let data_state =
@@ -4453,7 +4454,8 @@ async fn gateway_returns_service_unavailable_for_users_me_password_change_withou
         ]),
         now + chrono::Duration::hours(1),
     );
-    let user_repository = Arc::new(InMemoryUserReadRepository::seed_auth_users(vec![user]));
+    let user_repository =
+        Arc::new(InMemoryUserReadRepository::seed_auth_users(vec![user]).read_only());
     let (gateway_url, upstream_hits, gateway_handle, upstream_handle) =
         start_auth_gateway_with_builder(|| {
             let data_state =
@@ -4819,7 +4821,8 @@ async fn gateway_returns_service_unavailable_for_users_me_preferences_update_wit
         ]),
         now + chrono::Duration::hours(1),
     );
-    let user_repository = Arc::new(InMemoryUserReadRepository::seed_auth_users(vec![user]));
+    let user_repository =
+        Arc::new(InMemoryUserReadRepository::seed_auth_users(vec![user]).read_only());
     let (gateway_url, upstream_hits, gateway_handle, upstream_handle) =
         start_auth_gateway_with_builder(|| {
             let data_state =
@@ -8298,7 +8301,8 @@ async fn gateway_returns_service_unavailable_for_users_me_model_capabilities_upd
         ]),
         now + chrono::Duration::hours(1),
     );
-    let user_repository = Arc::new(InMemoryUserReadRepository::seed_auth_users(vec![user]));
+    let user_repository =
+        Arc::new(InMemoryUserReadRepository::seed_auth_users(vec![user]).read_only());
     let (gateway_url, upstream_hits, gateway_handle, upstream_handle) =
         start_auth_gateway_with_builder(|| {
             let data_state =

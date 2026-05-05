@@ -1,5 +1,7 @@
 mod memory;
-mod sql;
+mod mysql;
+mod postgres;
+mod sqlite;
 
 #[allow(unused_imports)]
 pub(crate) use aether_data_contracts::repository::quota::{
@@ -7,4 +9,6 @@ pub(crate) use aether_data_contracts::repository::quota::{
     StoredProviderQuotaSnapshot,
 };
 pub use memory::InMemoryProviderQuotaRepository;
-pub use sql::SqlxProviderQuotaRepository;
+pub use mysql::MysqlProviderQuotaRepository;
+pub use postgres::SqlxProviderQuotaRepository;
+pub use sqlite::SqliteProviderQuotaRepository;

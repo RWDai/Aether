@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
-use aether_data::redis::{RedisLockKey, RedisLockRunner};
+use aether_data::driver::redis::{RedisLockKey, RedisLockRunner};
 use aether_oauth::core::OAuthError;
 use aether_oauth::network::{
     OAuthHttpExecutor, OAuthHttpRequest, OAuthHttpResponse, OAuthNetworkContext,

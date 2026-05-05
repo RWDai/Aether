@@ -308,7 +308,7 @@ impl FrontdoorUserRpmLimiter {
 
     async fn check_and_consume_redis(
         &self,
-        runner: &aether_data::redis::RedisKvRunner,
+        runner: &aether_data::driver::redis::RedisKvRunner,
         plan: &RpmPlan,
     ) -> Result<FrontdoorUserRpmOutcome, GatewayError> {
         let user_key = runner.keyspace().key(&plan.user_rpm_key);

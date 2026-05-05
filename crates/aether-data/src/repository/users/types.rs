@@ -138,6 +138,56 @@ impl StoredUserAuthRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct LdapAuthUserProvisioningOutcome {
+    pub user: StoredUserAuthRecord,
+    pub created: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct StoredUserOAuthLinkSummary {
+    pub provider_type: String,
+    pub display_name: String,
+    pub provider_username: Option<String>,
+    pub provider_email: Option<String>,
+    pub linked_at: Option<DateTime<Utc>>,
+    pub last_login_at: Option<DateTime<Utc>>,
+    pub provider_enabled: bool,
+}
+
+impl StoredUserOAuthLinkSummary {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        provider_type: String,
+        display_name: String,
+        provider_username: Option<String>,
+        provider_email: Option<String>,
+        linked_at: Option<DateTime<Utc>>,
+        last_login_at: Option<DateTime<Utc>>,
+        provider_enabled: bool,
+    ) -> Result<Self, crate::DataLayerError> {
+        if provider_type.trim().is_empty() {
+            return Err(crate::DataLayerError::UnexpectedValue(
+                "user_oauth_links.provider_type is empty".to_string(),
+            ));
+        }
+        if display_name.trim().is_empty() {
+            return Err(crate::DataLayerError::UnexpectedValue(
+                "oauth_providers.display_name is empty".to_string(),
+            ));
+        }
+        Ok(Self {
+            provider_type,
+            display_name,
+            provider_username,
+            provider_email,
+            linked_at,
+            last_login_at,
+            provider_enabled,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct StoredUserExportRow {
     pub id: String,
     pub email: Option<String>,
@@ -430,6 +480,232 @@ pub trait UserReadRepository: Send + Sync {
         &self,
         identifier: &str,
     ) -> Result<Option<StoredUserAuthRecord>, crate::DataLayerError>;
+
+    async fn find_user_auth_by_email(
+        &self,
+        email: &str,
+    ) -> Result<Option<StoredUserAuthRecord>, crate::DataLayerError>;
+
+    async fn find_active_user_auth_by_email_ci(
+        &self,
+        email: &str,
+    ) -> Result<Option<StoredUserAuthRecord>, crate::DataLayerError>;
+
+    async fn find_user_auth_by_username(
+        &self,
+        username: &str,
+    ) -> Result<Option<StoredUserAuthRecord>, crate::DataLayerError>;
+
+    async fn list_user_oauth_links(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<StoredUserOAuthLinkSummary>, crate::DataLayerError>;
+
+    async fn find_oauth_linked_user(
+        &self,
+        provider_type: &str,
+        provider_user_id: &str,
+    ) -> Result<Option<StoredUserAuthRecord>, crate::DataLayerError>;
+
+    async fn touch_oauth_link(
+        &self,
+        provider_type: &str,
+        provider_user_id: &str,
+        provider_username: Option<&str>,
+        provider_email: Option<&str>,
+        extra_data: Option<Value>,
+        touched_at: DateTime<Utc>,
+    ) -> Result<bool, crate::DataLayerError>;
+
+    async fn create_oauth_auth_user(
+        &self,
+        email: Option<String>,
+        username: String,
+        created_at: DateTime<Utc>,
+    ) -> Result<Option<StoredUserAuthRecord>, crate::DataLayerError>;
+
+    async fn find_oauth_link_owner(
+        &self,
+        provider_type: &str,
+        provider_user_id: &str,
+    ) -> Result<Option<String>, crate::DataLayerError>;
+
+    async fn has_user_oauth_provider_link(
+        &self,
+        user_id: &str,
+        provider_type: &str,
+    ) -> Result<bool, crate::DataLayerError>;
+
+    async fn count_user_oauth_links(&self, user_id: &str) -> Result<u64, crate::DataLayerError>;
+
+    #[allow(clippy::too_many_arguments)]
+    async fn upsert_user_oauth_link(
+        &self,
+        user_id: &str,
+        provider_type: &str,
+        provider_user_id: &str,
+        provider_username: Option<&str>,
+        provider_email: Option<&str>,
+        extra_data: Option<Value>,
+        linked_at: DateTime<Utc>,
+    ) -> Result<(), crate::DataLayerError>;
+
+    async fn delete_user_oauth_link(
+        &self,
+        user_id: &str,
+        provider_type: &str,
+    ) -> Result<bool, crate::DataLayerError>;
+
+    async fn get_or_create_ldap_auth_user(
+        &self,
+        email: String,
+        username: String,
+        ldap_dn: Option<String>,
+        ldap_username: Option<String>,
+        logged_in_at: DateTime<Utc>,
+    ) -> Result<Option<LdapAuthUserProvisioningOutcome>, crate::DataLayerError>;
+
+    async fn touch_auth_user_last_login(
+        &self,
+        user_id: &str,
+        logged_in_at: DateTime<Utc>,
+    ) -> Result<bool, crate::DataLayerError>;
+
+    async fn update_local_auth_user_profile(
+        &self,
+        user_id: &str,
+        email: Option<String>,
+        username: Option<String>,
+    ) -> Result<Option<StoredUserAuthRecord>, crate::DataLayerError>;
+
+    async fn update_local_auth_user_password_hash(
+        &self,
+        user_id: &str,
+        password_hash: String,
+        updated_at: DateTime<Utc>,
+    ) -> Result<Option<StoredUserAuthRecord>, crate::DataLayerError>;
+
+    #[allow(clippy::too_many_arguments)]
+    async fn update_local_auth_user_admin_fields(
+        &self,
+        user_id: &str,
+        role: Option<String>,
+        allowed_providers_present: bool,
+        allowed_providers: Option<Vec<String>>,
+        allowed_api_formats_present: bool,
+        allowed_api_formats: Option<Vec<String>>,
+        allowed_models_present: bool,
+        allowed_models: Option<Vec<String>>,
+        rate_limit: Option<i32>,
+        is_active: Option<bool>,
+    ) -> Result<Option<StoredUserAuthRecord>, crate::DataLayerError>;
+
+    async fn update_user_model_capability_settings(
+        &self,
+        user_id: &str,
+        settings: Option<Value>,
+    ) -> Result<Option<Value>, crate::DataLayerError>;
+
+    async fn create_local_auth_user(
+        &self,
+        email: Option<String>,
+        email_verified: bool,
+        username: String,
+        password_hash: String,
+    ) -> Result<Option<StoredUserAuthRecord>, crate::DataLayerError>;
+
+    #[allow(clippy::too_many_arguments)]
+    async fn create_local_auth_user_with_settings(
+        &self,
+        email: Option<String>,
+        email_verified: bool,
+        username: String,
+        password_hash: String,
+        role: String,
+        allowed_providers: Option<Vec<String>>,
+        allowed_api_formats: Option<Vec<String>>,
+        allowed_models: Option<Vec<String>>,
+        rate_limit: Option<i32>,
+    ) -> Result<Option<StoredUserAuthRecord>, crate::DataLayerError>;
+
+    async fn delete_local_auth_user(&self, user_id: &str) -> Result<bool, crate::DataLayerError>;
+
+    async fn read_user_preferences(
+        &self,
+        user_id: &str,
+    ) -> Result<Option<StoredUserPreferenceRecord>, crate::DataLayerError>;
+
+    async fn write_user_preferences(
+        &self,
+        preferences: &StoredUserPreferenceRecord,
+    ) -> Result<Option<StoredUserPreferenceRecord>, crate::DataLayerError>;
+
+    async fn find_user_session(
+        &self,
+        user_id: &str,
+        session_id: &str,
+    ) -> Result<Option<StoredUserSessionRecord>, crate::DataLayerError>;
+
+    async fn list_user_sessions(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<StoredUserSessionRecord>, crate::DataLayerError>;
+
+    async fn create_user_session(
+        &self,
+        session: &StoredUserSessionRecord,
+    ) -> Result<Option<StoredUserSessionRecord>, crate::DataLayerError>;
+
+    async fn touch_user_session(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        touched_at: DateTime<Utc>,
+        ip_address: Option<&str>,
+        user_agent: Option<&str>,
+    ) -> Result<bool, crate::DataLayerError>;
+
+    async fn update_user_session_device_label(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        device_label: &str,
+        updated_at: DateTime<Utc>,
+    ) -> Result<bool, crate::DataLayerError>;
+
+    #[allow(clippy::too_many_arguments)]
+    async fn rotate_user_session_refresh_token(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        previous_refresh_token_hash: &str,
+        next_refresh_token_hash: &str,
+        rotated_at: DateTime<Utc>,
+        expires_at: DateTime<Utc>,
+        ip_address: Option<&str>,
+        user_agent: Option<&str>,
+    ) -> Result<bool, crate::DataLayerError>;
+
+    async fn revoke_user_session(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        revoked_at: DateTime<Utc>,
+        reason: &str,
+    ) -> Result<bool, crate::DataLayerError>;
+
+    async fn revoke_all_user_sessions(
+        &self,
+        user_id: &str,
+        revoked_at: DateTime<Utc>,
+        reason: &str,
+    ) -> Result<u64, crate::DataLayerError>;
+
+    async fn count_active_admin_users(&self) -> Result<u64, crate::DataLayerError>;
+
+    async fn count_active_local_admin_users_with_valid_password(
+        &self,
+    ) -> Result<u64, crate::DataLayerError>;
 }
 
 fn normalize_optional_json(value: Option<Value>) -> Option<Value> {

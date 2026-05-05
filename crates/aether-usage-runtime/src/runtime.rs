@@ -3,7 +3,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use aether_contracts::ExecutionTelemetry;
-use aether_data::redis::RedisStreamRunner;
+use aether_data::driver::redis::RedisStreamRunner;
 use aether_data_contracts::repository::usage::UpsertUsageRecord;
 use aether_data_contracts::DataLayerError;
 use async_trait::async_trait;
@@ -516,11 +516,122 @@ fn now_unix_secs() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
+    use aether_data::driver::redis::RedisStreamRunner;
+    use aether_data_contracts::repository::settlement::{
+        StoredUsageSettlement, UsageSettlementInput,
+    };
+    use aether_data_contracts::repository::usage::{StoredRequestUsageAudit, UpsertUsageRecord};
+    use aether_data_contracts::DataLayerError;
+    use async_trait::async_trait;
     use serde_json::json;
 
-    use super::{UsageBodyCapturePolicy, UsageRequestRecordLevel};
-    use crate::apply_usage_body_capture_policy_to_event;
-    use crate::{UsageEvent, UsageEventData, UsageEventType};
+    use super::{
+        UsageBillingEventEnricher, UsageBodyCapturePolicy, UsageRequestRecordLevel,
+        UsageRuntimeAccess,
+    };
+    use crate::worker::ManualProxyNodeCounter;
+    use crate::{
+        apply_usage_body_capture_policy_to_event, UsageEvent, UsageEventData, UsageEventType,
+        UsageRecordWriter, UsageRuntime, UsageRuntimeConfig, UsageSettlementWriter,
+    };
+
+    #[derive(Default)]
+    struct NoRedisUsageStore {
+        records: Mutex<Vec<UpsertUsageRecord>>,
+    }
+
+    #[async_trait]
+    impl UsageRecordWriter for NoRedisUsageStore {
+        async fn upsert_usage_record(
+            &self,
+            record: UpsertUsageRecord,
+        ) -> Result<Option<StoredRequestUsageAudit>, DataLayerError> {
+            self.records.lock().expect("records lock").push(record);
+            Ok(None)
+        }
+    }
+
+    #[async_trait]
+    impl UsageSettlementWriter for NoRedisUsageStore {
+        fn has_usage_settlement_writer(&self) -> bool {
+            false
+        }
+
+        async fn settle_usage(
+            &self,
+            _input: UsageSettlementInput,
+        ) -> Result<Option<StoredUsageSettlement>, DataLayerError> {
+            Ok(None)
+        }
+    }
+
+    #[async_trait]
+    impl UsageBillingEventEnricher for NoRedisUsageStore {
+        async fn enrich_usage_event(&self, _event: &mut UsageEvent) -> Result<(), DataLayerError> {
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl ManualProxyNodeCounter for NoRedisUsageStore {
+        async fn increment_manual_proxy_node_requests(
+            &self,
+            _node_id: &str,
+            _total_delta: i64,
+            _failed_delta: i64,
+            _latency_ms: Option<i64>,
+        ) -> Result<(), DataLayerError> {
+            Ok(())
+        }
+    }
+
+    impl UsageRuntimeAccess for NoRedisUsageStore {
+        fn has_usage_writer(&self) -> bool {
+            true
+        }
+
+        fn has_usage_worker_runner(&self) -> bool {
+            false
+        }
+
+        fn usage_worker_runner(&self) -> Option<RedisStreamRunner> {
+            None
+        }
+    }
+
+    #[tokio::test]
+    async fn terminal_usage_without_redis_writes_directly_to_usage_repository() {
+        let runtime = UsageRuntime::new(UsageRuntimeConfig {
+            enabled: true,
+            ..UsageRuntimeConfig::default()
+        })
+        .expect("usage runtime should build");
+        let store = NoRedisUsageStore::default();
+        let event = UsageEvent::new(
+            UsageEventType::Completed,
+            "req-no-redis-1",
+            UsageEventData {
+                user_id: Some("user-no-redis-1".to_string()),
+                provider_name: "openai".to_string(),
+                model: "gpt-5".to_string(),
+                input_tokens: Some(4),
+                output_tokens: Some(8),
+                total_tokens: Some(12),
+                status_code: Some(200),
+                ..UsageEventData::default()
+            },
+        );
+
+        runtime.record_terminal_event(&store, event).await;
+
+        let records = store.records.lock().expect("records lock");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].request_id, "req-no-redis-1");
+        assert_eq!(records[0].status, "completed");
+        assert_eq!(records[0].total_tokens, Some(12));
+    }
 
     #[test]
     fn basic_request_record_level_strips_body_capture_but_preserves_derived_fields() {

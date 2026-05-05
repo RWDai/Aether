@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 
+use aether_data::driver::postgres::PostgresPoolConfig;
+use aether_data::{DataBackends, DataLayerConfig};
 use sqlx::{Connection, PgConnection};
 
 use crate::wait_until;
@@ -138,6 +140,26 @@ impl Drop for ManagedPostgresServer {
         let _ = self.stop();
         let _ = std::fs::remove_dir_all(&self.workdir);
     }
+}
+
+pub async fn prepare_aether_postgres_schema(
+    database_url: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let config = PostgresPoolConfig {
+        database_url: database_url.to_string(),
+        ..Default::default()
+    };
+
+    let backends = DataBackends::from_config(DataLayerConfig::from_postgres(config))?;
+    let pending_migrations = backends
+        .prepare_database_for_startup()
+        .await?
+        .unwrap_or_default();
+    if !pending_migrations.is_empty() {
+        backends.run_database_migrations().await?;
+    }
+
+    Ok(())
 }
 
 fn reserve_local_port() -> Result<u16, std::io::Error> {

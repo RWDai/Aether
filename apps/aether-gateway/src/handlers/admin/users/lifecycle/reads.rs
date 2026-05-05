@@ -4,7 +4,6 @@ use super::support::{
 };
 use crate::handlers::admin::request::{AdminAppState, AdminRequestContext};
 use crate::handlers::admin::shared::{query_param_optional_bool, query_param_value};
-use crate::query::user_rollups::list_user_usage_totals_from_stats_summary;
 use crate::GatewayError;
 use axum::{
     body::Body,
@@ -43,19 +42,10 @@ pub(in super::super) async fn build_admin_list_users_response(
         .iter()
         .map(|row| row.id.clone())
         .collect::<Vec<_>>();
-    let usage_totals_future = async {
-        let Some(pool) = state.app().postgres_pool() else {
-            return state.summarize_usage_totals_by_user_ids(&user_ids).await;
-        };
-        match list_user_usage_totals_from_stats_summary(&pool, &user_ids).await? {
-            Some(items) => Ok(items),
-            None => state.summarize_usage_totals_by_user_ids(&user_ids).await,
-        }
-    };
     let (auth_rows_result, wallet_rows_result, usage_totals_result) = tokio::join!(
         state.list_user_auth_by_ids(&user_ids),
         state.list_wallet_snapshots_by_user_ids(&user_ids),
-        usage_totals_future,
+        state.summarize_usage_totals_by_user_ids(&user_ids),
     );
     let auth_by_user_id = auth_rows_result?
         .into_iter()

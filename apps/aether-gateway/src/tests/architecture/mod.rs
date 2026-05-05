@@ -23,6 +23,10 @@ pub(super) fn assert_no_sqlx_queries(root_relative_path: &str) {
     let patterns = [
         "sqlx::query(",
         "sqlx::query_scalar",
+        "sqlx::postgres::PgRow",
+        "sqlx::Row",
+        "PostgresPoolFactory",
+        "PostgresPool",
         "query_scalar::<",
         "QueryBuilder<",
     ];

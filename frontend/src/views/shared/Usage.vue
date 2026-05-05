@@ -254,6 +254,7 @@ const intervalTimelineTitle = computed(() => {
 const ADMIN_ANALYTICS_REFRESH_INTERVAL = 60000
 let adminAnalyticsRefreshInFlight: Promise<void> | null = null
 let lastAdminAnalyticsRefreshAt = 0
+let adminAnalyticsRefreshGeneration = 0
 
 // 加载热力图数据
 async function loadHeatmapData() {
@@ -290,30 +291,43 @@ async function refreshAdminAnalytics(options: { force?: boolean } = {}) {
   if (!options.force && now - lastAdminAnalyticsRefreshAt < ADMIN_ANALYTICS_REFRESH_INTERVAL) {
     return
   }
-  if (adminAnalyticsRefreshInFlight) {
+  if (!options.force && adminAnalyticsRefreshInFlight) {
     return adminAnalyticsRefreshInFlight
   }
 
-  adminAnalyticsRefreshInFlight = (async () => {
+  const refreshGeneration = ++adminAnalyticsRefreshGeneration
+  const refreshPromise = (async () => {
     let hasSuccessfulRefresh = false
 
     try {
-      await loadStats(timeRange.value)
-      hasSuccessfulRefresh = true
+      const hadFailure = await loadStats(timeRange.value)
+      if (refreshGeneration !== adminAnalyticsRefreshGeneration) {
+        return
+      }
+      hasSuccessfulRefresh = !hadFailure
+      if (hadFailure) {
+        warning('统计数据加载失败，请刷新重试')
+      }
     } catch (error) {
+      if (refreshGeneration !== adminAnalyticsRefreshGeneration) {
+        return
+      }
       log.error('加载统计数据失败:', error)
       warning('统计数据加载失败，请刷新重试')
     }
 
-    if (hasSuccessfulRefresh) {
+    if (hasSuccessfulRefresh && refreshGeneration === adminAnalyticsRefreshGeneration) {
       lastAdminAnalyticsRefreshAt = Date.now()
     }
   })()
+  adminAnalyticsRefreshInFlight = refreshPromise
 
   try {
-    await adminAnalyticsRefreshInFlight
+    await refreshPromise
   } finally {
-    adminAnalyticsRefreshInFlight = null
+    if (adminAnalyticsRefreshInFlight === refreshPromise) {
+      adminAnalyticsRefreshInFlight = null
+    }
   }
 }
 

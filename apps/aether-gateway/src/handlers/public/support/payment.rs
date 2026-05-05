@@ -4,8 +4,8 @@ pub(super) use super::{build_auth_error_response, AppState, GatewayPublicRequest
 
 #[path = "payment/gateway.rs"]
 pub(super) mod payment_gateway;
-#[path = "payment/postgres.rs"]
-mod payment_postgres;
+#[path = "payment/repository.rs"]
+mod payment_repository;
 #[path = "payment/route.rs"]
 mod payment_route;
 #[path = "payment/shared.rs"]
@@ -14,7 +14,7 @@ mod payment_shared;
 #[path = "payment/test_support.rs"]
 mod payment_test_support;
 
-use self::payment_postgres::handle_payment_callback_with_postgres;
+use self::payment_repository::handle_payment_callback_with_wallet_repository;
 use self::payment_shared::NormalizedPaymentCallbackRequest;
 
 const PAYMENT_CALLBACK_STORAGE_UNAVAILABLE_DETAIL: &str = "支付回调存储暂不可用";

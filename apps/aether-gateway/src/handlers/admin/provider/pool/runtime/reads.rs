@@ -7,7 +7,7 @@ use crate::handlers::admin::provider::shared::support::{
     AdminProviderPoolConfig, AdminProviderPoolRuntimeState, ADMIN_PROVIDER_POOL_SCAN_BATCH,
 };
 use crate::GatewayError;
-use aether_data::redis::RedisKvRunner;
+use aether_data::driver::redis::RedisKvRunner;
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::warn;

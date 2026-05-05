@@ -12,7 +12,7 @@ use super::{
     perform_provider_checkin_once, perform_stats_aggregation_once,
     perform_stats_hourly_aggregation_once, perform_usage_cleanup_once,
     perform_wallet_daily_usage_aggregation_once, record_proxy_upgrade_traffic_success,
-    summarize_postgres_pool,
+    summarize_database_pool,
 };
 
 pub(super) async fn run_audit_cleanup_once(data: &GatewayDataState) -> Result<(), DataLayerError> {
@@ -212,20 +212,21 @@ pub(super) async fn run_usage_cleanup_once(data: &GatewayDataState) -> Result<()
 }
 
 pub(super) fn run_pool_monitor_once(data: &GatewayDataState) {
-    let Some(summary) = summarize_postgres_pool(data) else {
+    let Some(summary) = summarize_database_pool(data) else {
         return;
     };
 
     info!(
-        event_name = "postgres_pool_sampled",
+        event_name = "database_pool_sampled",
         log_type = "ops",
         worker = "pool_monitor",
+        driver = %summary.driver,
         checked_out = summary.checked_out,
         pool_size = summary.pool_size,
         idle = summary.idle,
         max_connections = summary.max_connections,
         usage_rate = summary.usage_rate,
-        "gateway postgres pool status"
+        "gateway database pool status"
     );
 }
 

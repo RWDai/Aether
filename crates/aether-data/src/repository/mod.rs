@@ -1,3 +1,9 @@
+//! Domain repository implementations.
+//!
+//! Repository contracts and shared DTOs are re-exported from
+//! `aether-data-contracts` where possible. Driver-specific files under each
+//! domain translate those contracts to concrete Postgres/MySQL/SQLite SQL.
+
 pub mod announcements;
 pub mod audit;
 pub mod auth;

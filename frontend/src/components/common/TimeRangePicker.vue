@@ -22,21 +22,6 @@
         <SelectItem value="last90days">
           最近90天
         </SelectItem>
-        <SelectItem value="this_week">
-          本周
-        </SelectItem>
-        <SelectItem value="last_week">
-          上周
-        </SelectItem>
-        <SelectItem value="this_month">
-          本月
-        </SelectItem>
-        <SelectItem value="last_month">
-          上月
-        </SelectItem>
-        <SelectItem value="this_year">
-          今年
-        </SelectItem>
         <SelectItem value="custom">
           自定义
         </SelectItem>
@@ -110,7 +95,20 @@ const emit = defineEmits<{
   'update:modelValue': [value: DateRangeParams]
 }>()
 
-const selectedPreset = ref(props.modelValue.preset || 'last7days')
+const selectablePresets = ['today', 'yesterday', 'last7days', 'last30days', 'last90days', 'custom'] as const
+type SelectablePreset = typeof selectablePresets[number]
+
+function normalizePreset(value: DateRangeParams): SelectablePreset {
+  if (value.preset && selectablePresets.includes(value.preset as SelectablePreset)) {
+    return value.preset as SelectablePreset
+  }
+  if (!value.preset && (value.start_date || value.end_date)) {
+    return 'custom'
+  }
+  return 'last7days'
+}
+
+const selectedPreset = ref<SelectablePreset>(normalizePreset(props.modelValue))
 const startDate = ref(props.modelValue.start_date || '')
 const endDate = ref(props.modelValue.end_date || '')
 const selectedGranularity = ref(props.modelValue.granularity || 'day')
@@ -162,7 +160,7 @@ function getValueKey(value: DateRangeParams): string {
 }
 
 watch(() => props.modelValue, (value) => {
-  if (value.preset) selectedPreset.value = value.preset
+  selectedPreset.value = normalizePreset(value)
   if (value.start_date !== undefined) startDate.value = value.start_date || ''
   if (value.end_date !== undefined) endDate.value = value.end_date || ''
   if (value.granularity) selectedGranularity.value = value.granularity

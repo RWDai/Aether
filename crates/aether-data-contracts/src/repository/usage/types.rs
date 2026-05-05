@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 /// Joined usage read model assembled from the accounting row plus the newer audit/snapshot
@@ -1627,11 +1628,56 @@ pub trait UsageWriteRepository: Send + Sync {
     async fn rebuild_api_key_usage_stats(&self) -> Result<u64, crate::DataLayerError>;
 
     async fn rebuild_provider_api_key_usage_stats(&self) -> Result<u64, crate::DataLayerError>;
+
+    async fn cleanup_stale_pending_requests(
+        &self,
+        cutoff_unix_secs: u64,
+        now_unix_secs: u64,
+        timeout_minutes: u64,
+        batch_size: usize,
+    ) -> Result<PendingUsageCleanupSummary, crate::DataLayerError> {
+        let _ = (cutoff_unix_secs, now_unix_secs, timeout_minutes, batch_size);
+        Ok(PendingUsageCleanupSummary::default())
+    }
+
+    async fn cleanup_usage(
+        &self,
+        window: &UsageCleanupWindow,
+        batch_size: usize,
+        auto_delete_expired_keys: bool,
+    ) -> Result<UsageCleanupSummary, crate::DataLayerError> {
+        let _ = (window, batch_size, auto_delete_expired_keys);
+        Ok(UsageCleanupSummary::default())
+    }
 }
 
 pub trait UsageRepository: UsageReadRepository + UsageWriteRepository + Send + Sync {}
 
 impl<T> UsageRepository for T where T: UsageReadRepository + UsageWriteRepository + Send + Sync {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PendingUsageCleanupSummary {
+    pub failed: usize,
+    pub recovered: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub struct UsageCleanupSummary {
+    pub body_externalized: usize,
+    pub legacy_body_refs_migrated: usize,
+    pub body_cleaned: usize,
+    pub header_cleaned: usize,
+    pub keys_cleaned: usize,
+    pub records_deleted: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct UsageCleanupWindow {
+    pub detail_cutoff: DateTime<Utc>,
+    pub compressed_cutoff: DateTime<Utc>,
+    pub header_cutoff: DateTime<Utc>,
+    pub log_cutoff: DateTime<Utc>,
+}
 
 fn parse_u64(value: i32, field_name: &str) -> Result<u64, crate::DataLayerError> {
     u64::try_from(value).map_err(|_| {

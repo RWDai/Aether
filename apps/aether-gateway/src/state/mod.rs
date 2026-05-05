@@ -18,10 +18,10 @@ mod types;
 mod video;
 
 pub(crate) use self::admin_types::{
-    AdminBillingCollectorRecord, AdminBillingCollectorWriteInput, AdminBillingPresetApplyResult,
-    AdminBillingRuleRecord, AdminBillingRuleWriteInput, AdminPaymentCallbackRecord,
-    AdminSecurityBlacklistEntry, AdminWalletPaymentOrderRecord, AdminWalletRefundRecord,
-    AdminWalletTransactionRecord,
+    AdminBillingCollectorRecord, AdminBillingCollectorWriteInput, AdminBillingMutationOutcome,
+    AdminBillingPresetApplyResult, AdminBillingRuleRecord, AdminBillingRuleWriteInput,
+    AdminPaymentCallbackRecord, AdminSecurityBlacklistEntry, AdminWalletPaymentOrderRecord,
+    AdminWalletRefundRecord, AdminWalletTransactionRecord,
 };
 pub use self::app::AppState;
 pub(crate) use self::cache::{

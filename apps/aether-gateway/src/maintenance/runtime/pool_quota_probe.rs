@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use aether_data::redis::{RedisKvRunner, RedisLockLease, RedisLockRunner};
+use aether_data::driver::redis::{RedisKvRunner, RedisLockLease, RedisLockRunner};
 use aether_data_contracts::repository::provider_catalog::{
     StoredProviderCatalogEndpoint, StoredProviderCatalogKey, StoredProviderCatalogProvider,
 };

@@ -1,8 +1,6 @@
 use super::requests::ADMIN_WALLETS_API_KEY_GIFT_ADJUST_DETAIL;
 use crate::handlers::admin::request::AdminRequestContext;
 use crate::handlers::admin::shared::query_param_value;
-use crate::GatewayError;
-use sqlx::Row;
 
 pub(in super::super) fn admin_wallet_operator_id(
     request_context: &AdminRequestContext<'_>,
@@ -196,17 +194,6 @@ pub(in super::super) fn parse_admin_wallets_owner_type_filter(
         Some(value) if value.eq_ignore_ascii_case("api_key") => Some("api_key".to_string()),
         _ => None,
     }
-}
-
-pub(in super::super) fn optional_epoch_value(
-    row: &sqlx::postgres::PgRow,
-    key: &str,
-) -> Result<Option<String>, GatewayError> {
-    Ok(row
-        .try_get::<Option<i64>, _>(key)
-        .map_err(|err| GatewayError::Internal(err.to_string()))?
-        .and_then(|value| u64::try_from(value).ok())
-        .and_then(crate::handlers::admin::shared::unix_secs_to_rfc3339))
 }
 
 pub(in super::super) fn admin_wallet_build_order_no(now: chrono::DateTime<chrono::Utc>) -> String {

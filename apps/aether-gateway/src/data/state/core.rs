@@ -1,5 +1,5 @@
-use aether_data::redis::{RedisKvRunner, RedisKvRunnerConfig, RedisLockRunner};
-use aether_data::{DataBackends, DataLayerError};
+use aether_data::driver::redis::{RedisKvRunner, RedisKvRunnerConfig, RedisLockRunner};
+use aether_data::{DataBackends, DataLayerError, DatabaseDriver};
 
 use super::{GatewayDataConfig, GatewayDataState, StoredSystemConfigEntry};
 
@@ -138,6 +138,36 @@ impl GatewayDataState {
         self.backends.is_some()
     }
 
+    pub(crate) fn has_database_maintenance_backend(&self) -> bool {
+        self.backends
+            .as_ref()
+            .is_some_and(|backends| backends.has_database_maintenance_backend())
+    }
+
+    pub(crate) fn has_database_pool_summary(&self) -> bool {
+        self.backends
+            .as_ref()
+            .is_some_and(|backends| backends.has_database_pool_summary())
+    }
+
+    pub(crate) fn has_wallet_daily_usage_aggregation_backend(&self) -> bool {
+        self.backends
+            .as_ref()
+            .is_some_and(|backends| backends.has_wallet_daily_usage_aggregation_backend())
+    }
+
+    pub(crate) fn has_stats_hourly_aggregation_backend(&self) -> bool {
+        self.backends
+            .as_ref()
+            .is_some_and(|backends| backends.has_stats_hourly_aggregation_backend())
+    }
+
+    pub(crate) fn has_stats_daily_aggregation_backend(&self) -> bool {
+        self.backends
+            .as_ref()
+            .is_some_and(|backends| backends.has_stats_daily_aggregation_backend())
+    }
+
     pub(crate) fn has_auth_api_key_reader(&self) -> bool {
         self.auth_api_key_reader.is_some()
     }
@@ -156,6 +186,13 @@ impl GatewayDataState {
 
     pub(crate) fn has_announcement_writer(&self) -> bool {
         self.announcement_writer.is_some()
+    }
+
+    pub(crate) fn has_audit_log_reader(&self) -> bool {
+        self.backends
+            .as_ref()
+            .and_then(|backends| backends.read().audit_logs())
+            .is_some()
     }
 
     pub(crate) fn has_management_token_reader(&self) -> bool {
@@ -223,8 +260,7 @@ impl GatewayDataState {
             || self
                 .backends
                 .as_ref()
-                .and_then(|backends| backends.postgres())
-                .is_some()
+                .is_some_and(|backends| backends.has_system_config_backend())
     }
 
     pub(crate) fn oauth_refresh_lock_runner(&self) -> Option<RedisLockRunner> {
@@ -240,15 +276,10 @@ impl GatewayDataState {
             .and_then(|backend| backend.kv_runner(RedisKvRunnerConfig::default()).ok())
     }
 
-    pub(crate) fn postgres_pool(&self) -> Option<aether_data::postgres::PostgresPool> {
+    pub(crate) fn database_driver(&self) -> Option<DatabaseDriver> {
         self.backends
             .as_ref()
-            .and_then(|backends| backends.postgres())
-            .map(|backend| backend.pool_clone())
-    }
-
-    pub(crate) fn postgres_max_connections(&self) -> Option<u32> {
-        self.config.postgres().map(|config| config.max_connections)
+            .and_then(|backends| backends.database_driver())
     }
 
     pub(crate) fn has_provider_quota_writer(&self) -> bool {
@@ -307,14 +338,10 @@ impl GatewayDataState {
                 .get(key)
                 .map(|entry| entry.value.clone()));
         }
-        match self
-            .backends
-            .as_ref()
-            .and_then(|backends| backends.postgres())
-        {
-            Some(backend) => backend.find_system_config_value(key).await,
-            None => Ok(None),
-        }
+        let Some(backends) = self.backends.as_ref() else {
+            return Ok(None);
+        };
+        backends.find_system_config_value(key).await
     }
 
     pub(crate) async fn upsert_system_config_value(
@@ -340,14 +367,10 @@ impl GatewayDataState {
                 .cloned()
                 .collect());
         }
-        match self
-            .backends
-            .as_ref()
-            .and_then(|backends| backends.postgres())
-        {
-            Some(backend) => backend.list_system_config_entries().await,
-            None => Ok(Vec::new()),
-        }
+        let Some(backends) = self.backends.as_ref() else {
+            return Ok(Vec::new());
+        };
+        backends.list_system_config_entries().await
     }
 
     pub(crate) async fn upsert_system_config_entry(
@@ -370,23 +393,20 @@ impl GatewayDataState {
             values.insert(key.to_string(), entry.clone());
             return Ok(entry);
         }
-        match self
-            .backends
-            .as_ref()
-            .and_then(|backends| backends.postgres())
-        {
-            Some(backend) => {
-                backend
-                    .upsert_system_config_entry(key, value, description)
-                    .await
+        if let Some(backends) = self.backends.as_ref() {
+            if let Some(entry) = backends
+                .upsert_system_config_entry(key, value, description)
+                .await?
+            {
+                return Ok(entry);
             }
-            None => Ok(StoredSystemConfigEntry {
-                key: key.to_string(),
-                value: value.clone(),
-                description: description.map(ToOwned::to_owned),
-                updated_at_unix_secs: Some(current_system_config_updated_at_unix_secs()),
-            }),
         }
+        Ok(StoredSystemConfigEntry {
+            key: key.to_string(),
+            value: value.clone(),
+            description: description.map(ToOwned::to_owned),
+            updated_at_unix_secs: Some(current_system_config_updated_at_unix_secs()),
+        })
     }
 
     pub(crate) async fn delete_system_config_value(
@@ -400,25 +420,17 @@ impl GatewayDataState {
                 .remove(key)
                 .is_some());
         }
-        match self
-            .backends
-            .as_ref()
-            .and_then(|backends| backends.postgres())
-        {
-            Some(backend) => backend.delete_system_config_value(key).await,
-            None => Ok(false),
-        }
+        let Some(backends) = self.backends.as_ref() else {
+            return Ok(false);
+        };
+        backends.delete_system_config_value(key).await
     }
 
     pub(crate) async fn read_admin_system_stats(
         &self,
     ) -> Result<super::AdminSystemStats, DataLayerError> {
-        match self
-            .backends
-            .as_ref()
-            .and_then(|backends| backends.postgres())
-        {
-            Some(backend) => backend.read_admin_system_stats().await,
+        match self.backends.as_ref() {
+            Some(backends) => backends.read_admin_system_stats().await,
             None => Ok(super::AdminSystemStats::default()),
         }
     }

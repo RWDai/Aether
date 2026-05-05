@@ -23,7 +23,7 @@ async fn count_admin_monitoring_cache_affinity_entries(state: &AdminAppState<'_>
 }
 
 async fn scan_admin_monitoring_namespaced_keys(
-    runner: &aether_data::redis::RedisKvRunner,
+    runner: &aether_data::driver::redis::RedisKvRunner,
     pattern: &str,
 ) -> Result<Vec<String>, GatewayError> {
     let mut connection = runner

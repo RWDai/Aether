@@ -116,7 +116,7 @@ impl<'a> AdminAppState<'a> {
         self.app.mark_provider_key_rpm_reset(key_id, now_unix_secs)
     }
 
-    pub(crate) fn redis_kv_runner(&self) -> Option<aether_data::redis::RedisKvRunner> {
+    pub(crate) fn redis_kv_runner(&self) -> Option<aether_data::driver::redis::RedisKvRunner> {
         self.app.redis_kv_runner()
     }
 
@@ -128,8 +128,8 @@ impl<'a> AdminAppState<'a> {
         self.app.provider_key_rpm_reset_at(key_id, now_unix_secs)
     }
 
-    pub(crate) fn has_postgres_pool(&self) -> bool {
-        self.app.postgres_pool().is_some()
+    pub(crate) fn has_wallet_data_writer(&self) -> bool {
+        self.app.has_wallet_data_writer()
     }
 
     pub(crate) fn mark_admin_monitoring_error_stats_reset(&self, now_unix_secs: u64) {

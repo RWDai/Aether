@@ -3,11 +3,11 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use aether_data::postgres::{
+use aether_data::driver::postgres::{
     PostgresLeaseClaimOptions, PostgresLeaseClaimSpec, PostgresLeaseRunnerConfig,
     PostgresPoolConfig, PostgresTransactionOptions,
 };
-use aether_data::redis::{RedisClientConfig, RedisLockRunnerConfig};
+use aether_data::driver::redis::{RedisClientConfig, RedisLockRunnerConfig};
 use aether_data::{DataLayerError, PostgresBackend, RedisBackend};
 use aether_testkit::{
     init_test_runtime_for, reserve_local_port, ManagedPostgresServer, ManagedRedisServer,

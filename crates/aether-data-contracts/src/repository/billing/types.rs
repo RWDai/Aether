@@ -142,6 +142,14 @@ pub struct AdminBillingPresetApplyResult {
     pub errors: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum AdminBillingMutationOutcome<T> {
+    Applied(T),
+    NotFound,
+    Invalid(String),
+    Unavailable,
+}
+
 #[async_trait]
 pub trait BillingReadRepository: Send + Sync {
     async fn find_model_context(
@@ -159,5 +167,110 @@ pub trait BillingReadRepository: Send + Sync {
     ) -> Result<Option<StoredBillingModelContext>, crate::DataLayerError> {
         let _ = (provider_id, provider_api_key_id, model_id);
         Ok(None)
+    }
+
+    async fn admin_billing_enabled_default_value_exists(
+        &self,
+        api_format: &str,
+        task_type: &str,
+        dimension_name: &str,
+        existing_id: Option<&str>,
+    ) -> Result<Option<bool>, crate::DataLayerError> {
+        let _ = (api_format, task_type, dimension_name, existing_id);
+        Ok(None)
+    }
+
+    async fn create_admin_billing_rule(
+        &self,
+        input: &AdminBillingRuleWriteInput,
+    ) -> Result<AdminBillingMutationOutcome<AdminBillingRuleRecord>, crate::DataLayerError> {
+        let _ = input;
+        Ok(AdminBillingMutationOutcome::Unavailable)
+    }
+
+    async fn list_admin_billing_rules(
+        &self,
+        task_type: Option<&str>,
+        is_enabled: Option<bool>,
+        page: u32,
+        page_size: u32,
+    ) -> Result<Option<(Vec<AdminBillingRuleRecord>, u64)>, crate::DataLayerError> {
+        let _ = (task_type, is_enabled, page, page_size);
+        Ok(None)
+    }
+
+    async fn find_admin_billing_rule(
+        &self,
+        rule_id: &str,
+    ) -> Result<Option<AdminBillingRuleRecord>, crate::DataLayerError> {
+        let _ = rule_id;
+        Ok(None)
+    }
+
+    async fn update_admin_billing_rule(
+        &self,
+        rule_id: &str,
+        input: &AdminBillingRuleWriteInput,
+    ) -> Result<AdminBillingMutationOutcome<AdminBillingRuleRecord>, crate::DataLayerError> {
+        let _ = (rule_id, input);
+        Ok(AdminBillingMutationOutcome::Unavailable)
+    }
+
+    async fn create_admin_billing_collector(
+        &self,
+        input: &AdminBillingCollectorWriteInput,
+    ) -> Result<AdminBillingMutationOutcome<AdminBillingCollectorRecord>, crate::DataLayerError>
+    {
+        let _ = input;
+        Ok(AdminBillingMutationOutcome::Unavailable)
+    }
+
+    async fn list_admin_billing_collectors(
+        &self,
+        api_format: Option<&str>,
+        task_type: Option<&str>,
+        dimension_name: Option<&str>,
+        is_enabled: Option<bool>,
+        page: u32,
+        page_size: u32,
+    ) -> Result<Option<(Vec<AdminBillingCollectorRecord>, u64)>, crate::DataLayerError> {
+        let _ = (
+            api_format,
+            task_type,
+            dimension_name,
+            is_enabled,
+            page,
+            page_size,
+        );
+        Ok(None)
+    }
+
+    async fn find_admin_billing_collector(
+        &self,
+        collector_id: &str,
+    ) -> Result<Option<AdminBillingCollectorRecord>, crate::DataLayerError> {
+        let _ = collector_id;
+        Ok(None)
+    }
+
+    async fn update_admin_billing_collector(
+        &self,
+        collector_id: &str,
+        input: &AdminBillingCollectorWriteInput,
+    ) -> Result<AdminBillingMutationOutcome<AdminBillingCollectorRecord>, crate::DataLayerError>
+    {
+        let _ = (collector_id, input);
+        Ok(AdminBillingMutationOutcome::Unavailable)
+    }
+
+    async fn apply_admin_billing_preset(
+        &self,
+        preset: &str,
+        mode: &str,
+        collectors: &[AdminBillingCollectorWriteInput],
+    ) -> Result<AdminBillingMutationOutcome<AdminBillingPresetApplyResult>, crate::DataLayerError>
+    {
+        let _ = (preset, mode, collectors);
+        Ok(AdminBillingMutationOutcome::Unavailable)
     }
 }

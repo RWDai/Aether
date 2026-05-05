@@ -119,7 +119,7 @@ fn admin_wrapped_state_owns_billing_capabilities() {
     let admin_request =
         read_workspace_module_tree("apps/aether-gateway/src/handlers/admin/request/mod.rs");
     for pattern in [
-        "pub(crate) fn has_postgres_pool(&self) -> bool",
+        "pub(crate) fn has_wallet_data_writer(&self) -> bool",
         "pub(crate) async fn list_admin_billing_collectors(",
         "pub(crate) async fn read_admin_billing_collector(",
         "pub(crate) async fn create_admin_billing_collector(",

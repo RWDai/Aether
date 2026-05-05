@@ -25,12 +25,10 @@ use super::{
     spawn_proxy_upgrade_rollout_worker, spawn_stats_aggregation_worker,
     spawn_stats_hourly_aggregation_worker, spawn_usage_cleanup_worker,
     spawn_wallet_daily_usage_aggregation_worker, start_proxy_upgrade_rollout,
-    stats_aggregation_target_day, stats_hourly_aggregation_target_hour, summarize_postgres_pool,
+    stats_aggregation_target_day, stats_hourly_aggregation_target_hour, summarize_database_pool,
     usage_cleanup_settings, usage_cleanup_window, wallet_daily_usage_aggregation_target, AppState,
     DbMaintenanceRunSummary, FailedPendingUsageRow, GatewayDataState,
-    ProxyUpgradeRolloutProbeConfig, StalePendingUsageRow, UsageCleanupSettings,
-    DELETE_STALE_WALLET_DAILY_USAGE_LEDGERS_SQL, SELECT_STALE_PENDING_USAGE_BATCH_SQL,
-    UPDATE_FAILED_VOID_STALE_USAGE_SQL, UPSERT_WALLET_DAILY_USAGE_LEDGER_SQL, USAGE_CLEANUP_HOUR,
+    ProxyUpgradeRolloutProbeConfig, StalePendingUsageRow, UsageCleanupSettings, USAGE_CLEANUP_HOUR,
     USAGE_CLEANUP_MINUTE, WALLET_DAILY_USAGE_AGGREGATION_HOUR,
     WALLET_DAILY_USAGE_AGGREGATION_MINUTE,
 };
@@ -41,12 +39,12 @@ async fn spawn_audit_cleanup_worker_skips_when_postgres_unavailable() {
 }
 
 #[tokio::test]
-async fn spawn_db_maintenance_worker_skips_when_postgres_unavailable() {
+async fn spawn_db_maintenance_worker_skips_when_database_maintenance_unavailable() {
     assert!(spawn_db_maintenance_worker(Arc::new(GatewayDataState::disabled())).is_none());
 }
 
 #[tokio::test]
-async fn spawn_pending_cleanup_worker_skips_when_postgres_unavailable() {
+async fn spawn_pending_cleanup_worker_skips_when_usage_writer_unavailable() {
     assert!(spawn_pending_cleanup_worker(Arc::new(GatewayDataState::disabled())).is_none());
 }
 
@@ -87,24 +85,6 @@ async fn spawn_pool_quota_probe_worker_skips_when_provider_catalog_unavailable()
         .with_data_state_for_tests(GatewayDataState::disabled());
 
     assert!(spawn_pool_quota_probe_worker(state).is_none());
-}
-
-#[test]
-fn wallet_daily_usage_queries_use_settlement_snapshots_for_wallet_identity() {
-    assert!(UPSERT_WALLET_DAILY_USAGE_LEDGER_SQL.contains("JOIN usage_settlement_snapshots"));
-    assert!(UPSERT_WALLET_DAILY_USAGE_LEDGER_SQL.contains("usage_settlement_snapshots.wallet_id"));
-    assert!(DELETE_STALE_WALLET_DAILY_USAGE_LEDGERS_SQL.contains("JOIN usage_settlement_snapshots"));
-    assert!(DELETE_STALE_WALLET_DAILY_USAGE_LEDGERS_SQL
-        .contains("usage_settlement_snapshots.wallet_id = ledgers.wallet_id"));
-}
-
-#[test]
-fn pending_cleanup_queries_use_settlement_snapshots_for_billing_authority() {
-    assert!(SELECT_STALE_PENDING_USAGE_BATCH_SQL.contains("LEFT JOIN usage_settlement_snapshots"));
-    assert!(SELECT_STALE_PENDING_USAGE_BATCH_SQL
-        .contains("COALESCE(usage_settlement_snapshots.billing_status, usage.billing_status)"));
-    assert!(UPDATE_FAILED_VOID_STALE_USAGE_SQL.contains("INSERT INTO usage_settlement_snapshots"));
-    assert!(UPDATE_FAILED_VOID_STALE_USAGE_SQL.contains("billing_status = EXCLUDED.billing_status"));
 }
 
 fn sample_connected_proxy_node(
@@ -548,24 +528,25 @@ async fn proxy_upgrade_rollout_active_probe_advances_next_wave_after_version_con
 }
 
 #[tokio::test]
-async fn spawn_stats_aggregation_worker_skips_when_postgres_unavailable() {
+async fn spawn_stats_aggregation_worker_skips_when_stats_daily_backend_unavailable() {
     assert!(spawn_stats_aggregation_worker(Arc::new(GatewayDataState::disabled())).is_none());
 }
 
 #[tokio::test]
-async fn spawn_stats_hourly_aggregation_worker_skips_when_postgres_unavailable() {
+async fn spawn_stats_hourly_aggregation_worker_skips_when_stats_hourly_backend_unavailable() {
     assert!(
         spawn_stats_hourly_aggregation_worker(Arc::new(GatewayDataState::disabled())).is_none()
     );
 }
 
 #[tokio::test]
-async fn spawn_usage_cleanup_worker_skips_when_postgres_unavailable() {
+async fn spawn_usage_cleanup_worker_skips_when_usage_writer_unavailable() {
     assert!(spawn_usage_cleanup_worker(Arc::new(GatewayDataState::disabled())).is_none());
 }
 
 #[tokio::test]
-async fn spawn_wallet_daily_usage_aggregation_worker_skips_when_postgres_unavailable() {
+async fn spawn_wallet_daily_usage_aggregation_worker_skips_when_wallet_daily_usage_backend_unavailable(
+) {
     assert!(
         spawn_wallet_daily_usage_aggregation_worker(Arc::new(GatewayDataState::disabled()))
             .is_none()
@@ -780,9 +761,9 @@ fn usage_cleanup_window_uses_non_overlapping_ranges() {
 }
 
 #[tokio::test]
-async fn summarize_postgres_pool_uses_busy_connections_for_usage_rate() {
+async fn summarize_database_pool_uses_busy_connections_for_usage_rate() {
     let data = GatewayDataState::from_config(crate::data::GatewayDataConfig::from_postgres_config(
-        aether_data::postgres::PostgresPoolConfig {
+        aether_data::driver::postgres::PostgresPoolConfig {
             database_url: "postgres://localhost/aether".to_string(),
             min_connections: 1,
             max_connections: 8,
@@ -795,8 +776,9 @@ async fn summarize_postgres_pool_uses_busy_connections_for_usage_rate() {
     ))
     .expect("gateway data state should build");
 
-    let summary = summarize_postgres_pool(&data).expect("pool summary should exist");
+    let summary = summarize_database_pool(&data).expect("pool summary should exist");
 
+    assert_eq!(summary.driver, aether_data::DatabaseDriver::Postgres);
     assert_eq!(summary.checked_out, 0);
     assert_eq!(summary.pool_size, 0);
     assert_eq!(summary.idle, 0);

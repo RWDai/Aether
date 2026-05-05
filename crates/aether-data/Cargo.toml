@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Shared data access contracts and config for Aether Rust services"
+build = "build.rs"
 
 [dependencies]
 aether-ai-formats.workspace = true
@@ -13,6 +14,7 @@ aether-cache.workspace = true
 aether-wallet.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
+chrono-tz.workspace = true
 futures-util.workspace = true
 flate2.workspace = true
 redis.workspace = true

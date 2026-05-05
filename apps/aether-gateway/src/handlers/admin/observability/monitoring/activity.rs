@@ -6,7 +6,6 @@ use super::route_filters::{
 };
 use crate::constants::INTERNAL_GATEWAY_PATH_PREFIXES;
 use crate::handlers::admin::request::{AdminAppState, AdminRequestContext};
-use crate::query::monitoring as monitoring_query;
 use crate::GatewayError;
 use aether_admin::observability::monitoring::{
     admin_monitoring_bad_request_response, admin_monitoring_user_behavior_user_id_from_path,
@@ -41,33 +40,21 @@ pub(super) async fn build_admin_monitoring_audit_logs_response(
         Err(detail) => return Ok(admin_monitoring_bad_request_response(detail)),
     };
 
-    let Some(pool) = state.postgres_pool() else {
-        return Ok(build_admin_monitoring_audit_logs_payload_response(
-            Vec::new(),
-            0,
-            limit,
-            offset,
-            username,
-            event_type,
-            days,
-        ));
-    };
-
     let cutoff_time = chrono::Utc::now() - chrono::Duration::days(days);
     let username_pattern = username
         .as_deref()
         .map(admin_monitoring_escape_like_pattern)
         .map(|value| format!("%{value}%"));
 
-    let (items, total) = monitoring_query::list_admin_audit_logs(
-        &pool,
-        cutoff_time,
-        username_pattern.as_deref(),
-        event_type.as_deref(),
-        limit,
-        offset,
-    )
-    .await?;
+    let (items, total) = state
+        .list_admin_audit_logs(
+            cutoff_time,
+            username_pattern.as_deref(),
+            event_type.as_deref(),
+            limit,
+            offset,
+        )
+        .await?;
 
     Ok(build_admin_monitoring_audit_logs_payload_response(
         items, total, limit, offset, username, event_type, days,
@@ -85,14 +72,8 @@ pub(super) async fn build_admin_monitoring_suspicious_activities_response(
         Err(detail) => return Ok(admin_monitoring_bad_request_response(detail)),
     };
 
-    let Some(pool) = state.postgres_pool() else {
-        return Ok(
-            build_admin_monitoring_suspicious_activities_payload_response(Vec::new(), hours),
-        );
-    };
-
     let cutoff_time = chrono::Utc::now() - chrono::Duration::hours(hours);
-    let activities = monitoring_query::list_admin_suspicious_activities(&pool, cutoff_time).await?;
+    let activities = state.list_admin_suspicious_activities(cutoff_time).await?;
 
     Ok(build_admin_monitoring_suspicious_activities_payload_response(activities, hours))
 }
@@ -112,22 +93,11 @@ pub(super) async fn build_admin_monitoring_user_behavior_response(
         Err(detail) => return Ok(admin_monitoring_bad_request_response(detail)),
     };
 
-    let Some(pool) = state.postgres_pool() else {
-        return Ok(build_admin_monitoring_user_behavior_payload_response(
-            user_id,
-            days,
-            std::collections::BTreeMap::new(),
-            0,
-            0,
-            0,
-        ));
-    };
-
     let cutoff_time = chrono::Utc::now() - chrono::Duration::days(days);
 
-    let event_counts =
-        monitoring_query::read_admin_user_behavior_event_counts(&pool, &user_id, cutoff_time)
-            .await?;
+    let event_counts = state
+        .read_admin_user_behavior_event_counts(&user_id, cutoff_time)
+        .await?;
 
     let failed_requests = event_counts
         .get("request_failed")

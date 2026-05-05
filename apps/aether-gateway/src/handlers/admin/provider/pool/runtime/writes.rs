@@ -5,7 +5,7 @@ use super::keys::{
 use crate::handlers::admin::provider::shared::support::{
     AdminProviderPoolConfig, AdminProviderPoolUnschedulableRule,
 };
-use aether_data::redis::RedisKvRunner;
+use aether_data::driver::redis::RedisKvRunner;
 use regex::Regex;
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};

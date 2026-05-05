@@ -1,9 +1,13 @@
 mod memory;
-mod sql;
+mod mysql;
+mod postgres;
+mod sqlite;
 mod types;
 
 pub use memory::InMemoryWalletRepository;
-pub use sql::SqlxWalletRepository;
+pub use mysql::MysqlWalletReadRepository;
+pub use postgres::SqlxWalletRepository;
+pub use sqlite::SqliteWalletReadRepository;
 pub use types::{
     AdjustWalletBalanceInput, AdminPaymentCallbackRecord, AdminPaymentOrderListQuery,
     AdminRedeemCodeBatchListQuery, AdminRedeemCodeListQuery, AdminWalletLedgerQuery,

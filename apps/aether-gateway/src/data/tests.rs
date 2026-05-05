@@ -8,8 +8,11 @@ use aether_data::repository::candidate_selection::InMemoryMinimalCandidateSelect
 use aether_data::repository::candidates::InMemoryRequestCandidateRepository;
 use aether_data::repository::provider_catalog::InMemoryProviderCatalogReadRepository;
 use aether_data::repository::usage::InMemoryUsageReadRepository;
+use aether_data::repository::users::{
+    InMemoryUserReadRepository, StoredUserAuthRecord, StoredUserPreferenceRecord,
+};
 use aether_data::repository::video_tasks::InMemoryVideoTaskRepository;
-use aether_data::DataLayerError;
+use aether_data::{DataLayerError, DatabaseDriver, SqlDatabaseConfig, SqlPoolConfig};
 use aether_data_contracts::repository::candidate_selection::{
     StoredMinimalCandidateSelectionRow, StoredProviderModelMapping,
 };
@@ -142,6 +145,176 @@ async fn app_state_wires_gateway_data_state_from_config() {
     assert!(state.data.has_proxy_node_writer());
     assert!(state.data.has_usage_reader());
     assert!(state.data.has_video_task_reader());
+}
+
+#[tokio::test]
+async fn app_state_prepares_sqlite_database_startup() -> Result<(), Box<dyn std::error::Error>> {
+    let mut pool = SqlPoolConfig::default();
+    pool.min_connections = 0;
+    pool.max_connections = 1;
+    let database = SqlDatabaseConfig::new(DatabaseDriver::Sqlite, "sqlite::memory:", pool)?;
+    let state =
+        AppState::new()?.with_data_config(GatewayDataConfig::from_database_config(database))?;
+
+    let pending = state
+        .prepare_database_for_startup()
+        .await?
+        .expect("sqlite database should expose migration state");
+    assert!(
+        !pending.is_empty(),
+        "fresh sqlite gateway databases should report pending migrations"
+    );
+
+    assert!(
+        state.run_database_migrations().await?,
+        "sqlite gateway database should run migrations"
+    );
+    let pending = state
+        .prepare_database_for_startup()
+        .await?
+        .expect("sqlite database should expose migration state");
+    assert!(
+        pending.is_empty(),
+        "sqlite gateway databases should be current after migrations"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn data_state_checks_user_uniqueness_through_user_reader() {
+    let user = StoredUserAuthRecord::new(
+        "user-1".to_string(),
+        Some("alice@example.com".to_string()),
+        true,
+        "alice".to_string(),
+        Some("hash".to_string()),
+        "user".to_string(),
+        "local".to_string(),
+        None,
+        None,
+        None,
+        true,
+        false,
+        None,
+        None,
+    )
+    .expect("auth user should build");
+    let admin = StoredUserAuthRecord::new(
+        "admin-1".to_string(),
+        Some("admin@example.com".to_string()),
+        true,
+        "admin".to_string(),
+        Some(format!("$2b$12${}", "a".repeat(53))),
+        "admin".to_string(),
+        "local".to_string(),
+        None,
+        None,
+        None,
+        true,
+        false,
+        None,
+        None,
+    )
+    .expect("admin user should build");
+    let state = GatewayDataState::with_user_reader_for_tests(Arc::new(
+        InMemoryUserReadRepository::seed_auth_users(vec![user, admin]),
+    ));
+
+    assert!(state
+        .is_other_user_auth_email_taken("alice@example.com", "other-user")
+        .await
+        .expect("email uniqueness should check"));
+    assert!(!state
+        .is_other_user_auth_email_taken("alice@example.com", "user-1")
+        .await
+        .expect("same user email should not be taken"));
+    assert!(!state
+        .is_other_user_auth_email_taken("alice", "other-user")
+        .await
+        .expect("email lookup should not match username"));
+    assert!(state
+        .is_other_user_auth_username_taken("alice", "other-user")
+        .await
+        .expect("username uniqueness should check"));
+    assert_eq!(
+        state
+            .count_active_admin_users()
+            .await
+            .expect("active admin count should check"),
+        1
+    );
+    assert_eq!(
+        state
+            .count_active_local_admin_users_with_valid_password()
+            .await
+            .expect("valid local admin count should check"),
+        1
+    );
+    let preferences = StoredUserPreferenceRecord {
+        user_id: "user-1".to_string(),
+        avatar_url: Some("https://example.test/avatar.png".to_string()),
+        bio: Some("hello".to_string()),
+        default_provider_id: None,
+        default_provider_name: None,
+        theme: "dark".to_string(),
+        language: "en-US".to_string(),
+        timezone: "UTC".to_string(),
+        email_notifications: false,
+        usage_alerts: true,
+        announcement_notifications: false,
+    };
+    assert_eq!(
+        state
+            .write_user_preferences(&preferences)
+            .await
+            .expect("preferences should write through repository"),
+        Some(preferences.clone())
+    );
+    assert_eq!(
+        state
+            .read_user_preferences("user-1")
+            .await
+            .expect("preferences should read through repository"),
+        Some(preferences)
+    );
+}
+
+#[tokio::test]
+async fn data_state_finds_active_provider_name_through_catalog_reader() {
+    let active = StoredProviderCatalogProvider::new(
+        "provider-1".to_string(),
+        "Provider One".to_string(),
+        None,
+        "openai".to_string(),
+    )
+    .expect("provider should build");
+    let inactive = StoredProviderCatalogProvider::new(
+        "provider-2".to_string(),
+        "Provider Two".to_string(),
+        None,
+        "openai".to_string(),
+    )
+    .expect("provider should build")
+    .with_transport_fields(false, false, false, None, None, None, None, None, None);
+    let state = GatewayDataState::with_provider_catalog_reader_for_tests(Arc::new(
+        InMemoryProviderCatalogReadRepository::seed(vec![active, inactive], Vec::new(), Vec::new()),
+    ));
+
+    assert_eq!(
+        state
+            .find_active_provider_name("provider-1")
+            .await
+            .expect("provider lookup should succeed"),
+        Some("Provider One".to_string())
+    );
+    assert_eq!(
+        state
+            .find_active_provider_name("provider-2")
+            .await
+            .expect("inactive provider lookup should succeed"),
+        None
+    );
 }
 
 fn sample_auth_snapshot(api_key_id: &str, user_id: &str) -> StoredAuthApiKeySnapshot {

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use aether_data::redis::{RedisConsumerName, RedisStreamEntry, RedisStreamRunner};
+use aether_data::driver::redis::{RedisConsumerName, RedisStreamEntry, RedisStreamRunner};
 use aether_data_contracts::repository::usage::{StoredRequestUsageAudit, UpsertUsageRecord};
 use aether_data_contracts::DataLayerError;
 use async_trait::async_trait;

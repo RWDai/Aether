@@ -1,5 +1,7 @@
 mod memory;
-mod sql;
+mod mysql;
+mod postgres;
+mod sqlite;
 
 #[allow(unused_imports)]
 pub(crate) use aether_data_contracts::repository::video_tasks::{
@@ -8,4 +10,6 @@ pub(crate) use aether_data_contracts::repository::video_tasks::{
     VideoTaskStatusCount, VideoTaskWriteRepository,
 };
 pub use memory::InMemoryVideoTaskRepository;
-pub use sql::{SqlxVideoTaskReadRepository, SqlxVideoTaskRepository};
+pub use mysql::MysqlVideoTaskRepository;
+pub use postgres::{SqlxVideoTaskReadRepository, SqlxVideoTaskRepository};
+pub use sqlite::SqliteVideoTaskRepository;

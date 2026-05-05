@@ -8,6 +8,10 @@ pub(crate) fn redis_error(error: impl std::fmt::Display) -> DataLayerError {
     DataLayerError::redis(error)
 }
 
+pub(crate) fn sql_error(error: impl std::fmt::Display) -> DataLayerError {
+    DataLayerError::sql(error)
+}
+
 pub(crate) trait SqlxResultExt<T> {
     fn map_postgres_err(self) -> Result<T, DataLayerError>;
 }
@@ -25,5 +29,15 @@ pub(crate) trait RedisResultExt<T> {
 impl<T> RedisResultExt<T> for Result<T, redis::RedisError> {
     fn map_redis_err(self) -> Result<T, DataLayerError> {
         self.map_err(redis_error)
+    }
+}
+
+pub(crate) trait SqlResultExt<T> {
+    fn map_sql_err(self) -> Result<T, DataLayerError>;
+}
+
+impl<T> SqlResultExt<T> for Result<T, sqlx::Error> {
+    fn map_sql_err(self) -> Result<T, DataLayerError> {
+        self.map_err(sql_error)
     }
 }

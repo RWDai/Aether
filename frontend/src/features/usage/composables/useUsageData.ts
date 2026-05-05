@@ -70,7 +70,7 @@ export function useUsageData(options: UseUsageDataOptions) {
   })
 
   // 加载统计数据（不加载记录）
-  async function loadStats(dateRange?: DateRangeParams) {
+  async function loadStats(dateRange?: DateRangeParams): Promise<boolean> {
     const requestId = ++loadStatsRequestId
     isLoadingStats.value = true
     currentDateRange.value = dateRange
@@ -78,182 +78,227 @@ export function useUsageData(options: UseUsageDataOptions) {
     try {
       if (isAdminPage.value) {
         // 管理员页面顺序加载统计数据，避免刷新使用记录时瞬时打满后端 worker。
-        const statsData = await usageApi.getUsageStats(dateRange)
+        stats.value = createDefaultStats()
+        modelStats.value = []
+        providerStats.value = []
+        apiFormatStats.value = []
+        availableModels.value = []
+        availableProviders.value = []
 
-        if (requestId !== loadStatsRequestId) {
-          return
+        let hadFailure = false
+        const markFailure = (error: unknown) => {
+          hadFailure = true
+          if (getErrorStatus(error) !== 403) {
+            log.error('加载统计数据失败:', error)
+          }
         }
 
-        // statsData may contain additional fields not declared in UsageStats
-        const statsRaw = statsData as Record<string, unknown>
-        stats.value = {
-          total_requests: statsData.total_requests || 0,
-          total_tokens: statsData.total_tokens || 0,
-          total_cost: statsData.total_cost || 0,
-          total_actual_cost: statsData.total_actual_cost,
-          avg_response_time: statsData.avg_response_time || 0,
-          error_count: typeof statsRaw.error_count === 'number' ? statsRaw.error_count : undefined,
-          error_rate: typeof statsRaw.error_rate === 'number' ? statsRaw.error_rate : undefined,
-          cache_stats: statsRaw.cache_stats as UsageStatsState['cache_stats'],
-          period_start: '',
-          period_end: '',
+        try {
+          const statsData = await usageApi.getUsageStats(dateRange)
+          if (requestId !== loadStatsRequestId) {
+            return true
+          }
+
+          // statsData may contain additional fields not declared in UsageStats
+          const statsRaw = statsData as Record<string, unknown>
+          stats.value = {
+            total_requests: statsData.total_requests || 0,
+            total_tokens: statsData.total_tokens || 0,
+            total_cost: statsData.total_cost || 0,
+            total_actual_cost: statsData.total_actual_cost,
+            avg_response_time: statsData.avg_response_time || 0,
+            error_count: typeof statsRaw.error_count === 'number' ? statsRaw.error_count : undefined,
+            error_rate: typeof statsRaw.error_rate === 'number' ? statsRaw.error_rate : undefined,
+            cache_stats: statsRaw.cache_stats as UsageStatsState['cache_stats'],
+            period_start: '',
+            period_end: '',
+          }
+        } catch (error) {
+          if (requestId !== loadStatsRequestId) {
+            return true
+          }
+          markFailure(error)
         }
 
-        const modelData = await usageApi.getUsageByModel(dateRange)
-        if (requestId !== loadStatsRequestId) {
-          return
+        try {
+          const modelData = await usageApi.getUsageByModel(dateRange)
+          if (requestId !== loadStatsRequestId) {
+            return true
+          }
+
+          modelStats.value = modelData.map(item => {
+            const raw = item as Record<string, unknown>
+            return {
+              model: item.model,
+              request_count: item.request_count || 0,
+              total_tokens: item.total_tokens || 0,
+              effective_input_tokens: typeof raw.effective_input_tokens === 'number' ? raw.effective_input_tokens : 0,
+              total_input_context: typeof raw.total_input_context === 'number' ? raw.total_input_context : 0,
+              output_tokens: typeof raw.output_tokens === 'number' ? raw.output_tokens : 0,
+              cache_read_tokens: typeof raw.cache_read_tokens === 'number' ? raw.cache_read_tokens : 0,
+              cache_creation_tokens: typeof raw.cache_creation_tokens === 'number' ? raw.cache_creation_tokens : 0,
+              cache_hit_rate: typeof raw.cache_hit_rate === 'number' ? raw.cache_hit_rate : 0,
+              total_cost: item.total_cost || 0,
+              actual_cost: typeof raw.actual_cost === 'number' ? raw.actual_cost : undefined
+            }
+          })
+
+          availableModels.value = modelData.map(item => item.model).filter(Boolean).sort()
+        } catch (error) {
+          if (requestId !== loadStatsRequestId) {
+            return true
+          }
+          markFailure(error)
         }
 
-        modelStats.value = modelData.map(item => {
-          const raw = item as Record<string, unknown>
-          return {
-            model: item.model,
+        try {
+          const providerData = await usageApi.getUsageByProvider(dateRange)
+          if (requestId !== loadStatsRequestId) {
+            return true
+          }
+
+          providerStats.value = providerData.map(item => ({
+            provider: item.provider,
+            requests: item.request_count,
+            totalTokens: item.total_tokens || 0,
+            effectiveInputTokens: item.effective_input_tokens || 0,
+            totalInputContext: item.total_input_context || 0,
+            outputTokens: item.output_tokens || 0,
+            cacheReadTokens: item.cache_read_tokens || 0,
+            cacheCreationTokens: item.cache_creation_tokens || 0,
+            cacheHitRate: item.cache_hit_rate || 0,
+            totalCost: item.total_cost,
+            actualCost: item.actual_cost,
+            successRate: item.success_rate,
+            avgResponseTime: item.avg_response_time_ms > 0
+              ? `${(item.avg_response_time_ms / 1000).toFixed(2)}s`
+              : '-'
+          }))
+
+          availableProviders.value = providerData.map(item => item.provider).filter(Boolean).sort()
+        } catch (error) {
+          if (requestId !== loadStatsRequestId) {
+            return true
+          }
+          markFailure(error)
+        }
+
+        try {
+          const apiFormatData = await usageApi.getUsageByApiFormat(dateRange)
+          if (requestId !== loadStatsRequestId) {
+            return true
+          }
+
+          apiFormatStats.value = apiFormatData.map(item => ({
+            api_format: item.api_format,
             request_count: item.request_count || 0,
             total_tokens: item.total_tokens || 0,
-            effective_input_tokens: typeof raw.effective_input_tokens === 'number' ? raw.effective_input_tokens : 0,
-            total_input_context: typeof raw.total_input_context === 'number' ? raw.total_input_context : 0,
-            output_tokens: typeof raw.output_tokens === 'number' ? raw.output_tokens : 0,
-            cache_read_tokens: typeof raw.cache_read_tokens === 'number' ? raw.cache_read_tokens : 0,
-            cache_creation_tokens: typeof raw.cache_creation_tokens === 'number' ? raw.cache_creation_tokens : 0,
-            cache_hit_rate: typeof raw.cache_hit_rate === 'number' ? raw.cache_hit_rate : 0,
+            effective_input_tokens: item.effective_input_tokens || 0,
+            total_input_context: item.total_input_context || 0,
+            output_tokens: item.output_tokens || 0,
+            cache_read_tokens: item.cache_read_tokens || 0,
+            cache_creation_tokens: item.cache_creation_tokens || 0,
+            cache_hit_rate: item.cache_hit_rate || 0,
             total_cost: item.total_cost || 0,
-            actual_cost: typeof raw.actual_cost === 'number' ? raw.actual_cost : undefined
+            actual_cost: item.actual_cost,
+            avgResponseTime: item.avg_response_time_ms > 0
+              ? `${(item.avg_response_time_ms / 1000).toFixed(2)}s`
+              : '-'
+          }))
+        } catch (error) {
+          if (requestId !== loadStatsRequestId) {
+            return true
           }
-        })
-
-        const providerData = await usageApi.getUsageByProvider(dateRange)
-        if (requestId !== loadStatsRequestId) {
-          return
+          markFailure(error)
         }
 
-        providerStats.value = providerData.map(item => ({
-          provider: item.provider,
-          requests: item.request_count,
-          totalTokens: item.total_tokens || 0,
-          effectiveInputTokens: item.effective_input_tokens || 0,
-          totalInputContext: item.total_input_context || 0,
-          outputTokens: item.output_tokens || 0,
-          cacheReadTokens: item.cache_read_tokens || 0,
-          cacheCreationTokens: item.cache_creation_tokens || 0,
-          cacheHitRate: item.cache_hit_rate || 0,
-          totalCost: item.total_cost,
-          actualCost: item.actual_cost,
-          successRate: item.success_rate,
-          avgResponseTime: item.avg_response_time_ms > 0
-            ? `${(item.avg_response_time_ms / 1000).toFixed(2)}s`
-            : '-'
-        }))
-
-        const apiFormatData = await usageApi.getUsageByApiFormat(dateRange)
-        if (requestId !== loadStatsRequestId) {
-          return
-        }
-
-        apiFormatStats.value = apiFormatData.map(item => ({
-          api_format: item.api_format,
-          request_count: item.request_count || 0,
-          total_tokens: item.total_tokens || 0,
-          effective_input_tokens: item.effective_input_tokens || 0,
-          total_input_context: item.total_input_context || 0,
-          output_tokens: item.output_tokens || 0,
-          cache_read_tokens: item.cache_read_tokens || 0,
-          cache_creation_tokens: item.cache_creation_tokens || 0,
-          cache_hit_rate: item.cache_hit_rate || 0,
-          total_cost: item.total_cost || 0,
-          actual_cost: item.actual_cost,
-          avgResponseTime: item.avg_response_time_ms > 0
-            ? `${(item.avg_response_time_ms / 1000).toFixed(2)}s`
-            : '-'
-        }))
-
-        // 从统计数据中提取可用的筛选选项
-        availableModels.value = modelData.map(item => item.model).filter(Boolean).sort()
-        availableProviders.value = providerData.map(item => item.provider).filter(Boolean).sort()
-
-      } else {
-        // 用户页面
-        const userData = await meApi.getUsage(dateRange)
-        if (requestId !== loadStatsRequestId) {
-          return
-        }
-
-        stats.value = {
-          total_requests: userData.total_requests || 0,
-          total_tokens: userData.total_tokens || 0,
-          total_cost: userData.total_cost || 0,
-          total_actual_cost: userData.total_actual_cost,
-          avg_response_time: userData.avg_response_time || 0,
-          period_start: '',
-          period_end: '',
-        }
-
-        modelStats.value = (userData.summary_by_model || []).map((item) => ({
-          model: item.model,
-          request_count: item.requests || 0,
-          total_tokens: item.total_tokens || 0,
-          effective_input_tokens: item.effective_input_tokens || 0,
-          total_input_context: item.total_input_context || 0,
-          output_tokens: item.output_tokens || 0,
-          cache_read_tokens: item.cache_read_tokens || 0,
-          cache_creation_tokens: item.cache_creation_tokens || 0,
-          cache_hit_rate: item.cache_hit_rate || 0,
-          total_cost: item.total_cost_usd || 0,
-          actual_cost: item.actual_total_cost_usd
-        }))
-
-        providerStats.value = (userData.summary_by_provider || []).map((item) => ({
-          provider: item.provider,
-          requests: item.requests || 0,
-          totalTokens: item.total_tokens || 0,
-          effectiveInputTokens: item.effective_input_tokens || 0,
-          totalInputContext: item.total_input_context || 0,
-          outputTokens: item.output_tokens || 0,
-          cacheReadTokens: item.cache_read_tokens || 0,
-          cacheCreationTokens: item.cache_creation_tokens || 0,
-          cacheHitRate: item.cache_hit_rate || 0,
-          totalCost: item.total_cost_usd || 0,
-          successRate: item.success_rate || 0,
-          avgResponseTime: (item.avg_response_time_ms ?? 0) > 0
-            ? `${((item.avg_response_time_ms ?? 0) / 1000).toFixed(2)}s`
-            : '-'
-        }))
-
-        // 用户页面：记录直接从 userData 获取（数量较少）
-        // 使用 mergeRecordStatus 保护已有的活跃状态，避免轮询更新被覆盖
-        const nextRecords = (userData.records || []) as UsageRecord[]
-        currentRecords.value = mergeRecordStatus(currentRecords.value, nextRecords)
-        totalRecords.value = userData.pagination?.total ?? currentRecords.value.length
-
-        // 从记录中提取筛选选项
-        const models = new Set<string>()
-        const providers = new Set<string>()
-        currentRecords.value.forEach(record => {
-          if (record.model) models.add(record.model)
-          if (record.provider) providers.add(record.provider)
-        })
-        availableModels.value = Array.from(models).sort()
-        availableProviders.value = Array.from(providers).sort()
-
-        // API 格式统计直接使用后端聚合数据
-        apiFormatStats.value = (userData.summary_by_api_format || []).map(item => ({
-          api_format: item.api_format,
-          request_count: item.request_count || 0,
-          total_tokens: item.total_tokens || 0,
-          effective_input_tokens: item.effective_input_tokens || 0,
-          total_input_context: item.total_input_context || 0,
-          output_tokens: item.output_tokens || 0,
-          cache_read_tokens: item.cache_read_tokens || 0,
-          cache_creation_tokens: item.cache_creation_tokens || 0,
-          cache_hit_rate: item.cache_hit_rate || 0,
-          total_cost: item.total_cost_usd || 0,
-          avgResponseTime: (item.avg_response_time_ms ?? 0) > 0
-            ? `${((item.avg_response_time_ms ?? 0) / 1000).toFixed(2)}s`
-            : '-'
-        }))
+        return hadFailure
       }
+
+      // 用户页面
+      const userData = await meApi.getUsage(dateRange)
+      if (requestId !== loadStatsRequestId) {
+        return false
+      }
+
+      stats.value = {
+        total_requests: userData.total_requests || 0,
+        total_tokens: userData.total_tokens || 0,
+        total_cost: userData.total_cost || 0,
+        total_actual_cost: userData.total_actual_cost,
+        avg_response_time: userData.avg_response_time || 0,
+        period_start: '',
+        period_end: '',
+      }
+
+      modelStats.value = (userData.summary_by_model || []).map((item) => ({
+        model: item.model,
+        request_count: item.requests || 0,
+        total_tokens: item.total_tokens || 0,
+        effective_input_tokens: item.effective_input_tokens || 0,
+        total_input_context: item.total_input_context || 0,
+        output_tokens: item.output_tokens || 0,
+        cache_read_tokens: item.cache_read_tokens || 0,
+        cache_creation_tokens: item.cache_creation_tokens || 0,
+        cache_hit_rate: item.cache_hit_rate || 0,
+        total_cost: item.total_cost_usd || 0,
+        actual_cost: item.actual_total_cost_usd
+      }))
+
+      providerStats.value = (userData.summary_by_provider || []).map((item) => ({
+        provider: item.provider,
+        requests: item.requests || 0,
+        totalTokens: item.total_tokens || 0,
+        effectiveInputTokens: item.effective_input_tokens || 0,
+        totalInputContext: item.total_input_context || 0,
+        outputTokens: item.output_tokens || 0,
+        cacheReadTokens: item.cache_read_tokens || 0,
+        cacheCreationTokens: item.cache_creation_tokens || 0,
+        cacheHitRate: item.cache_hit_rate || 0,
+        totalCost: item.total_cost_usd || 0,
+        successRate: item.success_rate || 0,
+        avgResponseTime: (item.avg_response_time_ms ?? 0) > 0
+          ? `${((item.avg_response_time_ms ?? 0) / 1000).toFixed(2)}s`
+          : '-'
+      }))
+
+      // 用户页面：记录直接从 userData 获取（数量较少）
+      // 使用 mergeRecordStatus 保护已有的活跃状态，避免轮询更新被覆盖
+      const nextRecords = (userData.records || []) as UsageRecord[]
+      currentRecords.value = mergeRecordStatus(currentRecords.value, nextRecords)
+      totalRecords.value = userData.pagination?.total ?? currentRecords.value.length
+
+      // 从记录中提取筛选选项
+      const models = new Set<string>()
+      const providers = new Set<string>()
+      currentRecords.value.forEach(record => {
+        if (record.model) models.add(record.model)
+        if (record.provider) providers.add(record.provider)
+      })
+      availableModels.value = Array.from(models).sort()
+      availableProviders.value = Array.from(providers).sort()
+
+      // API 格式统计直接使用后端聚合数据
+      apiFormatStats.value = (userData.summary_by_api_format || []).map(item => ({
+        api_format: item.api_format,
+        request_count: item.request_count || 0,
+        total_tokens: item.total_tokens || 0,
+        effective_input_tokens: item.effective_input_tokens || 0,
+        total_input_context: item.total_input_context || 0,
+        output_tokens: item.output_tokens || 0,
+        cache_read_tokens: item.cache_read_tokens || 0,
+        cache_creation_tokens: item.cache_creation_tokens || 0,
+        cache_hit_rate: item.cache_hit_rate || 0,
+        total_cost: item.total_cost_usd || 0,
+        avgResponseTime: (item.avg_response_time_ms ?? 0) > 0
+          ? `${((item.avg_response_time_ms ?? 0) / 1000).toFixed(2)}s`
+          : '-'
+      }))
+
+      return false
     } catch (error: unknown) {
       if (requestId !== loadStatsRequestId) {
-        return
+        return true
       }
       if (getErrorStatus(error) !== 403) {
         log.error('加载统计数据失败:', error)
@@ -261,9 +306,11 @@ export function useUsageData(options: UseUsageDataOptions) {
       stats.value = createDefaultStats()
       modelStats.value = []
       if (!isAdminPage.value) {
+        // 用户页的 records 依赖 stats 一起加载；管理员页的 records 是独立分页，不应被统计失败清空。
         currentRecords.value = []
         totalRecords.value = 0
       }
+      return true
     } finally {
       if (requestId === loadStatsRequestId) {
         isLoadingStats.value = false

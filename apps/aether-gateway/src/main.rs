@@ -2,12 +2,15 @@
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
-use clap::{Args as ClapArgs, Parser, ValueEnum};
+use std::path::PathBuf;
+
+use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
 use tracing::{debug, info, warn};
 
 use aether_crypto::warm_python_fernet_secret;
-use aether_data::postgres::PostgresPoolConfig;
-use aether_data::redis::RedisClientConfig;
+use aether_data::driver::redis::RedisClientConfig;
+use aether_data::lifecycle::export::{export_database_jsonl, import_database_jsonl, ExportDomain};
+use aether_data::{DatabaseDriver, SqlDatabaseConfig, SqlPoolConfig, DEFAULT_SQLITE_DATABASE_URL};
 use aether_gateway::{
     attach_static_frontend, build_router_with_state, set_gateway_frontdoor_app_port, AppState,
     FrontdoorCorsConfig, FrontdoorUserRpmConfig, GatewayDataConfig, UsageRuntimeConfig,
@@ -51,6 +54,56 @@ impl DeploymentTopologyArg {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+enum DatabaseDriverArg {
+    Sqlite,
+    Mysql,
+    Postgres,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+enum ExportDomainArg {
+    Users,
+    ApiKeys,
+    Providers,
+    ProviderKeys,
+    Endpoints,
+    Models,
+    GlobalModels,
+    SystemConfigs,
+    Wallets,
+    Usage,
+    Billing,
+}
+
+impl From<ExportDomainArg> for ExportDomain {
+    fn from(value: ExportDomainArg) -> Self {
+        match value {
+            ExportDomainArg::Users => ExportDomain::Users,
+            ExportDomainArg::ApiKeys => ExportDomain::ApiKeys,
+            ExportDomainArg::Providers => ExportDomain::Providers,
+            ExportDomainArg::ProviderKeys => ExportDomain::ProviderKeys,
+            ExportDomainArg::Endpoints => ExportDomain::Endpoints,
+            ExportDomainArg::Models => ExportDomain::Models,
+            ExportDomainArg::GlobalModels => ExportDomain::GlobalModels,
+            ExportDomainArg::SystemConfigs => ExportDomain::SystemConfigs,
+            ExportDomainArg::Wallets => ExportDomain::Wallets,
+            ExportDomainArg::Usage => ExportDomain::Usage,
+            ExportDomainArg::Billing => ExportDomain::Billing,
+        }
+    }
+}
+
+impl From<DatabaseDriverArg> for DatabaseDriver {
+    fn from(value: DatabaseDriverArg) -> Self {
+        match value {
+            DatabaseDriverArg::Sqlite => DatabaseDriver::Sqlite,
+            DatabaseDriverArg::Mysql => DatabaseDriver::Mysql,
+            DatabaseDriverArg::Postgres => DatabaseDriver::Postgres,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
 enum NodeRoleArg {
     All,
     Frontdoor,
@@ -68,6 +121,21 @@ impl NodeRoleArg {
 
     const fn spawns_background_tasks(self) -> bool {
         matches!(self, Self::All | Self::Background)
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+enum RuntimeBackendArg {
+    Redis,
+    Memory,
+}
+
+impl RuntimeBackendArg {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Redis => "redis",
+            Self::Memory => "memory",
+        }
     }
 }
 
@@ -148,6 +216,12 @@ fn env_var_trimmed(name: &str) -> Option<String> {
 
 #[derive(ClapArgs, Debug, Clone)]
 struct GatewayDataArgs {
+    #[arg(long, env = "AETHER_DATABASE_DRIVER")]
+    database_driver: Option<DatabaseDriverArg>,
+
+    #[arg(long, env = "AETHER_DATABASE_URL")]
+    database_url: Option<String>,
+
     #[arg(long, env = "AETHER_GATEWAY_DATA_POSTGRES_URL")]
     postgres_url: Option<String>,
 
@@ -211,6 +285,55 @@ struct GatewayDataArgs {
 }
 
 impl GatewayDataArgs {
+    fn effective_database_driver(&self) -> Option<DatabaseDriver> {
+        self.database_driver.map(Into::into).or_else(|| {
+            self.database_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .and_then(DatabaseDriver::from_database_url)
+        })
+    }
+
+    fn effective_database_url(&self) -> Option<String> {
+        let configured_url = self
+            .database_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+
+        match (self.effective_database_driver(), configured_url) {
+            (Some(DatabaseDriver::Sqlite), None) => Some(DEFAULT_SQLITE_DATABASE_URL.to_string()),
+            (_, Some(url)) => Some(url),
+            (None, None) => self.effective_postgres_url(),
+            (Some(DatabaseDriver::Postgres), None) => self.effective_postgres_url(),
+            (Some(DatabaseDriver::Mysql), None) => None,
+        }
+    }
+
+    fn effective_sql_database_config(&self) -> Option<SqlDatabaseConfig> {
+        let url = self.effective_database_url()?;
+        let driver = self
+            .effective_database_driver()
+            .or_else(|| DatabaseDriver::from_database_url(&url))
+            .unwrap_or(DatabaseDriver::Postgres);
+
+        Some(SqlDatabaseConfig {
+            driver,
+            url,
+            pool: SqlPoolConfig {
+                min_connections: self.postgres_min_connections,
+                max_connections: self.postgres_max_connections,
+                acquire_timeout_ms: self.postgres_acquire_timeout_ms,
+                idle_timeout_ms: self.postgres_idle_timeout_ms,
+                max_lifetime_ms: self.postgres_max_lifetime_ms,
+                statement_cache_capacity: self.postgres_statement_cache_capacity,
+                require_ssl: driver != DatabaseDriver::Sqlite && self.postgres_require_ssl,
+            },
+        })
+    }
+
     fn effective_postgres_url(&self) -> Option<String> {
         self.postgres_url
             .as_deref()
@@ -270,20 +393,11 @@ impl GatewayDataArgs {
     }
 
     fn to_config(&self) -> GatewayDataConfig {
-        let database_url = self.effective_postgres_url();
+        let database = self.effective_sql_database_config();
         let redis_url = self.effective_redis_url();
 
-        let mut config = match database_url.as_deref() {
-            Some(database_url) => GatewayDataConfig::from_postgres_config(PostgresPoolConfig {
-                database_url: database_url.to_string(),
-                min_connections: self.postgres_min_connections,
-                max_connections: self.postgres_max_connections,
-                acquire_timeout_ms: self.postgres_acquire_timeout_ms,
-                idle_timeout_ms: self.postgres_idle_timeout_ms,
-                max_lifetime_ms: self.postgres_max_lifetime_ms,
-                statement_cache_capacity: self.postgres_statement_cache_capacity,
-                require_ssl: self.postgres_require_ssl,
-            }),
+        let mut config = match database {
+            Some(database) => GatewayDataConfig::from_database_config(database),
             None => GatewayDataConfig::disabled(),
         };
 
@@ -458,6 +572,35 @@ struct GatewayLoggingArgs {
     log_max_files: usize,
 }
 
+#[derive(Subcommand, Debug, Clone)]
+enum DataCommand {
+    /// Export persistent SQL data to database-neutral JSONL.
+    Export(DataExportArgs),
+    /// Import database-neutral JSONL into the selected SQL database.
+    Import(DataImportArgs),
+}
+
+#[derive(ClapArgs, Debug, Clone)]
+struct DataExportArgs {
+    #[command(flatten)]
+    data: GatewayDataArgs,
+
+    #[arg(long)]
+    output: PathBuf,
+
+    #[arg(long, value_enum, value_delimiter = ',')]
+    domains: Vec<ExportDomainArg>,
+}
+
+#[derive(ClapArgs, Debug, Clone)]
+struct DataImportArgs {
+    #[command(flatten)]
+    data: GatewayDataArgs,
+
+    #[arg(long)]
+    input: PathBuf,
+}
+
 impl GatewayLoggingArgs {
     fn apply_to_runtime_config(
         &self,
@@ -498,6 +641,9 @@ impl GatewayLoggingArgs {
     about = "Phase 3a Rust ingress gateway for Aether"
 )]
 struct Args {
+    #[command(subcommand)]
+    command: Option<DataCommand>,
+
     #[arg(long, env = "APP_PORT", default_value_t = 8084)]
     app_port: u16,
 
@@ -605,6 +751,9 @@ struct Args {
     )]
     distributed_request_command_timeout_ms: u64,
 
+    #[arg(long, env = "AETHER_RUNTIME_BACKEND", value_enum)]
+    runtime_backend: Option<RuntimeBackendArg>,
+
     #[command(flatten)]
     data: GatewayDataArgs,
 
@@ -622,13 +771,37 @@ struct Args {
 }
 
 impl Args {
+    fn effective_runtime_backend(
+        &self,
+        database: Option<&SqlDatabaseConfig>,
+        data_redis_url: Option<&str>,
+    ) -> RuntimeBackendArg {
+        if let Some(runtime_backend) = self.runtime_backend {
+            return runtime_backend;
+        }
+        if matches!(self.deployment_topology, DeploymentTopologyArg::MultiNode) {
+            return RuntimeBackendArg::Redis;
+        }
+        if database.is_some_and(|database| database.driver == DatabaseDriver::Sqlite) {
+            return RuntimeBackendArg::Memory;
+        }
+        if data_redis_url.is_some() {
+            RuntimeBackendArg::Redis
+        } else {
+            RuntimeBackendArg::Memory
+        }
+    }
+
     fn runtime_config(&self) -> Result<ServiceRuntimeConfig, std::io::Error> {
-        let default_log_filter =
-            if self.migrate || self.apply_backfills || self.auto_prepare_database {
-                "aether_gateway=info,aether_data=info"
-            } else {
-                "aether_gateway=info"
-            };
+        let default_log_filter = if self.command.is_some()
+            || self.migrate
+            || self.apply_backfills
+            || self.auto_prepare_database
+        {
+            "aether_gateway=info,aether_data=info"
+        } else {
+            "aether_gateway=info"
+        };
         let config = self
             .logging
             .apply_to_runtime_config(ServiceRuntimeConfig::new(
@@ -691,14 +864,21 @@ async fn run_healthcheck(
 
 fn validate_deployment_topology(
     args: &Args,
-    data_postgres_url: Option<&str>,
+    database: Option<&SqlDatabaseConfig>,
     data_redis_url: Option<&str>,
+    runtime_backend: RuntimeBackendArg,
 ) -> Result<(), std::io::Error> {
     if matches!(args.deployment_topology, DeploymentTopologyArg::SingleNode) {
-        if data_postgres_url.is_none() && data_redis_url.is_none() {
+        if database.is_none() && data_redis_url.is_none() {
             warn!(
-                "single-node deployment is starting without Postgres or Redis; local-only mode is allowed, but admin/auth/billing persistence will be limited"
+                "single-node deployment is starting without SQL database or Redis; local-only mode is allowed, but admin/auth/billing persistence will be limited"
             );
+        }
+        if matches!(runtime_backend, RuntimeBackendArg::Redis) && data_redis_url.is_none() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "AETHER_RUNTIME_BACKEND=redis requires REDIS_URL or AETHER_GATEWAY_DATA_REDIS_URL",
+            ));
         }
         return Ok(());
     }
@@ -711,8 +891,8 @@ fn validate_deployment_topology(
     }
 
     let mut missing = Vec::new();
-    if data_postgres_url.is_none() {
-        missing.push("DATABASE_URL or AETHER_GATEWAY_DATA_POSTGRES_URL");
+    if database.is_none() {
+        missing.push("AETHER_DATABASE_URL, DATABASE_URL, or AETHER_GATEWAY_DATA_POSTGRES_URL");
     }
     if data_redis_url.is_none() {
         missing.push("REDIS_URL or AETHER_GATEWAY_DATA_REDIS_URL");
@@ -725,6 +905,20 @@ fn validate_deployment_topology(
                 "multi-node deployment requires shared data backends; missing {}",
                 missing.join(", ")
             ),
+        ));
+    }
+
+    if matches!(runtime_backend, RuntimeBackendArg::Memory) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "AETHER_RUNTIME_BACKEND=memory is only valid for single-node deployment",
+        ));
+    }
+
+    if database.is_some_and(|database| database.driver == DatabaseDriver::Sqlite) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "AETHER_DATABASE_DRIVER=sqlite is only valid for single-node deployment",
         ));
     }
 
@@ -772,6 +966,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
+    if let Some(command) = args.command.as_ref() {
+        init_service_runtime(args.runtime_config()?)?;
+        return run_data_command(command).await;
+    }
     if args.migrate {
         init_service_runtime(args.runtime_config()?)?;
         return run_explicit_migrations(&args).await;
@@ -787,12 +985,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         return run_healthcheck(app_port, args.healthcheck_timeout_ms).await;
     }
     init_service_runtime(args.runtime_config()?)?;
+    let sql_database_config = args.data.effective_sql_database_config();
     let data_postgres_url = args.data.effective_postgres_url();
     let data_redis_url = args.data.effective_redis_url();
+    let runtime_backend =
+        args.effective_runtime_backend(sql_database_config.as_ref(), data_redis_url.as_deref());
     validate_deployment_topology(
         &args,
-        data_postgres_url.as_deref(),
+        sql_database_config.as_ref(),
         data_redis_url.as_deref(),
+        runtime_backend,
     )?;
     let data_config = args.data.to_config();
     let rate_limit_config = if matches!(args.deployment_topology, DeploymentTopologyArg::MultiNode)
@@ -814,6 +1016,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         environment = %args.frontdoor.environment,
         deployment_topology = args.deployment_topology.as_str(),
         node_role = args.node_role.as_str(),
+        runtime_backend = runtime_backend.as_str(),
         frontdoor_mode = "compatibility_frontdoor",
         log_format = ?args.logging.log_format,
         log_destination = args.logging.log_destination.as_str(),
@@ -844,6 +1047,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             .as_deref()
             .or(data_redis_url.as_deref())
             .is_some(),
+        data_database_configured = sql_database_config.is_some(),
+        data_database_driver = sql_database_config
+            .as_ref()
+            .map(|database| database.driver.as_str())
+            .unwrap_or("-"),
         data_postgres_configured = data_postgres_url.is_some(),
         data_redis_configured = data_redis_url.is_some(),
         data_has_encryption_key = data_config.encryption_key().is_some(),
@@ -935,7 +1143,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         execution_runtime_configured = state.execution_runtime_configured(),
         "aether-gateway data layer configured"
     );
-    prepare_postgres_startup_requirements(&state, args.auto_prepare_database).await?;
+    prepare_database_startup_requirements(&state, args.auto_prepare_database).await?;
     let reset_stale_proxy_nodes = state.reset_stale_proxy_node_tunnel_statuses().await?;
     if reset_stale_proxy_nodes > 0 {
         info!(
@@ -991,11 +1199,88 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+async fn run_data_command(command: &DataCommand) -> Result<(), Box<dyn std::error::Error>> {
+    match command {
+        DataCommand::Export(args) => run_data_export(args).await,
+        DataCommand::Import(args) => run_data_import(args).await,
+    }
+}
+
+fn required_sql_database_config(
+    data: &GatewayDataArgs,
+) -> Result<SqlDatabaseConfig, Box<dyn std::error::Error>> {
+    data.effective_sql_database_config().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "AETHER_DATABASE_DRIVER/AETHER_DATABASE_URL, AETHER_GATEWAY_DATA_POSTGRES_URL, or DATABASE_URL is required",
+        )
+        .into()
+    })
+}
+
+fn requested_export_domains(args: &DataExportArgs) -> Vec<ExportDomain> {
+    args.domains
+        .iter()
+        .copied()
+        .map(Into::into)
+        .collect::<Vec<_>>()
+}
+
+fn current_unix_secs() -> Result<u64, std::time::SystemTimeError> {
+    Ok(std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs())
+}
+
+async fn run_data_export(args: &DataExportArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let database = required_sql_database_config(&args.data)?;
+    let driver = database.driver;
+    let domains = requested_export_domains(args);
+    let created_at_unix_secs = current_unix_secs()?;
+    let encoded = export_database_jsonl(database, domains, created_at_unix_secs).await?;
+
+    tokio::fs::write(&args.output, encoded.as_bytes()).await?;
+    info!(
+        driver = %driver,
+        output = %args.output.display(),
+        bytes = encoded.len(),
+        "database export complete"
+    );
+    println!(
+        "exported {} bytes from {} to {}",
+        encoded.len(),
+        driver,
+        args.output.display()
+    );
+    Ok(())
+}
+
+async fn run_data_import(args: &DataImportArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let database = required_sql_database_config(&args.data)?;
+    let driver = database.driver;
+    let input = tokio::fs::read_to_string(&args.input).await?;
+    let imported = import_database_jsonl(database, &input).await?;
+
+    info!(
+        driver = %driver,
+        input = %args.input.display(),
+        imported,
+        "database import complete"
+    );
+    println!(
+        "imported {} records into {} from {}",
+        imported,
+        driver,
+        args.input.display()
+    );
+    Ok(())
+}
+
 async fn run_explicit_migrations(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
-    if args.data.effective_postgres_url().is_none() {
+    if args.data.effective_sql_database_config().is_none() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "AETHER_GATEWAY_DATA_POSTGRES_URL or DATABASE_URL is required when running --migrate",
+            "AETHER_DATABASE_DRIVER/AETHER_DATABASE_URL, AETHER_GATEWAY_DATA_POSTGRES_URL, or DATABASE_URL is required when running --migrate",
         )
         .into());
     }
@@ -1008,7 +1293,7 @@ async fn run_explicit_migrations(args: &Args) -> Result<(), Box<dyn std::error::
 
     let state = AppState::new()?.with_data_config(args.data.to_config())?;
     let pending = state
-        .pending_postgres_migrations()
+        .pending_database_migrations()
         .await?
         .unwrap_or_default();
     if pending.is_empty() {
@@ -1029,28 +1314,29 @@ async fn run_explicit_migrations(args: &Args) -> Result<(), Box<dyn std::error::
         pending_versions = %format_pending_migrations(&pending),
         "running database migrations by explicit request..."
     );
-    if state.run_postgres_migrations().await? {
+    if state.run_database_migrations().await? {
         info!("database migrations complete");
     }
     Ok(())
 }
 
 async fn run_explicit_backfills(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
-    args.data.effective_postgres_url().ok_or_else(|| {
+    let database = args.data.effective_sql_database_config().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "AETHER_GATEWAY_DATA_POSTGRES_URL or DATABASE_URL is required when running --apply-backfills",
+            "AETHER_DATABASE_DRIVER/AETHER_DATABASE_URL, AETHER_GATEWAY_DATA_POSTGRES_URL, or DATABASE_URL is required when running --apply-backfills",
         )
     })?;
     let state = AppState::new()?.with_data_config(args.data.to_config())?;
-    ensure_postgres_schema_is_current(&state).await?;
+    ensure_database_schema_is_current(&state).await?;
 
     let pending = state
-        .pending_postgres_backfills()
+        .pending_database_backfills()
         .await?
         .unwrap_or_default();
     if pending.is_empty() {
         info!(
+            driver = %database.driver,
             pending_backfills = 0,
             "database backfills already up to date"
         );
@@ -1067,19 +1353,19 @@ async fn run_explicit_backfills(args: &Args) -> Result<(), Box<dyn std::error::E
         pending_versions = %format_pending_backfills(&pending),
         "running database backfills by explicit request..."
     );
-    if state.run_postgres_backfills().await? {
+    if state.run_database_backfills().await? {
         info!("database backfills complete");
     }
     Ok(())
 }
 
-async fn prepare_postgres_startup_requirements(
+async fn prepare_database_startup_requirements(
     state: &AppState,
     auto_prepare_database: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if !auto_prepare_database {
-        ensure_postgres_schema_is_current(state).await?;
-        ensure_postgres_backfills_are_current(state).await?;
+        ensure_database_schema_is_current(state).await?;
+        ensure_database_backfills_are_current(state).await?;
         return Ok(());
     }
 
@@ -1087,7 +1373,7 @@ async fn prepare_postgres_startup_requirements(
         "auto database preparation enabled; applying pending migrations and backfills before serving traffic"
     );
 
-    let Some(pending_migrations) = state.prepare_postgres_for_startup().await? else {
+    let Some(pending_migrations) = state.prepare_database_for_startup().await? else {
         return Ok(());
     };
     if !pending_migrations.is_empty() {
@@ -1101,12 +1387,12 @@ async fn prepare_postgres_startup_requirements(
             pending_versions = %format_pending_migrations(&pending_migrations),
             "running database migrations during service startup..."
         );
-        if state.run_postgres_migrations().await? {
+        if state.run_database_migrations().await? {
             info!("database migrations complete during service startup");
         }
     }
 
-    let Some(pending_backfills) = state.pending_postgres_backfills().await? else {
+    let Some(pending_backfills) = state.pending_database_backfills().await? else {
         return Ok(());
     };
     if pending_backfills.is_empty() {
@@ -1123,14 +1409,16 @@ async fn prepare_postgres_startup_requirements(
         pending_versions = %format_pending_backfills(&pending_backfills),
         "running database backfills during service startup..."
     );
-    if state.run_postgres_backfills().await? {
+    if state.run_database_backfills().await? {
         info!("database backfills complete during service startup");
     }
 
     Ok(())
 }
 
-fn format_pending_migrations(pending: &[aether_data::migrate::PendingMigrationInfo]) -> String {
+fn format_pending_migrations(
+    pending: &[aether_data::lifecycle::migrate::PendingMigrationInfo],
+) -> String {
     pending
         .iter()
         .map(|migration| format!("{} ({})", migration.version, migration.description))
@@ -1138,7 +1426,9 @@ fn format_pending_migrations(pending: &[aether_data::migrate::PendingMigrationIn
         .join(", ")
 }
 
-fn format_pending_backfills(pending: &[aether_data::backfill::PendingBackfillInfo]) -> String {
+fn format_pending_backfills(
+    pending: &[aether_data::lifecycle::backfill::PendingBackfillInfo],
+) -> String {
     pending
         .iter()
         .map(|backfill| format!("{} ({})", backfill.version, backfill.description))
@@ -1146,10 +1436,10 @@ fn format_pending_backfills(pending: &[aether_data::backfill::PendingBackfillInf
         .join(", ")
 }
 
-async fn ensure_postgres_backfills_are_current(
+async fn ensure_database_backfills_are_current(
     state: &AppState,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let Some(pending) = state.pending_postgres_backfills().await? else {
+    let Some(pending) = state.pending_database_backfills().await? else {
         return Ok(());
     };
     if pending.is_empty() {
@@ -1162,10 +1452,10 @@ async fn ensure_postgres_backfills_are_current(
     Err(pending_backfills_error(pending.len(), next.version, &next.description).into())
 }
 
-async fn ensure_postgres_schema_is_current(
+async fn ensure_database_schema_is_current(
     state: &AppState,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let Some(pending) = state.prepare_postgres_for_startup().await? else {
+    let Some(pending) = state.prepare_database_for_startup().await? else {
         return Ok(());
     };
     if pending.is_empty() {
@@ -1207,16 +1497,19 @@ fn pending_backfills_error(
 #[cfg(test)]
 mod tests {
     use super::{
-        ensure_postgres_backfills_are_current, ensure_postgres_schema_is_current,
+        ensure_database_backfills_are_current, ensure_database_schema_is_current,
         pending_backfills_error, pending_schema_error, resolve_healthcheck_url, Args,
-        DeploymentTopologyArg, GatewayDataArgs, GatewayFrontdoorArgs, GatewayLogDestinationArg,
-        GatewayLogFormatArg, GatewayLogRotationArg, GatewayLoggingArgs, GatewayRateLimitArgs,
-        GatewayUsageArgs, NodeRoleArg, VideoTaskTruthSourceArg,
+        DatabaseDriverArg, DeploymentTopologyArg, GatewayDataArgs, GatewayFrontdoorArgs,
+        GatewayLogDestinationArg, GatewayLogFormatArg, GatewayLogRotationArg, GatewayLoggingArgs,
+        GatewayRateLimitArgs, GatewayUsageArgs, NodeRoleArg, RuntimeBackendArg,
+        VideoTaskTruthSourceArg,
     };
+    use aether_data::{DatabaseDriver, SqlDatabaseConfig, SqlPoolConfig};
     use aether_gateway::AppState;
 
     fn test_args() -> Args {
         Args {
+            command: None,
             app_port: 8084,
             healthcheck: false,
             healthcheck_timeout_ms: 3_000,
@@ -1237,7 +1530,10 @@ mod tests {
             distributed_request_lease_ttl_ms: 30_000,
             distributed_request_renew_interval_ms: 10_000,
             distributed_request_command_timeout_ms: 1_000,
+            runtime_backend: None,
             data: GatewayDataArgs {
+                database_driver: None,
+                database_url: None,
                 postgres_url: None,
                 encryption_key: None,
                 redis_url: None,
@@ -1338,6 +1634,166 @@ mod tests {
     }
 
     #[test]
+    fn sqlite_database_defaults_to_memory_runtime_backend() {
+        let args = test_args();
+        let database = SqlDatabaseConfig::new(
+            DatabaseDriver::Sqlite,
+            "sqlite://./data/aether.db".to_string(),
+            SqlPoolConfig::default(),
+        )
+        .expect("sqlite config should build");
+
+        assert_eq!(
+            args.effective_runtime_backend(Some(&database), Some("redis://127.0.0.1/0")),
+            RuntimeBackendArg::Memory
+        );
+    }
+
+    #[test]
+    fn redis_url_defaults_to_redis_runtime_backend_for_server_database() {
+        let args = test_args();
+        let database = SqlDatabaseConfig::new(
+            DatabaseDriver::Postgres,
+            "postgres://postgres:postgres@localhost/aether".to_string(),
+            SqlPoolConfig::default(),
+        )
+        .expect("postgres config should build");
+
+        assert_eq!(
+            args.effective_runtime_backend(Some(&database), Some("redis://127.0.0.1/0")),
+            RuntimeBackendArg::Redis
+        );
+    }
+
+    #[test]
+    fn mysql_database_with_redis_defaults_to_redis_runtime_backend() {
+        let args = test_args();
+        let database = SqlDatabaseConfig::new(
+            DatabaseDriver::Mysql,
+            "mysql://aether:aether@localhost:3306/aether".to_string(),
+            SqlPoolConfig::default(),
+        )
+        .expect("mysql config should build");
+
+        assert_eq!(
+            args.effective_runtime_backend(Some(&database), Some("redis://127.0.0.1/0")),
+            RuntimeBackendArg::Redis
+        );
+    }
+
+    #[test]
+    fn sqlite_database_allows_explicit_redis_runtime_backend_when_redis_is_configured() {
+        let mut args = test_args();
+        args.runtime_backend = Some(RuntimeBackendArg::Redis);
+        let database = SqlDatabaseConfig::new(
+            DatabaseDriver::Sqlite,
+            "sqlite://./data/aether.db".to_string(),
+            SqlPoolConfig::default(),
+        )
+        .expect("sqlite config should build");
+
+        assert_eq!(
+            args.effective_runtime_backend(Some(&database), Some("redis://127.0.0.1/0")),
+            RuntimeBackendArg::Redis
+        );
+        super::validate_deployment_topology(
+            &args,
+            Some(&database),
+            Some("redis://127.0.0.1/0"),
+            RuntimeBackendArg::Redis,
+        )
+        .expect("single-node sqlite should allow explicit redis runtime");
+    }
+
+    #[test]
+    fn single_node_sqlite_without_redis_allows_memory_runtime_backend() {
+        let args = test_args();
+        let database = SqlDatabaseConfig::new(
+            DatabaseDriver::Sqlite,
+            "sqlite://./data/aether.db".to_string(),
+            SqlPoolConfig::default(),
+        )
+        .expect("sqlite config should build");
+
+        super::validate_deployment_topology(
+            &args,
+            Some(&database),
+            None,
+            RuntimeBackendArg::Memory,
+        )
+        .expect("single-node sqlite memory runtime should be accepted");
+    }
+
+    #[test]
+    fn multi_node_rejects_memory_runtime_backend() {
+        let mut args = test_args();
+        args.deployment_topology = DeploymentTopologyArg::MultiNode;
+        args.node_role = NodeRoleArg::Frontdoor;
+        let database = SqlDatabaseConfig::new(
+            DatabaseDriver::Postgres,
+            "postgres://postgres:postgres@localhost/aether".to_string(),
+            SqlPoolConfig::default(),
+        )
+        .expect("postgres config should build");
+
+        let error = super::validate_deployment_topology(
+            &args,
+            Some(&database),
+            Some("redis://127.0.0.1/0"),
+            RuntimeBackendArg::Memory,
+        )
+        .expect_err("multi-node memory runtime should be rejected");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(error.to_string().contains("AETHER_RUNTIME_BACKEND=memory"));
+    }
+
+    #[test]
+    fn multi_node_rejects_missing_redis_runtime_backend() {
+        let mut args = test_args();
+        args.deployment_topology = DeploymentTopologyArg::MultiNode;
+        args.node_role = NodeRoleArg::Frontdoor;
+        let database = SqlDatabaseConfig::new(
+            DatabaseDriver::Postgres,
+            "postgres://postgres:postgres@localhost/aether".to_string(),
+            SqlPoolConfig::default(),
+        )
+        .expect("postgres config should build");
+
+        let error = super::validate_deployment_topology(
+            &args,
+            Some(&database),
+            None,
+            RuntimeBackendArg::Redis,
+        )
+        .expect_err("multi-node should require redis");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(error.to_string().contains("REDIS_URL"));
+    }
+
+    #[test]
+    fn multi_node_rejects_sqlite_database_backend() {
+        let mut args = test_args();
+        args.deployment_topology = DeploymentTopologyArg::MultiNode;
+        args.node_role = NodeRoleArg::Frontdoor;
+        let database = SqlDatabaseConfig::new(
+            DatabaseDriver::Sqlite,
+            "sqlite://./data/aether.db".to_string(),
+            SqlPoolConfig::default(),
+        )
+        .expect("sqlite config should build");
+
+        let error = super::validate_deployment_topology(
+            &args,
+            Some(&database),
+            Some("redis://127.0.0.1/0"),
+            RuntimeBackendArg::Redis,
+        )
+        .expect_err("multi-node sqlite should be rejected");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(error.to_string().contains("AETHER_DATABASE_DRIVER=sqlite"));
+    }
+
+    #[test]
     fn pending_schema_error_mentions_explicit_migrate_command() {
         let error = pending_schema_error(2, 20260413020000, "squash usage schema split");
         let message = error.to_string();
@@ -1363,37 +1819,37 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ensure_postgres_schema_is_current_is_noop_without_postgres_pool() {
+    async fn ensure_database_schema_is_current_is_noop_without_database_pool() {
         let state = AppState::new().expect("state should build");
-        ensure_postgres_schema_is_current(&state)
+        ensure_database_schema_is_current(&state)
             .await
             .expect("disabled data backend should not block startup");
     }
 
     #[tokio::test]
-    async fn ensure_postgres_backfills_are_current_is_noop_without_postgres_pool() {
+    async fn ensure_database_backfills_are_current_is_noop_without_database_pool() {
         let state = AppState::new().expect("state should build");
-        ensure_postgres_backfills_are_current(&state)
+        ensure_database_backfills_are_current(&state)
             .await
             .expect("disabled data backend should not block startup");
     }
 
     #[tokio::test]
-    async fn auto_prepare_database_is_noop_without_postgres_pool() {
+    async fn auto_prepare_database_is_noop_without_database_pool() {
         let state = AppState::new().expect("state should build");
-        super::prepare_postgres_startup_requirements(&state, true)
+        super::prepare_database_startup_requirements(&state, true)
             .await
             .expect("disabled data backend should not block startup");
     }
 
     #[tokio::test]
-    async fn explicit_migrate_requires_postgres_url() {
+    async fn explicit_migrate_requires_database_url() {
         let args = test_args();
         let error = super::run_explicit_migrations(&args)
             .await
-            .expect_err("missing postgres URL should fail");
+            .expect_err("missing database URL should fail");
         let message = error.to_string();
-        assert!(message.contains("AETHER_GATEWAY_DATA_POSTGRES_URL or DATABASE_URL"));
+        assert!(message.contains("AETHER_DATABASE_DRIVER/AETHER_DATABASE_URL"));
         assert!(message.contains("--migrate"));
     }
 
@@ -1404,20 +1860,40 @@ mod tests {
 
         let error = super::run_explicit_migrations(&args)
             .await
-            .expect_err("missing postgres URL should fail before any app port validation");
+            .expect_err("missing database URL should fail before any app port validation");
         let message = error.to_string();
-        assert!(message.contains("AETHER_GATEWAY_DATA_POSTGRES_URL or DATABASE_URL"));
+        assert!(message.contains("AETHER_DATABASE_DRIVER/AETHER_DATABASE_URL"));
         assert!(!message.contains("APP_PORT"));
     }
 
     #[tokio::test]
-    async fn explicit_backfills_require_postgres_url() {
+    async fn explicit_backfills_require_database_url() {
         let args = test_args();
         let error = super::run_explicit_backfills(&args)
             .await
-            .expect_err("missing postgres URL should fail");
+            .expect_err("missing database URL should fail");
         let message = error.to_string();
-        assert!(message.contains("AETHER_GATEWAY_DATA_POSTGRES_URL or DATABASE_URL"));
+        assert!(message.contains("AETHER_DATABASE_DRIVER/AETHER_DATABASE_URL"));
         assert!(message.contains("--apply-backfills"));
+    }
+
+    #[tokio::test]
+    async fn explicit_backfills_are_noop_for_sqlite_database() {
+        let mut args = test_args();
+        let database_path = std::env::temp_dir().join(format!(
+            "aether-sqlite-backfill-noop-{}-{}.db",
+            std::process::id(),
+            crate::current_unix_secs().expect("clock should be available")
+        ));
+        args.data.database_driver = Some(DatabaseDriverArg::Sqlite);
+        args.data.database_url = Some(format!("sqlite://{}", database_path.display()));
+
+        super::run_explicit_migrations(&args)
+            .await
+            .expect("sqlite migrations should run before backfills");
+        super::run_explicit_backfills(&args)
+            .await
+            .expect("sqlite backfills should be an explicit no-op");
+        let _ = std::fs::remove_file(database_path);
     }
 }

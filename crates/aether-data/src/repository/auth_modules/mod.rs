@@ -1,9 +1,13 @@
 mod memory;
-mod sql;
+mod mysql;
+mod postgres;
+mod sqlite;
 mod types;
 
 pub use memory::InMemoryAuthModuleReadRepository;
-pub use sql::{SqlxAuthModuleReadRepository, SqlxAuthModuleRepository};
+pub use mysql::{MysqlAuthModuleReadRepository, MysqlAuthModuleRepository};
+pub use postgres::{SqlxAuthModuleReadRepository, SqlxAuthModuleRepository};
+pub use sqlite::{SqliteAuthModuleReadRepository, SqliteAuthModuleRepository};
 pub use types::{
     AuthModuleReadRepository, AuthModuleWriteRepository, StoredLdapModuleConfig,
     StoredOAuthProviderModuleConfig,

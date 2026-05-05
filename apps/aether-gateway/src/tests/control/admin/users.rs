@@ -909,7 +909,7 @@ async fn gateway_returns_conflict_for_admin_create_user_when_writer_unavailable(
     let mut state = AppState::new().expect("gateway should build");
     state =
         state.with_data_state_for_tests(crate::data::GatewayDataState::with_user_reader_for_tests(
-            Arc::new(InMemoryUserReadRepository::seed_auth_users(Vec::new())),
+            Arc::new(InMemoryUserReadRepository::seed_auth_users(Vec::new()).read_only()),
         ));
     state.auth_user_store = None;
     state.auth_wallet_store = None;
@@ -1032,9 +1032,9 @@ async fn gateway_returns_conflict_for_admin_update_user_when_writer_unavailable(
         }
     }));
 
-    let user_repository = Arc::new(InMemoryUserReadRepository::seed_auth_users(vec![
-        sample_admin_user("user-1"),
-    ]));
+    let user_repository = Arc::new(
+        InMemoryUserReadRepository::seed_auth_users(vec![sample_admin_user("user-1")]).read_only(),
+    );
 
     let (upstream_url, upstream_handle) = start_server(upstream).await;
     let mut state = AppState::new()

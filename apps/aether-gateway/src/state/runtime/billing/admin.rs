@@ -1,9 +1,21 @@
 use super::{
-    AdminBillingCollectorRecord, AdminBillingCollectorWriteInput, AdminBillingPresetApplyResult,
-    AdminBillingRuleRecord, AdminBillingRuleWriteInput, AppState, GatewayError,
-    LocalMutationOutcome,
+    AdminBillingCollectorRecord, AdminBillingCollectorWriteInput, AdminBillingMutationOutcome,
+    AdminBillingPresetApplyResult, AdminBillingRuleRecord, AdminBillingRuleWriteInput, AppState,
+    GatewayError, LocalMutationOutcome,
 };
-use crate::query::billing as billing_query;
+
+fn data_error(err: impl ToString) -> GatewayError {
+    GatewayError::Internal(err.to_string())
+}
+
+fn local_mutation_outcome<T>(outcome: AdminBillingMutationOutcome<T>) -> LocalMutationOutcome<T> {
+    match outcome {
+        AdminBillingMutationOutcome::Applied(value) => LocalMutationOutcome::Applied(value),
+        AdminBillingMutationOutcome::NotFound => LocalMutationOutcome::NotFound,
+        AdminBillingMutationOutcome::Invalid(detail) => LocalMutationOutcome::Invalid(detail),
+        AdminBillingMutationOutcome::Unavailable => LocalMutationOutcome::Unavailable,
+    }
+}
 
 impl AppState {
     pub(crate) async fn admin_billing_enabled_default_value_exists(
@@ -30,17 +42,17 @@ impl AppState {
             return Ok(exists);
         }
 
-        let Some(pool) = self.postgres_pool() else {
-            return Ok(false);
-        };
-        billing_query::admin_billing_enabled_default_value_exists(
-            &pool,
-            api_format,
-            task_type,
-            dimension_name,
-            existing_id,
-        )
-        .await
+        Ok(self
+            .data
+            .admin_billing_enabled_default_value_exists(
+                api_format,
+                task_type,
+                dimension_name,
+                existing_id,
+            )
+            .await
+            .map_err(data_error)?
+            .unwrap_or(false))
     }
 
     pub(crate) async fn create_admin_billing_rule(
@@ -70,10 +82,11 @@ impl AppState {
             return Ok(LocalMutationOutcome::Applied(record));
         }
 
-        let Some(pool) = self.postgres_pool() else {
-            return Ok(LocalMutationOutcome::Unavailable);
-        };
-        billing_query::create_admin_billing_rule(&pool, input).await
+        self.data
+            .create_admin_billing_rule(input)
+            .await
+            .map(local_mutation_outcome)
+            .map_err(data_error)
     }
 
     pub(crate) async fn list_admin_billing_rules(
@@ -111,13 +124,10 @@ impl AppState {
             return Ok(Some((items, total)));
         }
 
-        let Some(pool) = self.postgres_pool() else {
-            return Ok(None);
-        };
-        let (items, total) =
-            billing_query::list_admin_billing_rules(&pool, task_type, is_enabled, page, page_size)
-                .await?;
-        Ok(Some((items, total)))
+        self.data
+            .list_admin_billing_rules(task_type, is_enabled, page, page_size)
+            .await
+            .map_err(data_error)
     }
 
     pub(crate) async fn read_admin_billing_rule(
@@ -133,10 +143,10 @@ impl AppState {
                 .cloned());
         }
 
-        let Some(pool) = self.postgres_pool() else {
-            return Ok(None);
-        };
-        billing_query::find_admin_billing_rule(&pool, rule_id).await
+        self.data
+            .find_admin_billing_rule(rule_id)
+            .await
+            .map_err(data_error)
     }
 
     pub(crate) async fn update_admin_billing_rule(
@@ -162,10 +172,11 @@ impl AppState {
             return Ok(LocalMutationOutcome::Applied(record.clone()));
         }
 
-        let Some(pool) = self.postgres_pool() else {
-            return Ok(LocalMutationOutcome::Unavailable);
-        };
-        billing_query::update_admin_billing_rule(&pool, rule_id, input).await
+        self.data
+            .update_admin_billing_rule(rule_id, input)
+            .await
+            .map(local_mutation_outcome)
+            .map_err(data_error)
     }
 
     pub(crate) async fn create_admin_billing_collector(
@@ -197,10 +208,11 @@ impl AppState {
             return Ok(LocalMutationOutcome::Applied(record));
         }
 
-        let Some(pool) = self.postgres_pool() else {
-            return Ok(LocalMutationOutcome::Unavailable);
-        };
-        billing_query::create_admin_billing_collector(&pool, input).await
+        self.data
+            .create_admin_billing_collector(input)
+            .await
+            .map(local_mutation_outcome)
+            .map_err(data_error)
     }
 
     pub(crate) async fn list_admin_billing_collectors(
@@ -243,20 +255,17 @@ impl AppState {
             return Ok(Some((items, total)));
         }
 
-        let Some(pool) = self.postgres_pool() else {
-            return Ok(None);
-        };
-        let (items, total) = billing_query::list_admin_billing_collectors(
-            &pool,
-            api_format,
-            task_type,
-            dimension_name,
-            is_enabled,
-            page,
-            page_size,
-        )
-        .await?;
-        Ok(Some((items, total)))
+        self.data
+            .list_admin_billing_collectors(
+                api_format,
+                task_type,
+                dimension_name,
+                is_enabled,
+                page,
+                page_size,
+            )
+            .await
+            .map_err(data_error)
     }
 
     pub(crate) async fn read_admin_billing_collector(
@@ -272,10 +281,10 @@ impl AppState {
                 .cloned());
         }
 
-        let Some(pool) = self.postgres_pool() else {
-            return Ok(None);
-        };
-        billing_query::find_admin_billing_collector(&pool, collector_id).await
+        self.data
+            .find_admin_billing_collector(collector_id)
+            .await
+            .map_err(data_error)
     }
 
     pub(crate) async fn update_admin_billing_collector(
@@ -305,10 +314,11 @@ impl AppState {
             return Ok(LocalMutationOutcome::Applied(record.clone()));
         }
 
-        let Some(pool) = self.postgres_pool() else {
-            return Ok(LocalMutationOutcome::Unavailable);
-        };
-        billing_query::update_admin_billing_collector(&pool, collector_id, input).await
+        self.data
+            .update_admin_billing_collector(collector_id, input)
+            .await
+            .map(local_mutation_outcome)
+            .map_err(data_error)
     }
 
     pub(crate) async fn apply_admin_billing_preset(
@@ -389,9 +399,10 @@ impl AppState {
             ));
         }
 
-        let Some(pool) = self.postgres_pool() else {
-            return Ok(LocalMutationOutcome::Unavailable);
-        };
-        billing_query::apply_admin_billing_preset(&pool, preset, mode, collectors).await
+        self.data
+            .apply_admin_billing_preset(preset, mode, collectors)
+            .await
+            .map(local_mutation_outcome)
+            .map_err(data_error)
     }
 }

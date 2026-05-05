@@ -5,8 +5,8 @@ use super::{
     build_auth_error_response, build_auth_json_response, build_wallet_payload,
     build_wallet_recharge_storage_unavailable_response, http, parse_wallet_limit,
     parse_wallet_offset, resolve_authenticated_local_user, unix_secs_to_rfc3339,
-    wallet_normalize_optional_string_field, AppState, Body, GatewayError,
-    GatewayPublicRequestContext, Response, WALLET_SAFE_GATEWAY_RESPONSE_KEYS,
+    wallet_normalize_optional_string_field, AppState, Body, GatewayPublicRequestContext, Response,
+    WALLET_SAFE_GATEWAY_RESPONSE_KEYS,
 };
 #[cfg(test)]
 use super::{
@@ -16,7 +16,6 @@ use super::{
 use chrono::Utc;
 use serde::Deserialize;
 use serde_json::json;
-use sqlx::Row;
 use uuid::Uuid;
 
 #[derive(Debug, Deserialize)]
@@ -152,65 +151,6 @@ fn build_wallet_payment_order_payload(
     })
 }
 
-pub(crate) fn wallet_payment_order_payload_from_row(
-    row: &sqlx::postgres::PgRow,
-) -> Result<serde_json::Value, GatewayError> {
-    let created_at = row
-        .try_get::<Option<i64>, _>("created_at_unix_ms")
-        .map_err(|err| GatewayError::Internal(err.to_string()))?
-        .and_then(|value| u64::try_from(value).ok())
-        .and_then(unix_secs_to_rfc3339);
-    let paid_at = row
-        .try_get::<Option<i64>, _>("paid_at_unix_secs")
-        .map_err(|err| GatewayError::Internal(err.to_string()))?
-        .and_then(|value| u64::try_from(value).ok())
-        .and_then(unix_secs_to_rfc3339);
-    let credited_at = row
-        .try_get::<Option<i64>, _>("credited_at_unix_secs")
-        .map_err(|err| GatewayError::Internal(err.to_string()))?
-        .and_then(|value| u64::try_from(value).ok())
-        .and_then(unix_secs_to_rfc3339);
-    let expires_at = row
-        .try_get::<Option<i64>, _>("expires_at_unix_secs")
-        .map_err(|err| GatewayError::Internal(err.to_string()))?
-        .and_then(|value| u64::try_from(value).ok())
-        .and_then(unix_secs_to_rfc3339);
-    Ok(build_wallet_payment_order_payload(
-        row.try_get::<String, _>("id")
-            .map_err(|err| GatewayError::Internal(err.to_string()))?,
-        row.try_get::<String, _>("order_no")
-            .map_err(|err| GatewayError::Internal(err.to_string()))?,
-        row.try_get::<String, _>("wallet_id")
-            .map_err(|err| GatewayError::Internal(err.to_string()))?,
-        row.try_get::<Option<String>, _>("user_id")
-            .map_err(|err| GatewayError::Internal(err.to_string()))?,
-        row.try_get::<f64, _>("amount_usd")
-            .map_err(|err| GatewayError::Internal(err.to_string()))?,
-        row.try_get::<Option<f64>, _>("pay_amount")
-            .map_err(|err| GatewayError::Internal(err.to_string()))?,
-        row.try_get::<Option<String>, _>("pay_currency")
-            .map_err(|err| GatewayError::Internal(err.to_string()))?,
-        row.try_get::<Option<f64>, _>("exchange_rate")
-            .map_err(|err| GatewayError::Internal(err.to_string()))?,
-        row.try_get::<f64, _>("refunded_amount_usd")
-            .map_err(|err| GatewayError::Internal(err.to_string()))?,
-        row.try_get::<f64, _>("refundable_amount_usd")
-            .map_err(|err| GatewayError::Internal(err.to_string()))?,
-        row.try_get::<String, _>("payment_method")
-            .map_err(|err| GatewayError::Internal(err.to_string()))?,
-        row.try_get::<Option<String>, _>("gateway_order_id")
-            .map_err(|err| GatewayError::Internal(err.to_string()))?,
-        row.try_get::<Option<serde_json::Value>, _>("gateway_response")
-            .map_err(|err| GatewayError::Internal(err.to_string()))?,
-        row.try_get::<String, _>("effective_status")
-            .map_err(|err| GatewayError::Internal(err.to_string()))?,
-        created_at,
-        paid_at,
-        credited_at,
-        expires_at,
-    ))
-}
-
 fn wallet_payment_order_payload_from_record(
     record: &aether_data::repository::wallet::StoredAdminPaymentOrder,
 ) -> serde_json::Value {
@@ -285,7 +225,7 @@ pub(super) async fn handle_wallet_create_recharge(
         }
     };
 
-    if state.postgres_pool().is_none() {
+    if !state.has_database_wallet_data_writer() {
         #[cfg(test)]
         {
             let Some(wallet) = wallet else {
@@ -485,11 +425,12 @@ pub(super) async fn handle_wallet_recharge_list(
         }
     };
     #[cfg(test)]
-    let (items, total) = if state.postgres_pool().is_none() && items.is_empty() && total == 0 {
-        wallet_test_recharge_orders_for_user(&auth.user.id, limit, offset)
-    } else {
-        (items, total)
-    };
+    let (items, total) =
+        if !state.has_database_wallet_data_writer() && items.is_empty() && total == 0 {
+            wallet_test_recharge_orders_for_user(&auth.user.id, limit, offset)
+        } else {
+            (items, total)
+        };
 
     let mut payload = json!({
         "items": items,

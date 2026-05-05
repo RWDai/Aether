@@ -155,6 +155,7 @@ impl AppState {
             .map_err(|err| GatewayError::Internal(err.to_string()))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn rotate_user_session_refresh_token(
         &self,
         user_id: &str,

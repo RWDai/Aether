@@ -1,264 +1,16 @@
 use crate::handlers::shared::decrypt_catalog_secret_with_fallbacks;
 use crate::{AppState, GatewayError};
 use aether_data::repository::oauth_providers::StoredOAuthProviderConfig;
-use aether_data::repository::users::StoredUserAuthRecord;
+use aether_data::repository::users::{StoredUserAuthRecord, StoredUserOAuthLinkSummary};
 use aether_oauth::identity::{IdentityClaims, IdentityOAuthProviderConfig};
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use serde::Serialize;
 use serde_json::{json, Value};
-use sqlx::Row;
 use uuid::Uuid;
 
 const LINUXDO_AUTHORIZE_URL: &str = "https://connect.linux.do/oauth2/authorize";
 const LINUXDO_TOKEN_URL: &str = "https://connect.linux.do/oauth2/token";
 const LINUXDO_USERINFO_URL: &str = "https://connect.linux.do/api/user";
-
-const FIND_OAUTH_LINKED_USER_SQL: &str = r#"
-SELECT
-    users.id,
-    users.email,
-    users.email_verified,
-    users.username,
-    users.password_hash,
-    users.role::text AS role,
-    users.auth_source::text AS auth_source,
-    users.allowed_providers,
-    users.allowed_api_formats,
-    users.allowed_models,
-    users.is_active,
-    users.is_deleted,
-    users.created_at,
-    users.last_login_at
-FROM user_oauth_links
-JOIN users ON users.id = user_oauth_links.user_id
-WHERE user_oauth_links.provider_type = $1
-  AND user_oauth_links.provider_user_id = $2
-LIMIT 1
-"#;
-
-const FIND_USER_BY_EMAIL_SQL: &str = r#"
-SELECT
-    id,
-    email,
-    email_verified,
-    username,
-    password_hash,
-    role::text AS role,
-    auth_source::text AS auth_source,
-    allowed_providers,
-    allowed_api_formats,
-    allowed_models,
-    is_active,
-    is_deleted,
-    created_at,
-    last_login_at
-FROM users
-WHERE LOWER(email) = LOWER($1)
-  AND is_deleted IS FALSE
-LIMIT 1
-"#;
-
-const CHECK_USERNAME_TAKEN_SQL: &str = r#"
-SELECT id
-FROM users
-WHERE username = $1
-LIMIT 1
-"#;
-
-const CREATE_OAUTH_USER_SQL: &str = r#"
-INSERT INTO users (
-    id,
-    email,
-    email_verified,
-    username,
-    password_hash,
-    role,
-    auth_source,
-    is_active,
-    is_deleted,
-    created_at,
-    updated_at,
-    last_login_at
-)
-VALUES (
-    $1,
-    $2,
-    TRUE,
-    $3,
-    NULL,
-    'user'::userrole,
-    'oauth'::authsource,
-    TRUE,
-    FALSE,
-    $4,
-    $4,
-    $4
-)
-RETURNING
-    id,
-    email,
-    email_verified,
-    username,
-    password_hash,
-    role::text AS role,
-    auth_source::text AS auth_source,
-    allowed_providers,
-    allowed_api_formats,
-    allowed_models,
-    is_active,
-    is_deleted,
-    created_at,
-    last_login_at
-"#;
-
-const UPSERT_OAUTH_LINK_SQL: &str = r#"
-INSERT INTO user_oauth_links (
-    id,
-    user_id,
-    provider_type,
-    provider_user_id,
-    provider_username,
-    provider_email,
-    extra_data,
-    linked_at,
-    last_login_at
-)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
-ON CONFLICT (user_id, provider_type) DO UPDATE
-SET provider_user_id = EXCLUDED.provider_user_id,
-    provider_username = EXCLUDED.provider_username,
-    provider_email = EXCLUDED.provider_email,
-    extra_data = EXCLUDED.extra_data,
-    last_login_at = EXCLUDED.last_login_at
-"#;
-
-const TOUCH_OAUTH_LINK_SQL: &str = r#"
-UPDATE user_oauth_links
-SET provider_username = COALESCE($3, provider_username),
-    provider_email = COALESCE($4, provider_email),
-    extra_data = COALESCE($5, extra_data),
-    last_login_at = $6
-WHERE provider_type = $1
-  AND provider_user_id = $2
-"#;
-
-const CREATE_AUTH_USER_WALLET_SQL: &str = r#"
-INSERT INTO wallets (
-    id,
-    user_id,
-    api_key_id,
-    balance,
-    gift_balance,
-    limit_mode,
-    currency,
-    status,
-    total_recharged,
-    total_consumed,
-    total_refunded,
-    total_adjusted,
-    created_at,
-    updated_at
-)
-VALUES (
-    $1,
-    $2,
-    NULL,
-    0,
-    $3,
-    $4,
-    'USD',
-    'active',
-    0,
-    0,
-    0,
-    $3,
-    NOW(),
-    NOW()
-)
-"#;
-
-const CREATE_AUTH_USER_WALLET_GIFT_TX_SQL: &str = r#"
-INSERT INTO wallet_transactions (
-    id,
-    wallet_id,
-    category,
-    reason_code,
-    amount,
-    balance_before,
-    balance_after,
-    recharge_balance_before,
-    recharge_balance_after,
-    gift_balance_before,
-    gift_balance_after,
-    link_type,
-    link_id,
-    operator_id,
-    description,
-    created_at
-)
-VALUES (
-    $1,
-    $2,
-    'gift',
-    'gift_initial',
-    $3,
-    0,
-    $3,
-    0,
-    0,
-    0,
-    $3,
-    'system_task',
-    $4,
-    NULL,
-    '用户初始赠款',
-    NOW()
-)
-"#;
-
-const LIST_OAUTH_LINKS_SQL: &str = r#"
-SELECT
-    user_oauth_links.provider_type,
-    oauth_providers.display_name,
-    user_oauth_links.provider_username,
-    user_oauth_links.provider_email,
-    user_oauth_links.linked_at,
-    user_oauth_links.last_login_at,
-    oauth_providers.is_enabled AS provider_enabled
-FROM user_oauth_links
-JOIN oauth_providers
-  ON oauth_providers.provider_type = user_oauth_links.provider_type
-WHERE user_oauth_links.user_id = $1
-ORDER BY user_oauth_links.linked_at ASC
-"#;
-
-const FIND_OAUTH_LINK_OWNER_SQL: &str = r#"
-SELECT user_id
-FROM user_oauth_links
-WHERE provider_type = $1
-  AND provider_user_id = $2
-LIMIT 1
-"#;
-
-const FIND_USER_PROVIDER_LINK_OWNER_SQL: &str = r#"
-SELECT user_id
-FROM user_oauth_links
-WHERE user_id = $1
-  AND provider_type = $2
-LIMIT 1
-"#;
-
-const COUNT_USER_OAUTH_LINKS_SQL: &str = r#"
-SELECT COUNT(*)::bigint AS link_count
-FROM user_oauth_links
-WHERE user_id = $1
-"#;
-
-const DELETE_USER_OAUTH_LINK_SQL: &str = r#"
-DELETE FROM user_oauth_links
-WHERE user_id = $1
-  AND provider_type = $2
-"#;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct IdentityOAuthProviderSummary {
@@ -350,15 +102,14 @@ pub(crate) async fn list_identity_oauth_links(
     state: &AppState,
     user_id: &str,
 ) -> Result<Vec<IdentityOAuthLinkSummary>, GatewayError> {
-    let Some(pool) = state.postgres_pool() else {
-        return Ok(Vec::new());
-    };
-    let rows = sqlx::query(LIST_OAUTH_LINKS_SQL)
-        .bind(user_id)
-        .fetch_all(&pool)
+    state
+        .data
+        .list_user_oauth_links(user_id)
         .await
-        .map_err(sql_gateway_error)?;
-    rows.iter().map(map_link_summary_row).collect()
+        .map_err(data_gateway_error)?
+        .into_iter()
+        .map(map_link_summary)
+        .collect()
 }
 
 pub(crate) async fn list_bindable_identity_oauth_providers(
@@ -382,39 +133,36 @@ pub(crate) async fn resolve_identity_oauth_login_user(
     state: &AppState,
     claims: &IdentityClaims,
 ) -> Result<StoredUserAuthRecord, IdentityOAuthAccountError> {
-    let Some(pool) = state.postgres_pool() else {
-        return Err(IdentityOAuthAccountError::ProviderUnavailable);
-    };
     let now = Utc::now();
-    if let Some(row) = sqlx::query(FIND_OAUTH_LINKED_USER_SQL)
-        .bind(&claims.provider_type)
-        .bind(&claims.subject)
-        .fetch_optional(&pool)
+    if let Some(user) = state
+        .data
+        .find_oauth_linked_user(&claims.provider_type, &claims.subject)
         .await
-        .map_err(repo_sql_error)?
+        .map_err(repo_data_error)?
     {
-        sqlx::query(TOUCH_OAUTH_LINK_SQL)
-            .bind(&claims.provider_type)
-            .bind(&claims.subject)
-            .bind(claims.username.as_deref())
-            .bind(claims.email.as_deref())
-            .bind(Some(claims.raw.clone()))
-            .bind(now)
-            .execute(&pool)
+        state
+            .data
+            .touch_oauth_link(
+                &claims.provider_type,
+                &claims.subject,
+                claims.username.as_deref(),
+                claims.email.as_deref(),
+                Some(claims.raw.clone()),
+                now,
+            )
             .await
-            .map_err(repo_sql_error)?;
-        return map_user_auth_row(&row).map_err(repo_data_error);
+            .map_err(repo_data_error)?;
+        return Ok(user);
     }
 
     let email = normalize_identity_email(claims.email.as_deref());
     if let Some(email) = email.as_deref() {
-        if let Some(row) = sqlx::query(FIND_USER_BY_EMAIL_SQL)
-            .bind(email)
-            .fetch_optional(&pool)
+        if let Some(existing) = state
+            .data
+            .find_active_user_auth_by_email_ci(email)
             .await
-            .map_err(repo_sql_error)?
+            .map_err(repo_data_error)?
         {
-            let existing = map_user_auth_row(&row).map_err(repo_data_error)?;
             return Err(match existing.auth_source.to_ascii_lowercase().as_str() {
                 "local" => IdentityOAuthAccountError::EmailExistsLocal,
                 "ldap" => IdentityOAuthAccountError::EmailIsLdap,
@@ -442,22 +190,31 @@ pub(crate) async fn resolve_identity_oauth_login_user(
         .map(|value| system_config_f64(value, 10.0))
         .unwrap_or(10.0);
 
-    let mut tx = pool.begin().await.map_err(repo_sql_error)?;
-    let username = unique_oauth_username(&mut tx, claims).await?;
-    let user_id = Uuid::new_v4().to_string();
-    let row = sqlx::query(CREATE_OAUTH_USER_SQL)
-        .bind(&user_id)
-        .bind(email.as_deref())
-        .bind(&username)
-        .bind(now)
-        .fetch_one(&mut *tx)
+    let username = unique_oauth_username(state, claims).await?;
+    let user = state
+        .data
+        .create_oauth_auth_user(email, username, now)
         .await
-        .map_err(repo_sql_error)?;
-    let user = map_user_auth_row(&row).map_err(repo_data_error)?;
-
-    create_initial_wallet_in_tx(&mut tx, &user.id, initial_gift).await?;
-    upsert_oauth_link_in_tx(&mut tx, &user.id, claims, now).await?;
-    tx.commit().await.map_err(repo_sql_error)?;
+        .map_err(repo_data_error)?
+        .ok_or_else(|| IdentityOAuthAccountError::Storage("oauth user not created".to_string()))?;
+    match state
+        .initialize_auth_user_wallet(&user.id, initial_gift, false)
+        .await
+    {
+        Ok(Some(_wallet)) => {}
+        Ok(None) => {
+            let _ = state.delete_local_auth_user(&user.id).await;
+            return Err(IdentityOAuthAccountError::ProviderUnavailable);
+        }
+        Err(err) => {
+            let _ = state.delete_local_auth_user(&user.id).await;
+            return Err(IdentityOAuthAccountError::Storage(format!("{err:?}")));
+        }
+    }
+    if let Err(err) = upsert_oauth_link(state, &user.id, claims, now).await {
+        let _ = state.delete_local_auth_user(&user.id).await;
+        return Err(err);
+    }
     Ok(user)
 }
 
@@ -469,34 +226,25 @@ pub(crate) async fn bind_identity_oauth_to_user(
     if user.auth_source.eq_ignore_ascii_case("ldap") {
         return Err(IdentityOAuthAccountError::EmailIsLdap);
     }
-    let Some(pool) = state.postgres_pool() else {
-        return Err(IdentityOAuthAccountError::ProviderUnavailable);
-    };
-    if let Some(row) = sqlx::query(FIND_OAUTH_LINK_OWNER_SQL)
-        .bind(&claims.provider_type)
-        .bind(&claims.subject)
-        .fetch_optional(&pool)
+    if let Some(owner) = state
+        .data
+        .find_oauth_link_owner(&claims.provider_type, &claims.subject)
         .await
-        .map_err(repo_sql_error)?
+        .map_err(repo_data_error)?
     {
-        let owner: String = row.try_get("user_id").map_err(repo_sql_error)?;
         if owner != user.id {
             return Err(IdentityOAuthAccountError::OAuthAlreadyBound);
         }
     }
-    if sqlx::query(FIND_USER_PROVIDER_LINK_OWNER_SQL)
-        .bind(&user.id)
-        .bind(&claims.provider_type)
-        .fetch_optional(&pool)
+    if state
+        .data
+        .has_user_oauth_provider_link(&user.id, &claims.provider_type)
         .await
-        .map_err(repo_sql_error)?
-        .is_some()
+        .map_err(repo_data_error)?
     {
         return Err(IdentityOAuthAccountError::AlreadyBoundProvider);
     }
-    let mut tx = pool.begin().await.map_err(repo_sql_error)?;
-    upsert_oauth_link_in_tx(&mut tx, &user.id, claims, Utc::now()).await?;
-    tx.commit().await.map_err(repo_sql_error)?;
+    upsert_oauth_link(state, &user.id, claims, Utc::now()).await?;
     Ok(())
 }
 
@@ -508,28 +256,22 @@ pub(crate) async fn unbind_identity_oauth(
     if user.auth_source.eq_ignore_ascii_case("ldap") {
         return Err(IdentityOAuthAccountError::EmailIsLdap);
     }
-    let Some(pool) = state.postgres_pool() else {
-        return Err(IdentityOAuthAccountError::ProviderUnavailable);
-    };
-    let row = sqlx::query(COUNT_USER_OAUTH_LINKS_SQL)
-        .bind(&user.id)
-        .fetch_one(&pool)
+    let link_count = state
+        .data
+        .count_user_oauth_links(&user.id)
         .await
-        .map_err(repo_sql_error)?;
-    let link_count: i64 = row.try_get("link_count").map_err(repo_sql_error)?;
+        .map_err(repo_data_error)?;
     if user.auth_source.eq_ignore_ascii_case("oauth") && link_count <= 1 {
         return Err(IdentityOAuthAccountError::LastOAuthBinding);
     }
     if !user.auth_source.eq_ignore_ascii_case("local") && link_count <= 1 {
         return Err(IdentityOAuthAccountError::LastLoginMethod);
     }
-    let result = sqlx::query(DELETE_USER_OAUTH_LINK_SQL)
-        .bind(&user.id)
-        .bind(provider_type.trim())
-        .execute(&pool)
+    state
+        .data
+        .delete_user_oauth_link(&user.id, provider_type.trim())
         .await
-        .map_err(repo_sql_error)?;
-    Ok(result.rows_affected() > 0)
+        .map_err(repo_data_error)
 }
 
 fn stored_provider_config_to_identity_config(
@@ -590,52 +332,22 @@ fn identity_provider_defaults(
     }
 }
 
-fn map_link_summary_row(
-    row: &sqlx::postgres::PgRow,
+fn map_link_summary(
+    row: StoredUserOAuthLinkSummary,
 ) -> Result<IdentityOAuthLinkSummary, GatewayError> {
     Ok(IdentityOAuthLinkSummary {
-        provider_type: row.try_get("provider_type").map_err(sql_gateway_error)?,
-        display_name: row.try_get("display_name").map_err(sql_gateway_error)?,
-        provider_username: row
-            .try_get("provider_username")
-            .map_err(sql_gateway_error)?,
-        provider_email: row.try_get("provider_email").map_err(sql_gateway_error)?,
-        linked_at: row
-            .try_get::<Option<DateTime<Utc>>, _>("linked_at")
-            .map_err(sql_gateway_error)?
-            .map(|value| value.to_rfc3339()),
-        last_login_at: row
-            .try_get::<Option<DateTime<Utc>>, _>("last_login_at")
-            .map_err(sql_gateway_error)?
-            .map(|value| value.to_rfc3339()),
-        provider_enabled: row.try_get("provider_enabled").map_err(sql_gateway_error)?,
+        provider_type: row.provider_type,
+        display_name: row.display_name,
+        provider_username: row.provider_username,
+        provider_email: row.provider_email,
+        linked_at: row.linked_at.map(|value| value.to_rfc3339()),
+        last_login_at: row.last_login_at.map(|value| value.to_rfc3339()),
+        provider_enabled: row.provider_enabled,
     })
 }
 
-fn map_user_auth_row(
-    row: &sqlx::postgres::PgRow,
-) -> Result<StoredUserAuthRecord, aether_data::DataLayerError> {
-    StoredUserAuthRecord::new(
-        row.try_get("id").map_err(data_unexpected)?,
-        row.try_get("email").map_err(data_unexpected)?,
-        row.try_get("email_verified").map_err(data_unexpected)?,
-        row.try_get("username").map_err(data_unexpected)?,
-        row.try_get("password_hash").map_err(data_unexpected)?,
-        row.try_get("role").map_err(data_unexpected)?,
-        row.try_get("auth_source").map_err(data_unexpected)?,
-        row.try_get("allowed_providers").map_err(data_unexpected)?,
-        row.try_get("allowed_api_formats")
-            .map_err(data_unexpected)?,
-        row.try_get("allowed_models").map_err(data_unexpected)?,
-        row.try_get("is_active").map_err(data_unexpected)?,
-        row.try_get("is_deleted").map_err(data_unexpected)?,
-        row.try_get("created_at").map_err(data_unexpected)?,
-        row.try_get("last_login_at").map_err(data_unexpected)?,
-    )
-}
-
 async fn unique_oauth_username(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    state: &AppState,
     claims: &IdentityClaims,
 ) -> Result<String, IdentityOAuthAccountError> {
     let base = normalize_oauth_username(
@@ -661,11 +373,11 @@ async fn unique_oauth_username(
                 short_uuid()
             )
         };
-        let taken = sqlx::query(CHECK_USERNAME_TAKEN_SQL)
-            .bind(&candidate)
-            .fetch_optional(&mut **tx)
+        let taken = state
+            .data
+            .find_user_auth_by_username(&candidate)
             .await
-            .map_err(repo_sql_error)?
+            .map_err(repo_data_error)?
             .is_some();
         if !taken {
             return Ok(candidate);
@@ -674,53 +386,25 @@ async fn unique_oauth_username(
     Ok(format!("oauth_{}", short_uuid()))
 }
 
-async fn upsert_oauth_link_in_tx(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+async fn upsert_oauth_link(
+    state: &AppState,
     user_id: &str,
     claims: &IdentityClaims,
-    now: DateTime<Utc>,
+    now: chrono::DateTime<Utc>,
 ) -> Result<(), IdentityOAuthAccountError> {
-    sqlx::query(UPSERT_OAUTH_LINK_SQL)
-        .bind(Uuid::new_v4().to_string())
-        .bind(user_id)
-        .bind(&claims.provider_type)
-        .bind(&claims.subject)
-        .bind(claims.username.as_deref())
-        .bind(claims.email.as_deref())
-        .bind(Some(claims.raw.clone()))
-        .bind(now)
-        .execute(&mut **tx)
+    state
+        .data
+        .upsert_user_oauth_link(
+            user_id,
+            &claims.provider_type,
+            &claims.subject,
+            claims.username.as_deref(),
+            claims.email.as_deref(),
+            Some(claims.raw.clone()),
+            now,
+        )
         .await
-        .map_err(repo_sql_error)?;
-    Ok(())
-}
-
-async fn create_initial_wallet_in_tx(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    user_id: &str,
-    initial_gift_usd: f64,
-) -> Result<(), IdentityOAuthAccountError> {
-    let gift_amount = initial_gift_usd.max(0.0);
-    let wallet_id = Uuid::new_v4().to_string();
-    sqlx::query(CREATE_AUTH_USER_WALLET_SQL)
-        .bind(&wallet_id)
-        .bind(user_id)
-        .bind(gift_amount)
-        .bind("finite")
-        .execute(&mut **tx)
-        .await
-        .map_err(repo_sql_error)?;
-    if gift_amount > 0.0 {
-        sqlx::query(CREATE_AUTH_USER_WALLET_GIFT_TX_SQL)
-            .bind(Uuid::new_v4().to_string())
-            .bind(&wallet_id)
-            .bind(gift_amount)
-            .bind(user_id)
-            .execute(&mut **tx)
-            .await
-            .map_err(repo_sql_error)?;
-    }
-    Ok(())
+        .map_err(repo_data_error)
 }
 
 fn normalize_identity_email(value: Option<&str>) -> Option<String> {
@@ -786,18 +470,10 @@ fn system_config_f64(value: &Value, default: f64) -> f64 {
     }
 }
 
-fn repo_sql_error(error: sqlx::Error) -> IdentityOAuthAccountError {
-    IdentityOAuthAccountError::Storage(error.to_string())
-}
-
 fn repo_data_error(error: aether_data::DataLayerError) -> IdentityOAuthAccountError {
     IdentityOAuthAccountError::Storage(error.to_string())
 }
 
-fn sql_gateway_error(error: sqlx::Error) -> GatewayError {
+fn data_gateway_error(error: aether_data::DataLayerError) -> GatewayError {
     GatewayError::Internal(error.to_string())
-}
-
-fn data_unexpected(error: sqlx::Error) -> aether_data::DataLayerError {
-    aether_data::DataLayerError::UnexpectedValue(error.to_string())
 }

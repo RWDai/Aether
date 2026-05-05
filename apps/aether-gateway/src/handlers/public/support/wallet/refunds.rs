@@ -2,8 +2,7 @@ use super::{
     build_auth_error_response, build_auth_json_response, build_wallet_payload,
     build_wallet_refund_storage_unavailable_response, http, parse_wallet_limit,
     parse_wallet_offset, resolve_authenticated_local_user, unix_secs_to_rfc3339,
-    wallet_normalize_optional_string_field, AppState, Body, GatewayError,
-    GatewayPublicRequestContext, Response,
+    wallet_normalize_optional_string_field, AppState, Body, GatewayPublicRequestContext, Response,
 };
 #[cfg(test)]
 use super::{
@@ -13,7 +12,6 @@ use super::{
 use chrono::Utc;
 use serde::Deserialize;
 use serde_json::json;
-use sqlx::Row;
 use uuid::Uuid;
 
 #[derive(Debug, Deserialize)]
@@ -92,51 +90,6 @@ fn wallet_refund_id_from_path(request_path: &str) -> Option<String> {
 
 pub(super) fn wallet_refund_detail_path_matches(request_path: &str) -> bool {
     wallet_refund_id_from_path(request_path).is_some()
-}
-
-fn wallet_refund_payload_from_row(
-    row: &sqlx::postgres::PgRow,
-) -> Result<serde_json::Value, GatewayError> {
-    let created_at = row
-        .try_get::<Option<i64>, _>("created_at_unix_ms")
-        .map_err(|err| GatewayError::Internal(err.to_string()))?
-        .and_then(|value| u64::try_from(value).ok())
-        .and_then(unix_secs_to_rfc3339);
-    let updated_at = row
-        .try_get::<Option<i64>, _>("updated_at_unix_secs")
-        .map_err(|err| GatewayError::Internal(err.to_string()))?
-        .and_then(|value| u64::try_from(value).ok())
-        .and_then(unix_secs_to_rfc3339);
-    let processed_at = row
-        .try_get::<Option<i64>, _>("processed_at_unix_secs")
-        .map_err(|err| GatewayError::Internal(err.to_string()))?
-        .and_then(|value| u64::try_from(value).ok())
-        .and_then(unix_secs_to_rfc3339);
-    let completed_at = row
-        .try_get::<Option<i64>, _>("completed_at_unix_secs")
-        .map_err(|err| GatewayError::Internal(err.to_string()))?
-        .and_then(|value| u64::try_from(value).ok())
-        .and_then(unix_secs_to_rfc3339);
-    Ok(json!({
-        "id": row.try_get::<String, _>("id").map_err(|err| GatewayError::Internal(err.to_string()))?,
-        "refund_no": row.try_get::<String, _>("refund_no").map_err(|err| GatewayError::Internal(err.to_string()))?,
-        "payment_order_id": row.try_get::<Option<String>, _>("payment_order_id").map_err(|err| GatewayError::Internal(err.to_string()))?,
-        "source_type": row.try_get::<String, _>("source_type").map_err(|err| GatewayError::Internal(err.to_string()))?,
-        "source_id": row.try_get::<Option<String>, _>("source_id").map_err(|err| GatewayError::Internal(err.to_string()))?,
-        "refund_mode": row.try_get::<String, _>("refund_mode").map_err(|err| GatewayError::Internal(err.to_string()))?,
-        "amount_usd": row.try_get::<f64, _>("amount_usd").map_err(|err| GatewayError::Internal(err.to_string()))?,
-        "status": row.try_get::<String, _>("status").map_err(|err| GatewayError::Internal(err.to_string()))?,
-        "reason": row.try_get::<Option<String>, _>("reason").map_err(|err| GatewayError::Internal(err.to_string()))?,
-        "failure_reason": row.try_get::<Option<String>, _>("failure_reason").map_err(|err| GatewayError::Internal(err.to_string()))?,
-        "gateway_refund_id": row.try_get::<Option<String>, _>("gateway_refund_id").map_err(|err| GatewayError::Internal(err.to_string()))?,
-        "payout_method": row.try_get::<Option<String>, _>("payout_method").map_err(|err| GatewayError::Internal(err.to_string()))?,
-        "payout_reference": row.try_get::<Option<String>, _>("payout_reference").map_err(|err| GatewayError::Internal(err.to_string()))?,
-        "payout_proof": row.try_get::<Option<serde_json::Value>, _>("payout_proof").map_err(|err| GatewayError::Internal(err.to_string()))?,
-        "created_at": created_at,
-        "updated_at": updated_at,
-        "processed_at": processed_at,
-        "completed_at": completed_at,
-    }))
 }
 
 fn wallet_refund_payload_from_record(
@@ -255,18 +208,19 @@ pub(super) async fn handle_wallet_refunds_list(
         })
         .collect::<Vec<_>>();
     #[cfg(test)]
-    let (items, total) = if state.postgres_pool().is_none() && items.is_empty() && total == 0 {
-        let all_items = wallet_test_refunds_for_wallet(&wallet.id);
-        let total = all_items.len() as u64;
-        let items = all_items
-            .into_iter()
-            .skip(offset)
-            .take(limit)
-            .collect::<Vec<_>>();
-        (items, total)
-    } else {
-        (items, total)
-    };
+    let (items, total) =
+        if !state.has_database_wallet_data_writer() && items.is_empty() && total == 0 {
+            let all_items = wallet_test_refunds_for_wallet(&wallet.id);
+            let total = all_items.len() as u64;
+            let items = all_items
+                .into_iter()
+                .skip(offset)
+                .take(limit)
+                .collect::<Vec<_>>();
+            (items, total)
+        } else {
+            (items, total)
+        };
 
     let mut payload = json!({
         "items": items,
@@ -394,7 +348,7 @@ pub(super) async fn handle_wallet_create_refund(
         );
     };
 
-    if state.postgres_pool().is_none() {
+    if !state.has_database_wallet_data_writer() {
         #[cfg(test)]
         {
             if let Some(idempotency_key) = payload.idempotency_key.as_deref() {

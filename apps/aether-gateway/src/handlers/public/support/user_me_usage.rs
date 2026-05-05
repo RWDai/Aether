@@ -18,9 +18,6 @@ use axum::{
 use chrono::Utc;
 use serde_json::json;
 
-use crate::query::usage_heatmap::{
-    list_usage_heatmap_aggregate_rows, read_stats_daily_cutoff_date,
-};
 use crate::GatewayError;
 
 use super::{
@@ -1204,8 +1201,8 @@ pub(super) async fn handle_users_me_usage_heatmap_get(
 async fn build_usage_heatmap_summaries(
     state: &AppState,
     created_from_unix_secs: u64,
-    start_date: chrono::NaiveDate,
-    today: chrono::NaiveDate,
+    _start_date: chrono::NaiveDate,
+    _today: chrono::NaiveDate,
     user_id: Option<&str>,
 ) -> Result<Vec<StoredUsageDailySummary>, GatewayError> {
     let query = aether_data_contracts::repository::usage::UsageDailyHeatmapQuery {
@@ -1213,43 +1210,7 @@ async fn build_usage_heatmap_summaries(
         user_id: user_id.map(ToOwned::to_owned),
         admin_mode: user_id.is_none(),
     };
-    let Some(pool) = state.postgres_pool() else {
-        return state.summarize_usage_daily_heatmap(&query).await;
-    };
-
-    let Some(cutoff_date) = read_stats_daily_cutoff_date(&pool).await? else {
-        return state.summarize_usage_daily_heatmap(&query).await;
-    };
-
-    let cutoff_day = cutoff_date.date_naive().min(today);
-    let mut summaries =
-        list_usage_heatmap_aggregate_rows(&pool, start_date, cutoff_day, user_id).await?;
-    let raw_start_date = start_date.max(cutoff_day);
-    if raw_start_date <= today {
-        let raw_start_of_day = raw_start_date
-            .and_hms_opt(0, 0, 0)
-            .expect("heatmap day start should be valid");
-        let raw_created_from_unix_secs = u64::try_from(
-            chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(
-                raw_start_of_day,
-                chrono::Utc,
-            )
-            .timestamp(),
-        )
-        .unwrap_or_default();
-        summaries.extend(
-            state
-                .summarize_usage_daily_heatmap(
-                    &aether_data_contracts::repository::usage::UsageDailyHeatmapQuery {
-                        created_from_unix_secs: raw_created_from_unix_secs,
-                        user_id: user_id.map(ToOwned::to_owned),
-                        admin_mode: user_id.is_none(),
-                    },
-                )
-                .await?,
-        );
-    }
-
+    let mut summaries = state.summarize_usage_daily_heatmap(&query).await?;
     summaries.sort_by(|left, right| left.date.cmp(&right.date));
     Ok(summaries)
 }

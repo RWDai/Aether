@@ -61,7 +61,7 @@ pub(in super::super) async fn build_admin_wallet_recharge_response(
         ));
     }
     let operator_id = admin_wallet_operator_id(request_context);
-    let has_postgres = state.has_postgres_pool();
+    let has_wallet_writer = state.has_wallet_data_writer();
     let Some((wallet, payment_order)) = state
         .admin_create_manual_wallet_recharge(
             &wallet_id,
@@ -72,7 +72,7 @@ pub(in super::super) async fn build_admin_wallet_recharge_response(
         )
         .await?
     else {
-        return if has_postgres {
+        return if has_wallet_writer {
             Ok(build_admin_wallet_not_found_response())
         } else {
             Ok(build_admin_wallets_data_unavailable_response())

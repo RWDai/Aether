@@ -1,0 +1,182 @@
+[table.proxy_nodes]
+domain = "proxy_nodes"
+order = 10
+primary_key = ["id"]
+
+[[table.proxy_nodes.columns]]
+name = "id"
+type = "text_id"
+length = 64
+
+[[table.proxy_nodes.columns]]
+name = "name"
+type = "text"
+length = 255
+
+[[table.proxy_nodes.columns]]
+name = "ip"
+type = "text"
+length = 512
+
+[[table.proxy_nodes.columns]]
+name = "port"
+type = "int32"
+
+[[table.proxy_nodes.columns]]
+name = "region"
+type = "text"
+length = 100
+nullable = true
+
+[[table.proxy_nodes.columns]]
+name = "status"
+type = "text"
+length = 32
+default = "online"
+
+[[table.proxy_nodes.columns]]
+name = "registered_by"
+type = "text_id"
+length = 64
+nullable = true
+
+[[table.proxy_nodes.columns]]
+name = "last_heartbeat_at"
+type = "unix_seconds"
+nullable = true
+
+[[table.proxy_nodes.columns]]
+name = "heartbeat_interval"
+type = "int32"
+default = 30
+
+[[table.proxy_nodes.columns]]
+name = "active_connections"
+type = "int32"
+default = 0
+
+[[table.proxy_nodes.columns]]
+name = "total_requests"
+type = "int64"
+default = 0
+
+[[table.proxy_nodes.columns]]
+name = "avg_latency_ms"
+type = "float64"
+nullable = true
+
+[[table.proxy_nodes.columns]]
+name = "is_manual"
+type = "bool"
+default = false
+
+[[table.proxy_nodes.columns]]
+name = "proxy_url"
+type = "text"
+length = 500
+nullable = true
+
+[[table.proxy_nodes.columns]]
+name = "proxy_username"
+type = "text"
+length = 255
+nullable = true
+
+[[table.proxy_nodes.columns]]
+name = "proxy_password"
+type = "text"
+length = 500
+nullable = true
+
+[[table.proxy_nodes.columns]]
+name = "created_at"
+type = "unix_seconds"
+
+[[table.proxy_nodes.columns]]
+name = "updated_at"
+type = "unix_seconds"
+
+[[table.proxy_nodes.columns]]
+name = "remote_config"
+type = "json"
+nullable = true
+
+[[table.proxy_nodes.columns]]
+name = "config_version"
+type = "int32"
+default = 0
+
+[[table.proxy_nodes.columns]]
+name = "hardware_info"
+type = "json"
+nullable = true
+
+[[table.proxy_nodes.columns]]
+name = "estimated_max_concurrency"
+type = "int32"
+nullable = true
+
+[[table.proxy_nodes.columns]]
+name = "tunnel_mode"
+type = "bool"
+default = false
+
+[[table.proxy_nodes.columns]]
+name = "tunnel_connected"
+type = "bool"
+default = false
+
+[[table.proxy_nodes.columns]]
+name = "tunnel_connected_at"
+type = "unix_seconds"
+nullable = true
+
+[[table.proxy_nodes.columns]]
+name = "failed_requests"
+type = "int64"
+default = 0
+
+[[table.proxy_nodes.columns]]
+name = "dns_failures"
+type = "int64"
+default = 0
+
+[[table.proxy_nodes.columns]]
+name = "stream_errors"
+type = "int64"
+default = 0
+
+[[table.proxy_nodes.columns]]
+name = "proxy_metadata"
+type = "json"
+nullable = true
+
+[table.proxy_node_events]
+domain = "proxy_nodes"
+order = 20
+primary_key = ["id"]
+
+[[table.proxy_node_events.columns]]
+name = "id"
+type = "int64"
+auto_increment = true
+
+[[table.proxy_node_events.columns]]
+name = "node_id"
+type = "text_id"
+length = 64
+
+[[table.proxy_node_events.columns]]
+name = "event_type"
+type = "text"
+length = 64
+
+[[table.proxy_node_events.columns]]
+name = "detail"
+type = "text"
+length = 500
+nullable = true
+
+[[table.proxy_node_events.columns]]
+name = "created_at"
+type = "unix_seconds"

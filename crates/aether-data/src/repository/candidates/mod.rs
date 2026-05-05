@@ -1,5 +1,7 @@
 mod memory;
-mod sql;
+mod mysql;
+mod postgres;
+mod sqlite;
 
 #[allow(unused_imports)]
 pub(crate) use aether_data_contracts::repository::candidates::{
@@ -10,4 +12,6 @@ pub(crate) use aether_data_contracts::repository::candidates::{
     StoredRequestCandidate, UpsertRequestCandidateRecord,
 };
 pub use memory::InMemoryRequestCandidateRepository;
-pub use sql::SqlxRequestCandidateReadRepository;
+pub use mysql::MysqlRequestCandidateRepository;
+pub use postgres::SqlxRequestCandidateReadRepository;
+pub use sqlite::SqliteRequestCandidateRepository;

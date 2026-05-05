@@ -39,6 +39,17 @@ pub struct InMemoryWalletRepository {
     redeem_code_hash_to_id: RwLock<BTreeMap<String, String>>,
 }
 
+#[derive(Debug, Default)]
+pub(crate) struct WalletReadSeed {
+    pub(crate) wallets: Vec<StoredWalletSnapshot>,
+    pub(crate) payment_orders: Vec<StoredAdminPaymentOrder>,
+    pub(crate) payment_callbacks: Vec<StoredAdminPaymentCallback>,
+    pub(crate) wallet_transactions: Vec<StoredAdminWalletTransaction>,
+    pub(crate) refunds: Vec<StoredAdminWalletRefund>,
+    pub(crate) redeem_batches: Vec<StoredAdminRedeemCodeBatch>,
+    pub(crate) redeem_codes: Vec<StoredAdminRedeemCode>,
+}
+
 impl InMemoryWalletRepository {
     pub fn seed<I>(items: I) -> Self
     where
@@ -60,6 +71,48 @@ impl InMemoryWalletRepository {
         }
     }
 
+    pub(crate) fn seed_read_model(seed: WalletReadSeed) -> Self {
+        let mut wallets_by_id = BTreeMap::new();
+        for item in seed.wallets {
+            wallets_by_id.insert(item.id.clone(), item);
+        }
+        let mut payment_orders_by_id = BTreeMap::new();
+        for item in seed.payment_orders {
+            payment_orders_by_id.insert(item.id.clone(), item);
+        }
+        let mut payment_callbacks_by_id = BTreeMap::new();
+        for item in seed.payment_callbacks {
+            payment_callbacks_by_id.insert(item.id.clone(), item);
+        }
+        let mut wallet_transactions_by_id = BTreeMap::new();
+        for item in seed.wallet_transactions {
+            wallet_transactions_by_id.insert(item.id.clone(), item);
+        }
+        let mut refunds_by_id = BTreeMap::new();
+        for item in seed.refunds {
+            refunds_by_id.insert(item.id.clone(), item);
+        }
+        let mut redeem_batches_by_id = BTreeMap::new();
+        for item in seed.redeem_batches {
+            redeem_batches_by_id.insert(item.id.clone(), item);
+        }
+        let mut redeem_codes_by_id = BTreeMap::new();
+        for item in seed.redeem_codes {
+            redeem_codes_by_id.insert(item.id.clone(), item);
+        }
+
+        Self {
+            wallets_by_id: RwLock::new(wallets_by_id),
+            payment_orders_by_id: RwLock::new(payment_orders_by_id),
+            payment_callbacks_by_id: RwLock::new(payment_callbacks_by_id),
+            wallet_transactions_by_id: RwLock::new(wallet_transactions_by_id),
+            refunds_by_id: RwLock::new(refunds_by_id),
+            redeem_batches_by_id: RwLock::new(redeem_batches_by_id),
+            redeem_codes_by_id: RwLock::new(redeem_codes_by_id),
+            redeem_code_hash_to_id: RwLock::new(BTreeMap::new()),
+        }
+    }
+
     pub(crate) fn with_wallets_mut<R>(
         &self,
         f: impl FnOnce(&mut BTreeMap<String, StoredWalletSnapshot>) -> R,
@@ -75,6 +128,122 @@ fn current_unix_secs() -> u64 {
 
 fn current_unix_ms() -> u64 {
     chrono::Utc::now().timestamp_millis().max(0) as u64
+}
+
+struct WalletSnapshotUpdate<'a> {
+    balance: f64,
+    gift_balance: f64,
+    limit_mode: &'a str,
+    currency: &'a str,
+    status: &'a str,
+    total_recharged: f64,
+    total_consumed: f64,
+    total_refunded: f64,
+    total_adjusted: f64,
+    updated_at_unix_secs: Option<u64>,
+}
+
+fn update_wallet_by_owner(
+    wallets_by_id: &RwLock<BTreeMap<String, StoredWalletSnapshot>>,
+    matches_owner: impl Fn(&StoredWalletSnapshot) -> bool,
+    update: impl FnOnce(&mut StoredWalletSnapshot),
+) -> Result<Option<StoredWalletSnapshot>, DataLayerError> {
+    let mut wallets = wallets_by_id.write().expect("wallet repo lock");
+    let Some(wallet) = wallets.values_mut().find(|wallet| matches_owner(wallet)) else {
+        return Ok(None);
+    };
+    update(wallet);
+    Ok(Some(wallet.clone()))
+}
+
+fn update_wallet_snapshot_by_owner(
+    wallets_by_id: &RwLock<BTreeMap<String, StoredWalletSnapshot>>,
+    matches_owner: impl Fn(&StoredWalletSnapshot) -> bool,
+    update: WalletSnapshotUpdate<'_>,
+) -> Result<Option<StoredWalletSnapshot>, DataLayerError> {
+    update_wallet_by_owner(wallets_by_id, matches_owner, |wallet| {
+        wallet.balance = update.balance;
+        wallet.gift_balance = update.gift_balance;
+        wallet.limit_mode = update.limit_mode.to_string();
+        wallet.currency = update.currency.to_string();
+        wallet.status = update.status.to_string();
+        wallet.total_recharged = update.total_recharged;
+        wallet.total_consumed = update.total_consumed;
+        wallet.total_refunded = update.total_refunded;
+        wallet.total_adjusted = update.total_adjusted;
+        wallet.updated_at_unix_secs = update
+            .updated_at_unix_secs
+            .unwrap_or_else(current_unix_secs);
+    })
+}
+
+fn initialize_auth_wallet_in_memory(
+    wallets_by_id: &RwLock<BTreeMap<String, StoredWalletSnapshot>>,
+    wallet_transactions_by_id: &RwLock<BTreeMap<String, StoredAdminWalletTransaction>>,
+    user_id: Option<&str>,
+    api_key_id: Option<&str>,
+    initial_gift_usd: f64,
+    unlimited: bool,
+) -> Result<Option<StoredWalletSnapshot>, DataLayerError> {
+    let gift_amount = if unlimited {
+        0.0
+    } else {
+        initial_gift_usd.max(0.0)
+    };
+    let wallet = StoredWalletSnapshot::new(
+        uuid::Uuid::new_v4().to_string(),
+        user_id.map(str::to_string),
+        api_key_id.map(str::to_string),
+        0.0,
+        gift_amount,
+        if unlimited { "unlimited" } else { "finite" }.to_string(),
+        "USD".to_string(),
+        "active".to_string(),
+        0.0,
+        0.0,
+        0.0,
+        gift_amount,
+        current_unix_secs() as i64,
+    )?;
+    wallets_by_id
+        .write()
+        .expect("wallet repo lock")
+        .insert(wallet.id.clone(), wallet.clone());
+
+    if gift_amount > 0.0 {
+        let link_id = user_id.or(api_key_id).unwrap_or_default().to_string();
+        let description = if api_key_id.is_some() {
+            "独立余额 Key 初始赠款"
+        } else {
+            "用户初始赠款"
+        };
+        let transaction = StoredAdminWalletTransaction {
+            id: uuid::Uuid::new_v4().to_string(),
+            wallet_id: wallet.id.clone(),
+            category: "gift".to_string(),
+            reason_code: "gift_initial".to_string(),
+            amount: gift_amount,
+            balance_before: 0.0,
+            balance_after: gift_amount,
+            recharge_balance_before: 0.0,
+            recharge_balance_after: 0.0,
+            gift_balance_before: 0.0,
+            gift_balance_after: gift_amount,
+            link_type: Some("system_task".to_string()),
+            link_id: Some(link_id),
+            operator_id: None,
+            operator_name: None,
+            operator_email: None,
+            description: Some(description.to_string()),
+            created_at_unix_ms: Some(current_unix_ms()),
+        };
+        wallet_transactions_by_id
+            .write()
+            .expect("wallet repo lock")
+            .insert(transaction.id.clone(), transaction);
+    }
+
+    Ok(Some(wallet))
 }
 
 fn normalize_redeem_code(value: &str) -> Option<String> {
@@ -136,6 +305,132 @@ impl WalletReadRepository for InMemoryWalletRepository {
                 .find(|wallet| wallet.api_key_id.as_deref() == Some(api_key_id))
                 .cloned(),
         })
+    }
+
+    async fn update_auth_user_wallet_limit_mode(
+        &self,
+        user_id: &str,
+        limit_mode: &str,
+    ) -> Result<Option<StoredWalletSnapshot>, DataLayerError> {
+        update_wallet_by_owner(
+            &self.wallets_by_id,
+            |wallet| wallet.user_id.as_deref() == Some(user_id),
+            |wallet| {
+                wallet.limit_mode = limit_mode.to_string();
+                wallet.updated_at_unix_secs = current_unix_secs();
+            },
+        )
+    }
+
+    async fn update_auth_api_key_wallet_limit_mode(
+        &self,
+        api_key_id: &str,
+        limit_mode: &str,
+    ) -> Result<Option<StoredWalletSnapshot>, DataLayerError> {
+        update_wallet_by_owner(
+            &self.wallets_by_id,
+            |wallet| wallet.api_key_id.as_deref() == Some(api_key_id),
+            |wallet| {
+                wallet.limit_mode = limit_mode.to_string();
+                wallet.updated_at_unix_secs = current_unix_secs();
+            },
+        )
+    }
+
+    async fn initialize_auth_user_wallet(
+        &self,
+        user_id: &str,
+        initial_gift_usd: f64,
+        unlimited: bool,
+    ) -> Result<Option<StoredWalletSnapshot>, DataLayerError> {
+        initialize_auth_wallet_in_memory(
+            &self.wallets_by_id,
+            &self.wallet_transactions_by_id,
+            Some(user_id),
+            None,
+            initial_gift_usd,
+            unlimited,
+        )
+    }
+
+    async fn initialize_auth_api_key_wallet(
+        &self,
+        api_key_id: &str,
+        initial_gift_usd: f64,
+        unlimited: bool,
+    ) -> Result<Option<StoredWalletSnapshot>, DataLayerError> {
+        initialize_auth_wallet_in_memory(
+            &self.wallets_by_id,
+            &self.wallet_transactions_by_id,
+            None,
+            Some(api_key_id),
+            initial_gift_usd,
+            unlimited,
+        )
+    }
+
+    async fn update_auth_user_wallet_snapshot(
+        &self,
+        user_id: &str,
+        balance: f64,
+        gift_balance: f64,
+        limit_mode: &str,
+        currency: &str,
+        status: &str,
+        total_recharged: f64,
+        total_consumed: f64,
+        total_refunded: f64,
+        total_adjusted: f64,
+        updated_at_unix_secs: Option<u64>,
+    ) -> Result<Option<StoredWalletSnapshot>, DataLayerError> {
+        update_wallet_snapshot_by_owner(
+            &self.wallets_by_id,
+            |wallet| wallet.user_id.as_deref() == Some(user_id),
+            WalletSnapshotUpdate {
+                balance,
+                gift_balance,
+                limit_mode,
+                currency,
+                status,
+                total_recharged,
+                total_consumed,
+                total_refunded,
+                total_adjusted,
+                updated_at_unix_secs,
+            },
+        )
+    }
+
+    async fn update_auth_api_key_wallet_snapshot(
+        &self,
+        api_key_id: &str,
+        balance: f64,
+        gift_balance: f64,
+        limit_mode: &str,
+        currency: &str,
+        status: &str,
+        total_recharged: f64,
+        total_consumed: f64,
+        total_refunded: f64,
+        total_adjusted: f64,
+        updated_at_unix_secs: Option<u64>,
+    ) -> Result<Option<StoredWalletSnapshot>, DataLayerError> {
+        update_wallet_snapshot_by_owner(
+            &self.wallets_by_id,
+            |wallet| wallet.api_key_id.as_deref() == Some(api_key_id),
+            WalletSnapshotUpdate {
+                balance,
+                gift_balance,
+                limit_mode,
+                currency,
+                status,
+                total_recharged,
+                total_consumed,
+                total_refunded,
+                total_adjusted,
+                updated_at_unix_secs,
+            },
+        )
     }
 
     async fn list_wallets_by_user_ids(
@@ -427,6 +722,37 @@ impl WalletReadRepository for InMemoryWalletRepository {
         let total = items.len() as u64;
         let items = items.into_iter().skip(offset).take(limit).collect();
         Ok(StoredAdminPaymentOrderPage { items, total })
+    }
+
+    async fn count_pending_refunds_by_user_id(&self, user_id: &str) -> Result<u64, DataLayerError> {
+        const PENDING_REFUND_STATUSES: &[&str] = &["pending_approval", "approved", "processing"];
+        Ok(self
+            .refunds_by_id
+            .read()
+            .expect("wallet repo lock")
+            .values()
+            .filter(|refund| {
+                refund.user_id.as_deref() == Some(user_id)
+                    && PENDING_REFUND_STATUSES.contains(&refund.status.as_str())
+            })
+            .count() as u64)
+    }
+
+    async fn count_pending_payment_orders_by_user_id(
+        &self,
+        user_id: &str,
+    ) -> Result<u64, DataLayerError> {
+        const PENDING_PAYMENT_ORDER_STATUSES: &[&str] = &["pending", "paid"];
+        Ok(self
+            .payment_orders_by_id
+            .read()
+            .expect("wallet repo lock")
+            .values()
+            .filter(|order| {
+                order.user_id.as_deref() == Some(user_id)
+                    && PENDING_PAYMENT_ORDER_STATUSES.contains(&order.status.as_str())
+            })
+            .count() as u64)
     }
 
     async fn find_wallet_payment_order_by_user_id(
@@ -1213,9 +1539,10 @@ impl WalletWriteRepository for InMemoryWalletRepository {
 
 #[cfg(test)]
 mod tests {
-    use super::InMemoryWalletRepository;
+    use super::{InMemoryWalletRepository, WalletReadSeed};
     use crate::repository::wallet::{
-        AdminWalletListQuery, StoredWalletSnapshot, WalletLookupKey, WalletReadRepository,
+        AdminWalletListQuery, StoredAdminPaymentOrder, StoredAdminWalletRefund,
+        StoredWalletSnapshot, WalletLookupKey, WalletReadRepository,
     };
 
     fn sample_wallet() -> StoredWalletSnapshot {
@@ -1235,6 +1562,122 @@ mod tests {
             100,
         )
         .expect("wallet should build")
+    }
+
+    #[tokio::test]
+    async fn updates_auth_wallet_limit_mode_and_snapshot_in_memory() {
+        let repository = InMemoryWalletRepository::seed(vec![sample_wallet()]);
+
+        let limit_updated = repository
+            .update_auth_user_wallet_limit_mode("user-1", "unlimited")
+            .await
+            .expect("limit mode update should succeed")
+            .expect("wallet should update");
+        assert_eq!(limit_updated.limit_mode, "unlimited");
+
+        let snapshot_updated = repository
+            .update_auth_api_key_wallet_snapshot(
+                "key-1",
+                20.0,
+                4.0,
+                "finite",
+                "USD",
+                "active",
+                30.0,
+                5.0,
+                1.0,
+                2.0,
+                Some(777),
+            )
+            .await
+            .expect("snapshot update should succeed")
+            .expect("wallet should update");
+        assert_eq!(snapshot_updated.balance, 20.0);
+        assert_eq!(snapshot_updated.gift_balance, 4.0);
+        assert_eq!(snapshot_updated.total_recharged, 30.0);
+        assert_eq!(snapshot_updated.total_consumed, 5.0);
+        assert_eq!(snapshot_updated.total_refunded, 1.0);
+        assert_eq!(snapshot_updated.total_adjusted, 2.0);
+        assert_eq!(snapshot_updated.updated_at_unix_secs, 777);
+
+        assert!(repository
+            .update_auth_user_wallet_limit_mode("missing-user", "finite")
+            .await
+            .expect("missing limit mode update should succeed")
+            .is_none());
+
+        let user_wallet = repository
+            .initialize_auth_user_wallet("user-2", 7.0, false)
+            .await
+            .expect("user wallet init should succeed")
+            .expect("user wallet should initialize");
+        assert_eq!(user_wallet.user_id.as_deref(), Some("user-2"));
+        assert_eq!(user_wallet.gift_balance, 7.0);
+        assert_eq!(user_wallet.total_adjusted, 7.0);
+
+        let api_key_wallet = repository
+            .initialize_auth_api_key_wallet("key-2", 7.0, true)
+            .await
+            .expect("api key wallet init should succeed")
+            .expect("api key wallet should initialize");
+        assert_eq!(api_key_wallet.api_key_id.as_deref(), Some("key-2"));
+        assert_eq!(api_key_wallet.limit_mode, "unlimited");
+        assert_eq!(api_key_wallet.gift_balance, 0.0);
+    }
+
+    fn sample_payment_order(
+        id: &str,
+        user_id: Option<&str>,
+        status: &str,
+    ) -> StoredAdminPaymentOrder {
+        StoredAdminPaymentOrder {
+            id: id.to_string(),
+            order_no: format!("order-no-{id}"),
+            wallet_id: "wallet-1".to_string(),
+            user_id: user_id.map(str::to_string),
+            amount_usd: 10.0,
+            pay_amount: None,
+            pay_currency: None,
+            exchange_rate: None,
+            refunded_amount_usd: 0.0,
+            refundable_amount_usd: 10.0,
+            payment_method: "stripe".to_string(),
+            gateway_order_id: None,
+            gateway_response: None,
+            status: status.to_string(),
+            created_at_unix_ms: 100,
+            paid_at_unix_secs: None,
+            credited_at_unix_secs: None,
+            expires_at_unix_secs: None,
+        }
+    }
+
+    fn sample_refund(id: &str, user_id: Option<&str>, status: &str) -> StoredAdminWalletRefund {
+        StoredAdminWalletRefund {
+            id: id.to_string(),
+            refund_no: format!("refund-no-{id}"),
+            wallet_id: "wallet-1".to_string(),
+            user_id: user_id.map(str::to_string),
+            payment_order_id: None,
+            source_type: "wallet_balance".to_string(),
+            source_id: None,
+            refund_mode: "offline_payout".to_string(),
+            amount_usd: 3.0,
+            status: status.to_string(),
+            reason: None,
+            failure_reason: None,
+            gateway_refund_id: None,
+            payout_method: None,
+            payout_reference: None,
+            payout_proof: None,
+            requested_by: None,
+            approved_by: None,
+            processed_by: None,
+            created_at_unix_ms: 100,
+            updated_at_unix_secs: 100,
+            processed_at_unix_secs: None,
+            completed_at_unix_secs: None,
+        }
     }
 
     #[tokio::test]
@@ -1317,5 +1760,43 @@ mod tests {
         assert!(today.is_none());
         assert_eq!(history.total, 0);
         assert!(history.items.is_empty());
+    }
+
+    #[tokio::test]
+    async fn counts_pending_user_refunds_and_payment_orders() {
+        let repository = InMemoryWalletRepository::seed_read_model(WalletReadSeed {
+            wallets: vec![sample_wallet()],
+            payment_orders: vec![
+                sample_payment_order("order-1", Some("user-1"), "pending"),
+                sample_payment_order("order-2", Some("user-1"), "paid"),
+                sample_payment_order("order-3", Some("user-1"), "credited"),
+                sample_payment_order("order-4", Some("user-2"), "pending"),
+            ],
+            payment_callbacks: Vec::new(),
+            wallet_transactions: Vec::new(),
+            refunds: vec![
+                sample_refund("refund-1", Some("user-1"), "pending_approval"),
+                sample_refund("refund-2", Some("user-1"), "processing"),
+                sample_refund("refund-3", Some("user-1"), "completed"),
+                sample_refund("refund-4", Some("user-2"), "approved"),
+            ],
+            redeem_batches: Vec::new(),
+            redeem_codes: Vec::new(),
+        });
+
+        assert_eq!(
+            repository
+                .count_pending_payment_orders_by_user_id("user-1")
+                .await
+                .expect("payment order count should succeed"),
+            2
+        );
+        assert_eq!(
+            repository
+                .count_pending_refunds_by_user_id("user-1")
+                .await
+                .expect("refund count should succeed"),
+            2
+        );
     }
 }

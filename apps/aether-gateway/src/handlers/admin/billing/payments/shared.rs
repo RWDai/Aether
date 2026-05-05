@@ -1,6 +1,6 @@
 use crate::handlers::admin::request::AdminRequestContext;
 use crate::handlers::admin::shared::{query_param_value, unix_secs_to_rfc3339};
-use crate::{GatewayAdminPaymentCallbackView, GatewayError};
+use crate::GatewayAdminPaymentCallbackView;
 use axum::{
     body::Body,
     http,
@@ -8,7 +8,6 @@ use axum::{
     Json,
 };
 use serde_json::json;
-use sqlx::Row;
 
 const ADMIN_PAYMENTS_DATA_UNAVAILABLE_DETAIL: &str = "Admin payments data unavailable";
 
@@ -218,34 +217,6 @@ pub(super) fn build_admin_payment_order_payload(
         "credited_at": record.credited_at_unix_secs.and_then(unix_secs_to_rfc3339),
         "expires_at": record.expires_at_unix_secs.and_then(unix_secs_to_rfc3339),
     })
-}
-
-pub(super) fn build_admin_payment_callback_payload(
-    row: &sqlx::postgres::PgRow,
-) -> Result<serde_json::Value, GatewayError> {
-    Ok(json!({
-        "id": row.try_get::<String, _>("id").map_err(|err| GatewayError::Internal(err.to_string()))?,
-        "payment_order_id": row.try_get::<Option<String>, _>("payment_order_id").map_err(|err| GatewayError::Internal(err.to_string()))?,
-        "payment_method": row.try_get::<String, _>("payment_method").map_err(|err| GatewayError::Internal(err.to_string()))?,
-        "callback_key": row.try_get::<String, _>("callback_key").map_err(|err| GatewayError::Internal(err.to_string()))?,
-        "order_no": row.try_get::<Option<String>, _>("order_no").map_err(|err| GatewayError::Internal(err.to_string()))?,
-        "gateway_order_id": row.try_get::<Option<String>, _>("gateway_order_id").map_err(|err| GatewayError::Internal(err.to_string()))?,
-        "payload_hash": row.try_get::<Option<String>, _>("payload_hash").map_err(|err| GatewayError::Internal(err.to_string()))?,
-        "signature_valid": row.try_get::<bool, _>("signature_valid").map_err(|err| GatewayError::Internal(err.to_string()))?,
-        "status": row.try_get::<String, _>("status").map_err(|err| GatewayError::Internal(err.to_string()))?,
-        "payload": row.try_get::<Option<serde_json::Value>, _>("payload").map_err(|err| GatewayError::Internal(err.to_string()))?,
-        "error_message": row.try_get::<Option<String>, _>("error_message").map_err(|err| GatewayError::Internal(err.to_string()))?,
-        "created_at": row
-            .try_get::<Option<i64>, _>("created_at_unix_ms")
-            .map_err(|err| GatewayError::Internal(err.to_string()))?
-            .and_then(|value| u64::try_from(value).ok())
-            .and_then(unix_secs_to_rfc3339),
-        "processed_at": row
-            .try_get::<Option<i64>, _>("processed_at_unix_secs")
-            .map_err(|err| GatewayError::Internal(err.to_string()))?
-            .and_then(|value| u64::try_from(value).ok())
-            .and_then(unix_secs_to_rfc3339),
-    }))
 }
 
 pub(super) fn build_admin_payment_callback_payload_from_record(

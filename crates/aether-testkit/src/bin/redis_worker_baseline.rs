@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use aether_data::redis::{
+use aether_data::driver::redis::{
     RedisClientConfig, RedisConsumerGroup, RedisConsumerName, RedisStreamReclaimConfig,
     RedisStreamRunnerConfig,
 };
@@ -124,8 +124,8 @@ async fn run_suite(
 }
 
 async fn benchmark_append(
-    runner: &aether_data::redis::RedisStreamRunner,
-    stream: &aether_data::redis::RedisStreamName,
+    runner: &aether_data::driver::redis::RedisStreamRunner,
+    stream: &aether_data::driver::redis::RedisStreamName,
     config: &RedisWorkerBaselineConfig,
 ) -> Result<OperationSummary, Box<dyn std::error::Error>> {
     let next = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -182,8 +182,8 @@ async fn benchmark_append(
 }
 
 async fn benchmark_read_group(
-    runner: &aether_data::redis::RedisStreamRunner,
-    stream: &aether_data::redis::RedisStreamName,
+    runner: &aether_data::driver::redis::RedisStreamRunner,
+    stream: &aether_data::driver::redis::RedisStreamName,
     group: &RedisConsumerGroup,
     consumer: &RedisConsumerName,
     config: &RedisWorkerBaselineConfig,
@@ -211,8 +211,8 @@ async fn benchmark_read_group(
 }
 
 async fn benchmark_reclaim(
-    runner: &aether_data::redis::RedisStreamRunner,
-    stream: &aether_data::redis::RedisStreamName,
+    runner: &aether_data::driver::redis::RedisStreamRunner,
+    stream: &aether_data::driver::redis::RedisStreamName,
     group: &RedisConsumerGroup,
     consumer_a: &RedisConsumerName,
     consumer_b: &RedisConsumerName,
@@ -283,8 +283,8 @@ async fn benchmark_reclaim(
 }
 
 async fn benchmark_ack(
-    runner: &aether_data::redis::RedisStreamRunner,
-    stream: &aether_data::redis::RedisStreamName,
+    runner: &aether_data::driver::redis::RedisStreamRunner,
+    stream: &aether_data::driver::redis::RedisStreamName,
     group: &RedisConsumerGroup,
     ids: &[String],
 ) -> Result<OperationSummary, Box<dyn std::error::Error>> {

@@ -253,52 +253,39 @@ impl AppState {
         Ok(self)
     }
 
-    pub async fn run_postgres_migrations(&self) -> Result<bool, sqlx::migrate::MigrateError> {
-        let Some(pool) = self.postgres_pool() else {
-            return Ok(false);
-        };
-        aether_data::migrate::run_migrations(&pool).await?;
-        Ok(true)
+    pub async fn run_database_migrations(&self) -> Result<bool, sqlx::migrate::MigrateError> {
+        self.data.run_database_migrations().await
     }
 
-    pub async fn run_postgres_backfills(&self) -> Result<bool, sqlx::migrate::MigrateError> {
-        let Some(pool) = self.postgres_pool() else {
-            return Ok(false);
-        };
-        aether_data::backfill::run_backfills(&pool).await?;
-        Ok(true)
+    pub async fn run_database_backfills(&self) -> Result<bool, sqlx::migrate::MigrateError> {
+        self.data.run_database_backfills().await
     }
 
-    pub async fn pending_postgres_migrations(
+    pub async fn pending_database_migrations(
         &self,
-    ) -> Result<Option<Vec<aether_data::migrate::PendingMigrationInfo>>, sqlx::migrate::MigrateError>
-    {
-        let Some(pool) = self.postgres_pool() else {
-            return Ok(None);
-        };
-        Ok(Some(aether_data::migrate::pending_migrations(&pool).await?))
+    ) -> Result<
+        Option<Vec<aether_data::lifecycle::migrate::PendingMigrationInfo>>,
+        sqlx::migrate::MigrateError,
+    > {
+        self.data.pending_database_migrations().await
     }
 
-    pub async fn prepare_postgres_for_startup(
+    pub async fn prepare_database_for_startup(
         &self,
-    ) -> Result<Option<Vec<aether_data::migrate::PendingMigrationInfo>>, sqlx::migrate::MigrateError>
-    {
-        let Some(pool) = self.postgres_pool() else {
-            return Ok(None);
-        };
-        Ok(Some(
-            aether_data::migrate::prepare_database_for_startup(&pool).await?,
-        ))
+    ) -> Result<
+        Option<Vec<aether_data::lifecycle::migrate::PendingMigrationInfo>>,
+        sqlx::migrate::MigrateError,
+    > {
+        self.data.prepare_database_for_startup().await
     }
 
-    pub async fn pending_postgres_backfills(
+    pub async fn pending_database_backfills(
         &self,
-    ) -> Result<Option<Vec<aether_data::backfill::PendingBackfillInfo>>, sqlx::migrate::MigrateError>
-    {
-        let Some(pool) = self.postgres_pool() else {
-            return Ok(None);
-        };
-        Ok(Some(aether_data::backfill::pending_backfills(&pool).await?))
+    ) -> Result<
+        Option<Vec<aether_data::lifecycle::backfill::PendingBackfillInfo>>,
+        sqlx::migrate::MigrateError,
+    > {
+        self.data.pending_database_backfills().await
     }
 
     pub fn with_video_task_poller_config(mut self, interval: Duration, batch_size: usize) -> Self {
@@ -753,12 +740,8 @@ impl AppState {
         self.data.has_redis_backend()
     }
 
-    pub(crate) fn redis_kv_runner(&self) -> Option<aether_data::redis::RedisKvRunner> {
+    pub(crate) fn redis_kv_runner(&self) -> Option<aether_data::driver::redis::RedisKvRunner> {
         self.data.kv_runner()
-    }
-
-    pub(crate) fn postgres_pool(&self) -> Option<aether_data::postgres::PostgresPool> {
-        self.data.postgres_pool()
     }
 
     pub(crate) fn remove_scheduler_affinity_cache_entry(&self, cache_key: &str) -> bool {

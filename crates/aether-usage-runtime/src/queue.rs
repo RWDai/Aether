@@ -1,6 +1,6 @@
 use serde_json::json;
 
-use aether_data::redis::{
+use aether_data::driver::redis::{
     RedisConsumerGroup, RedisConsumerName, RedisStreamEntry, RedisStreamName,
     RedisStreamReclaimConfig, RedisStreamRunner, RedisStreamRunnerConfig,
 };
@@ -120,7 +120,7 @@ fn usage_stream_runner_config(config: &UsageRuntimeConfig) -> RedisStreamRunnerC
 mod tests {
     use super::{usage_stream_runner_config, UsageQueue};
     use crate::UsageRuntimeConfig;
-    use aether_data::redis::{RedisClientConfig, RedisClientFactory, RedisStreamRunner};
+    use aether_data::driver::redis::{RedisClientConfig, RedisClientFactory, RedisStreamRunner};
 
     fn sample_runner() -> RedisStreamRunner {
         let config = RedisClientConfig {
@@ -135,7 +135,7 @@ mod tests {
         RedisStreamRunner::new(
             client,
             config.keyspace(),
-            aether_data::redis::RedisStreamRunnerConfig::default(),
+            aether_data::driver::redis::RedisStreamRunnerConfig::default(),
         )
         .expect("runner should build")
     }

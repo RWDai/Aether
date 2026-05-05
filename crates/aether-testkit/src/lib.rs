@@ -22,7 +22,7 @@ pub use load::{
 pub use metrics::{
     fetch_prometheus_samples, find_metric_value_u64, parse_prometheus_samples, PrometheusSample,
 };
-pub use postgres::ManagedPostgresServer;
+pub use postgres::{prepare_aether_postgres_schema, ManagedPostgresServer};
 pub use redis::ManagedRedisServer;
 pub use server::{reserve_local_port, SpawnedServer};
 pub use tracing::{init_test_runtime, init_test_runtime_for, test_runtime_config};

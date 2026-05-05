@@ -1,6 +1,6 @@
 use aether_billing::enrich_usage_event_with_billing;
 use aether_billing::BillingModelContextLookup;
-use aether_data::redis::RedisStreamRunner;
+use aether_data::driver::redis::RedisStreamRunner;
 use aether_data::repository::audit::RequestAuditReader;
 use aether_data::repository::auth::{
     AuthApiKeyLookupKey, ResolvedAuthApiKeySnapshotReader, StoredAuthApiKeySnapshot,

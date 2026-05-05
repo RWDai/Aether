@@ -1,4 +1,4 @@
-use aether_data::redis::RedisKeyspace;
+use aether_data::driver::redis::RedisKeyspace;
 
 pub(super) fn pool_sticky_pattern(keyspace: &RedisKeyspace, provider_id: &str) -> String {
     keyspace.key(&format!("ap:{provider_id}:sticky:*"))

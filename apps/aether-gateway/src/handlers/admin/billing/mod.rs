@@ -1,5 +1,5 @@
 use crate::handlers::admin::request::{AdminAppState, AdminRequestContext};
-use crate::handlers::admin::shared::{query_param_value, unix_secs_to_rfc3339};
+use crate::handlers::admin::shared::query_param_value;
 use crate::GatewayError;
 use axum::{
     body::{Body, Bytes},
@@ -9,7 +9,6 @@ use axum::{
 };
 use regex::Regex;
 use serde_json::json;
-use sqlx::Row;
 
 const ADMIN_BILLING_DATA_UNAVAILABLE_DETAIL: &str = "Admin billing data unavailable";
 
@@ -183,20 +182,6 @@ fn admin_billing_validate_safe_expression(expression: &str) -> Result<(), String
         }
     }
     Ok(())
-}
-
-fn admin_billing_optional_epoch_value(
-    row: &sqlx::postgres::PgRow,
-    field: &str,
-) -> Result<Option<String>, GatewayError> {
-    let value = row
-        .try_get::<Option<i64>, _>(field)
-        .map_err(|err| GatewayError::Internal(err.to_string()))?;
-    match value {
-        None => Ok(None),
-        Some(value) if value < 0 => Ok(None),
-        Some(value) => Ok(unix_secs_to_rfc3339(value as u64)),
-    }
 }
 
 pub(crate) async fn maybe_build_local_admin_billing_response(

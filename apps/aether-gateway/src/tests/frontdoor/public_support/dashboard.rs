@@ -528,7 +528,7 @@ async fn gateway_handles_admin_dashboard_stats_locally_without_proxying_upstream
     assert_eq!(payload["today"]["tokens"], 17_450);
     assert_eq!(payload["today"]["cost"], json!(2.5));
     assert_eq!(payload["cost_stats"]["cost_savings"], json!(0.025));
-    assert_eq!(payload["stats"][2]["subValue"], json!("节省 $0.01"));
+    assert_eq!(payload["stats"][2]["subValue"], json!("节省 $0.03"));
     assert_eq!(payload["stats"][0]["value"], json!("2"));
     assert_eq!(payload["stats"][1]["value"], json!("17.4K"));
     assert_eq!(

@@ -34,12 +34,10 @@ use self::reads::{
     parse_wallet_limit, parse_wallet_offset, wallet_fixed_offset, wallet_today_billing_date_string,
     wallet_transaction_payload_from_record,
 };
+pub(crate) use self::recharge::sanitize_wallet_gateway_response;
 use self::recharge::{
     handle_wallet_create_recharge, handle_wallet_recharge_detail, handle_wallet_recharge_list,
     wallet_recharge_detail_path_matches,
-};
-pub(crate) use self::recharge::{
-    sanitize_wallet_gateway_response, wallet_payment_order_payload_from_row,
 };
 use self::redeem::handle_wallet_redeem;
 use self::refunds::{

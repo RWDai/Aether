@@ -3,26 +3,14 @@ use chrono::{DateTime, Utc};
 
 use crate::data::GatewayDataState;
 
-use super::{
-    postgres_error, system_config_bool, system_config_u64, system_config_usize,
-    DELETE_AUDIT_LOGS_BEFORE_SQL,
-};
+use super::{system_config_bool, system_config_u64, system_config_usize};
 
 pub(crate) async fn cleanup_audit_logs_once(
     data: &GatewayDataState,
 ) -> Result<usize, DataLayerError> {
     cleanup_audit_logs_with(data, |cutoff_time, delete_limit| async move {
-        let Some(pool) = data.postgres_pool() else {
-            return Ok(0);
-        };
-        let deleted = sqlx::query(DELETE_AUDIT_LOGS_BEFORE_SQL)
-            .bind(cutoff_time)
-            .bind(i64::try_from(delete_limit).unwrap_or(i64::MAX))
-            .execute(&pool)
+        data.delete_audit_logs_before(cutoff_time.timestamp().max(0) as u64, delete_limit)
             .await
-            .map_err(postgres_error)?
-            .rows_affected();
-        Ok(usize::try_from(deleted).unwrap_or(usize::MAX))
     })
     .await
 }

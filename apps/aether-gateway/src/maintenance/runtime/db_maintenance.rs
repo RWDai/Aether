@@ -3,7 +3,7 @@ use tracing::warn;
 
 use crate::data::GatewayDataState;
 
-use super::{postgres_error, system_config_bool, DB_MAINTENANCE_TABLES};
+use super::{system_config_bool, DB_MAINTENANCE_TABLES};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct DbMaintenanceRunSummary {
@@ -14,25 +14,25 @@ pub(super) struct DbMaintenanceRunSummary {
 pub(super) async fn perform_db_maintenance_once(
     data: &GatewayDataState,
 ) -> Result<DbMaintenanceRunSummary, DataLayerError> {
-    let Some(pool) = data.postgres_pool() else {
+    if !data.has_database_maintenance_backend() {
         return Ok(DbMaintenanceRunSummary {
             attempted: 0,
             succeeded: 0,
         });
-    };
+    }
 
-    run_db_maintenance_with(data, |table_name| {
-        let pool = pool.clone();
-        async move {
-            let statement = format!("VACUUM ANALYZE {table_name}");
-            sqlx::raw_sql(&statement)
-                .execute(&pool)
-                .await
-                .map_err(postgres_error)?;
-            Ok(())
-        }
+    if !system_config_bool(data, "enable_db_maintenance", true).await? {
+        return Ok(DbMaintenanceRunSummary {
+            attempted: 0,
+            succeeded: 0,
+        });
+    }
+
+    let summary = data.run_database_maintenance(DB_MAINTENANCE_TABLES).await?;
+    Ok(DbMaintenanceRunSummary {
+        attempted: summary.attempted,
+        succeeded: summary.succeeded,
     })
-    .await
 }
 
 pub(super) async fn run_db_maintenance_with<F, Fut>(

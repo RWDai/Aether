@@ -1,5 +1,9 @@
 use super::*;
 
+fn production_source(source: &str) -> &str {
+    source.split("#[cfg(test)]").next().unwrap_or(source)
+}
+
 #[test]
 fn handlers_do_not_inline_sql_queries() {
     assert_no_sqlx_queries("src/handlers");
@@ -11,10 +15,156 @@ fn gateway_runtime_does_not_inline_sql_queries() {
 }
 
 #[test]
+fn aether_data_bootstrap_snapshot_is_built_from_schema_sources() {
+    let build_rs = read_workspace_file("crates/aether-data/build.rs");
+    assert!(
+        build_rs.contains("schema/bootstrap/postgres/manifest.txt"),
+        "build.rs should source the bootstrap snapshot from schema/bootstrap/postgres"
+    );
+
+    let compose_schema = read_workspace_file("crates/aether-data/schema/compose_schema.sh");
+    assert!(
+        compose_schema.contains("check_bootstrap_sources"),
+        "compose_schema.sh should still validate bootstrap source fragments"
+    );
+    assert!(
+        !compose_schema.contains("bootstrap/postgres/20260413020000_empty_database_snapshot.sql"),
+        "compose_schema.sh should not depend on the outer bootstrap artifact anymore"
+    );
+
+    let bootstrap = read_workspace_file("crates/aether-data/src/lifecycle/bootstrap/postgres.rs");
+    assert!(
+        bootstrap.contains("include_str!(concat!(env!(\"OUT_DIR\"), \"/empty_database_snapshot.sql\"))"),
+        "lifecycle/bootstrap/postgres.rs should embed the generated bootstrap snapshot from OUT_DIR"
+    );
+    assert!(
+        !bootstrap
+            .contains("../../../bootstrap/postgres/20260413020000_empty_database_snapshot.sql"),
+        "lifecycle/bootstrap/postgres.rs should not read the outer bootstrap artifact directly"
+    );
+
+    let provider_catalog =
+        read_workspace_file("crates/aether-data/src/repository/provider_catalog/postgres.rs");
+    assert!(
+        !provider_catalog.contains("../../../bootstrap/postgres/20260413020000_empty_database_snapshot.sql"),
+        "provider_catalog tests should use the shared bootstrap snapshot constant instead of the outer bootstrap artifact"
+    );
+}
+
+#[test]
+fn aether_data_backend_pool_modules_do_not_own_maintenance_sql() {
+    for path in [
+        "crates/aether-data/src/backend/postgres.rs",
+        "crates/aether-data/src/backend/mysql.rs",
+        "crates/aether-data/src/backend/sqlite.rs",
+    ] {
+        let source = read_workspace_file(path);
+        let production = production_source(&source);
+        for forbidden in [
+            "run_table_maintenance(",
+            "aggregate_wallet_daily_usage(",
+            "aggregate_stats_hourly(",
+            "aggregate_stats_daily(",
+            "find_system_config_value(",
+            "list_system_config_entries(",
+            "upsert_system_config_entry(",
+            "read_admin_system_stats(",
+            "sqlx::query(",
+            "sqlx::query_scalar",
+            "sqlx::raw_sql(",
+        ] {
+            assert!(
+                !production.contains(forbidden),
+                "{path} should stay focused on pool and repository construction instead of owning maintenance SQL via {forbidden}"
+            );
+        }
+    }
+
+    let maintenance = read_workspace_file("crates/aether-data/src/backend/maintenance.rs");
+    for pattern in [
+        "Self::Postgres(postgres) => postgres.run_table_maintenance(table_names).await",
+        "Self::Mysql(mysql) => mysql.run_table_maintenance(table_names).await",
+        "Self::Sqlite(sqlite) => sqlite.run_table_maintenance(table_names).await",
+        "Self::Postgres(postgres) => postgres.aggregate_wallet_daily_usage(input).await",
+        "Self::Mysql(mysql) => mysql.aggregate_wallet_daily_usage(input).await",
+        "Self::Sqlite(sqlite) => sqlite.aggregate_wallet_daily_usage(input).await",
+        "Self::Postgres(postgres) => postgres.aggregate_stats_hourly(input).await",
+        "Self::Mysql(mysql) => mysql.aggregate_stats_hourly(input).await",
+        "Self::Sqlite(sqlite) => sqlite.aggregate_stats_hourly(input).await",
+        "Self::Postgres(postgres) => postgres.aggregate_stats_daily(input).await",
+        "Self::Mysql(mysql) => mysql.aggregate_stats_daily(input).await",
+        "Self::Sqlite(sqlite) => sqlite.aggregate_stats_daily(input).await",
+    ] {
+        assert!(
+            maintenance.contains(pattern),
+            "backend/maintenance.rs should own SQL-driver maintenance dispatch {pattern}"
+        );
+    }
+}
+
+#[test]
+fn testkit_does_not_copy_aether_business_schema_sql() {
+    let owner_relay_baseline =
+        read_workspace_file("crates/aether-testkit/src/bin/multi_instance_owner_relay_baseline.rs");
+    for forbidden in [
+        "CREATE TYPE proxynodestatus",
+        "CREATE TABLE IF NOT EXISTS system_configs",
+        "CREATE TABLE IF NOT EXISTS proxy_nodes",
+        "CREATE TABLE IF NOT EXISTS proxy_node_events",
+        "PgConnection::connect",
+        "sqlx::{Connection, Executor, PgConnection}",
+    ] {
+        assert!(
+            !owner_relay_baseline.contains(forbidden),
+            "owner relay baseline should use aether-data schema bootstrap instead of copying business schema SQL via {forbidden}"
+        );
+    }
+    assert!(
+        owner_relay_baseline.contains("prepare_aether_postgres_schema(&postgres_url).await?"),
+        "owner relay baseline should prepare business schema through aether-testkit's aether-data helper"
+    );
+
+    let postgres_testkit = read_workspace_file("crates/aether-testkit/src/postgres.rs");
+    for required in [
+        "pub async fn prepare_aether_postgres_schema",
+        "DataBackends::from_config",
+        ".prepare_database_for_startup()",
+        ".run_database_migrations()",
+    ] {
+        assert!(
+            postgres_testkit.contains(required),
+            "testkit Postgres helper should delegate Aether schema setup to aether-data via {required}"
+        );
+    }
+}
+
+#[test]
+fn gateway_main_keeps_database_export_import_driver_selection_in_data_layer() {
+    let main_rs = read_workspace_file("apps/aether-gateway/src/main.rs");
+    for forbidden in [
+        "PostgresPoolFactory",
+        "MysqlPoolFactory",
+        "SqlitePoolFactory",
+        "to_postgres_config()",
+    ] {
+        assert!(
+            !main_rs.contains(forbidden),
+            "main.rs should delegate database export/import driver selection to aether-data instead of {forbidden}"
+        );
+    }
+    for required in ["export_database_jsonl", "import_database_jsonl"] {
+        assert!(
+            main_rs.contains(required),
+            "main.rs should use aether-data {required}"
+        );
+    }
+}
+
+#[test]
 fn wallet_repository_does_not_reexport_settlement_types() {
     let wallet_mod = read_workspace_file("crates/aether-data/src/repository/wallet/mod.rs");
     let wallet_types = read_workspace_file("crates/aether-data/src/repository/wallet/types.rs");
-    let wallet_sql = read_workspace_file("crates/aether-data/src/repository/wallet/sql.rs");
+    let wallet_sql = read_workspace_file("crates/aether-data/src/repository/wallet/postgres.rs");
     let wallet_memory = read_workspace_file("crates/aether-data/src/repository/wallet/memory.rs");
 
     assert!(
@@ -35,7 +185,7 @@ fn wallet_repository_does_not_reexport_settlement_types() {
     );
     assert!(
         !wallet_sql.contains("impl SettlementWriteRepository"),
-        "wallet/sql.rs should not implement SettlementWriteRepository"
+        "wallet/postgres.rs should not implement SettlementWriteRepository"
     );
     assert!(
         !wallet_memory.contains("impl SettlementWriteRepository"),
@@ -57,13 +207,25 @@ fn gateway_system_config_types_are_owned_by_aether_data() {
 
     let state_core = read_workspace_file("apps/aether-gateway/src/data/state/core.rs");
     for pattern in [
-        "backend.list_system_config_entries().await",
-        "upsert_system_config_entry(key, value, description)",
+        "backends.list_system_config_entries().await",
+        ".upsert_system_config_entry(key, value, description)",
+        "backends.read_admin_system_stats().await",
         "AdminSystemStats::default()",
     ] {
         assert!(
             state_core.contains(pattern),
             "data/state/core.rs should use shared system DTO path {pattern}"
+        );
+    }
+    let data_backends = read_workspace_file("crates/aether-data/src/backend/maintenance.rs");
+    for pattern in [
+        "postgres.list_system_config_entries().await",
+        "mysql.list_system_config_entries().await",
+        "sqlite.list_system_config_entries().await",
+    ] {
+        assert!(
+            data_backends.contains(pattern),
+            "aether-data backends should own driver-specific system config dispatch {pattern}"
         );
     }
     for pattern in [
@@ -180,6 +342,7 @@ fn gateway_auth_data_layer_does_not_keep_ldap_row_wrapper() {
         "fn map_ldap_user_auth_row(",
         "Result<Option<StoredLdapAuthUserRow>, DataLayerError>",
         "existing.user.",
+        "map_user_auth_row(row)",
     ] {
         assert!(
             !gateway_auth_state.contains(pattern),
@@ -187,13 +350,14 @@ fn gateway_auth_data_layer_does_not_keep_ldap_row_wrapper() {
         );
     }
 
+    let user_sql = read_workspace_file("crates/aether-data/src/repository/users/postgres.rs");
     for pattern in [
         "Result<Option<StoredUserAuthRecord>, DataLayerError>",
         "return map_user_auth_row(row).map(Some);",
     ] {
         assert!(
-            gateway_auth_state.contains(pattern),
-            "data/state/auth.rs should use shared user auth record directly via {pattern}"
+            user_sql.contains(pattern),
+            "aether-data user repository should use shared user auth record directly via {pattern}"
         );
     }
 }

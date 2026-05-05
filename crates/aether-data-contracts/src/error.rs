@@ -12,6 +12,9 @@ pub enum DataLayerError {
     #[error("redis error: {0}")]
     Redis(String),
 
+    #[error("sql error: {0}")]
+    Sql(String),
+
     #[error("operation timed out: {0}")]
     TimedOut(String),
 
@@ -26,5 +29,9 @@ impl DataLayerError {
 
     pub fn redis(error: impl std::fmt::Display) -> Self {
         Self::Redis(error.to_string())
+    }
+
+    pub fn sql(error: impl std::fmt::Display) -> Self {
+        Self::Sql(error.to_string())
     }
 }

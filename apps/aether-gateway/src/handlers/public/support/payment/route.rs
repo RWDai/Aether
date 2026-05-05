@@ -7,7 +7,7 @@ use super::payment_shared::{
 };
 use super::{
     build_auth_error_response, build_payment_callback_storage_unavailable_response,
-    handle_payment_callback_with_postgres, AppState, GatewayPublicRequestContext,
+    handle_payment_callback_with_wallet_repository, AppState, GatewayPublicRequestContext,
 };
 
 pub(super) async fn maybe_build_local_payment_callback_route_response(
@@ -104,9 +104,9 @@ pub(super) async fn maybe_build_local_payment_callback_route_response(
         }
     };
 
-    if state.postgres_pool().is_some() {
+    if state.has_database_wallet_data_writer() {
         return Some(
-            handle_payment_callback_with_postgres(
+            handle_payment_callback_with_wallet_repository(
                 state,
                 &payment_method,
                 request_context,

@@ -8,7 +8,6 @@ use chrono::Utc;
 use serde_json::{json, Value};
 
 use crate::handlers::shared::query_param_value;
-use crate::query::monitoring as monitoring_query;
 
 use super::{
     build_auth_error_response, resolve_authenticated_local_user, AppState,
@@ -112,27 +111,16 @@ pub(super) async fn handle_user_audit_logs(
         }
     };
 
-    let Some(pool) = state.postgres_pool() else {
-        return build_user_monitoring_audit_logs_payload(
-            Vec::new(),
-            0,
+    let cutoff_time = Utc::now() - chrono::Duration::days(days);
+    let (items, total) = match state
+        .list_user_audit_logs(
+            &auth.user.id,
+            cutoff_time,
+            event_type.as_deref(),
             limit,
             offset,
-            event_type,
-            days,
-        );
-    };
-
-    let cutoff_time = Utc::now() - chrono::Duration::days(days);
-    let (items, total) = match monitoring_query::list_user_audit_logs(
-        &pool,
-        &auth.user.id,
-        cutoff_time,
-        event_type.as_deref(),
-        limit,
-        offset,
-    )
-    .await
+        )
+        .await
     {
         Ok(value) => value,
         Err(err) => {

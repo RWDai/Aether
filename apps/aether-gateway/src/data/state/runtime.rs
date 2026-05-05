@@ -1,36 +1,139 @@
 use super::{
     read_decision_trace, read_provider_transport_snapshot, read_request_candidate_trace,
-    AdjustWalletBalanceInput, AdminPaymentOrderListQuery, AdminRedeemCodeBatchListQuery,
+    AdjustWalletBalanceInput, AdminBillingCollectorRecord, AdminBillingCollectorWriteInput,
+    AdminBillingMutationOutcome, AdminBillingPresetApplyResult, AdminBillingRuleRecord,
+    AdminBillingRuleWriteInput, AdminPaymentOrderListQuery, AdminRedeemCodeBatchListQuery,
     AdminRedeemCodeListQuery, AdminWalletLedgerQuery, AdminWalletListQuery,
-    AdminWalletRefundRequestListQuery, AnnouncementListQuery, CompleteAdminWalletRefundInput,
-    CreateAdminRedeemCodeBatchInput, CreateAdminRedeemCodeBatchResult, CreateAnnouncementRecord,
-    CreateManualWalletRechargeInput, CreateWalletRechargeOrderInput,
-    CreateWalletRechargeOrderOutcome, CreateWalletRefundRequestInput,
-    CreateWalletRefundRequestOutcome, CreditAdminPaymentOrderInput, DataLayerError, DecisionTrace,
-    DeleteAdminRedeemCodeBatchInput, DisableAdminRedeemCodeBatchInput, DisableAdminRedeemCodeInput,
-    FailAdminWalletRefundInput, GatewayDataState, GatewayProviderTransportSnapshot,
-    LocalVideoTaskReadResponse, ProcessAdminWalletRefundInput, ProcessPaymentCallbackInput,
-    ProcessPaymentCallbackOutcome, RedeemWalletCodeInput, RedeemWalletCodeOutcome,
-    RedisStreamRunner, RequestAuditBundle, RequestCandidateTrace, StoredAdminPaymentCallbackPage,
+    AdminWalletRefundRequestListQuery, AnnouncementListQuery, AuditLogListQuery,
+    CompleteAdminWalletRefundInput, CreateAdminRedeemCodeBatchInput,
+    CreateAdminRedeemCodeBatchResult, CreateAnnouncementRecord, CreateManualWalletRechargeInput,
+    CreateWalletRechargeOrderInput, CreateWalletRechargeOrderOutcome,
+    CreateWalletRefundRequestInput, CreateWalletRefundRequestOutcome, CreditAdminPaymentOrderInput,
+    DataLayerError, DatabaseMaintenanceSummary, DecisionTrace, DeleteAdminRedeemCodeBatchInput,
+    DisableAdminRedeemCodeBatchInput, DisableAdminRedeemCodeInput, FailAdminWalletRefundInput,
+    GatewayDataState, GatewayProviderTransportSnapshot, LocalVideoTaskReadResponse,
+    ProcessAdminWalletRefundInput, ProcessPaymentCallbackInput, ProcessPaymentCallbackOutcome,
+    RedeemWalletCodeInput, RedeemWalletCodeOutcome, RedisStreamRunner, RequestAuditBundle,
+    RequestCandidateTrace, StoredAdminAuditLogPage, StoredAdminPaymentCallbackPage,
     StoredAdminPaymentOrder, StoredAdminPaymentOrderPage, StoredAdminRedeemCodeBatch,
     StoredAdminRedeemCodeBatchPage, StoredAdminRedeemCodePage, StoredAdminWalletLedgerPage,
     StoredAdminWalletListPage, StoredAdminWalletRefund, StoredAdminWalletRefundPage,
     StoredAdminWalletRefundRequestPage, StoredAdminWalletTransaction,
     StoredAdminWalletTransactionPage, StoredAnnouncement, StoredAnnouncementPage,
     StoredBillingModelContext, StoredProviderQuotaSnapshot, StoredProviderUsageSummary,
-    StoredRequestUsageAudit, StoredUsageSettlement, StoredUserAuthRecord, StoredUserExportRow,
-    StoredUserSummary, StoredVideoTask, StoredWalletDailyUsageLedger,
-    StoredWalletDailyUsageLedgerPage, StoredWalletSnapshot, UpdateAnnouncementRecord,
-    UpsertUsageRecord, UpsertVideoTask, UsageSettlementInput, VideoTaskLookupKey,
-    VideoTaskModelCount, VideoTaskQueryFilter, VideoTaskStatusCount, WalletLookupKey,
-    WalletMutationOutcome,
+    StoredRequestUsageAudit, StoredSuspiciousActivity, StoredUsageSettlement,
+    StoredUserAuditLogPage, StoredUserAuthRecord, StoredUserExportRow, StoredUserSummary,
+    StoredVideoTask, StoredWalletDailyUsageLedger, StoredWalletDailyUsageLedgerPage,
+    StoredWalletSnapshot, UpdateAnnouncementRecord, UpsertUsageRecord, UpsertVideoTask,
+    UsageSettlementInput, VideoTaskLookupKey, VideoTaskModelCount, VideoTaskQueryFilter,
+    VideoTaskStatusCount, WalletDailyUsageAggregationInput, WalletDailyUsageAggregationResult,
+    WalletLookupKey, WalletMutationOutcome,
 };
 use aether_data_contracts::repository::usage::{
-    StoredUsageDailySummary, UsageAuditListQuery, UsageDailyHeatmapQuery,
+    PendingUsageCleanupSummary, StoredUsageDailySummary, UsageAuditListQuery, UsageCleanupSummary,
+    UsageCleanupWindow, UsageDailyHeatmapQuery,
 };
 use aether_video_tasks_core::read_data_backed_video_task_response;
 
 impl GatewayDataState {
+    pub(crate) async fn run_database_maintenance(
+        &self,
+        table_names: &[&str],
+    ) -> Result<DatabaseMaintenanceSummary, DataLayerError> {
+        match &self.backends {
+            Some(backends) => backends.run_database_maintenance(table_names).await,
+            None => Ok(DatabaseMaintenanceSummary::default()),
+        }
+    }
+
+    pub(crate) async fn run_database_migrations(
+        &self,
+    ) -> Result<bool, sqlx::migrate::MigrateError> {
+        match &self.backends {
+            Some(backends) => backends.run_database_migrations().await,
+            None => Ok(false),
+        }
+    }
+
+    pub(crate) async fn run_database_backfills(&self) -> Result<bool, sqlx::migrate::MigrateError> {
+        match &self.backends {
+            Some(backends) => backends.run_database_backfills().await,
+            None => Ok(false),
+        }
+    }
+
+    pub(crate) async fn pending_database_migrations(
+        &self,
+    ) -> Result<
+        Option<Vec<aether_data::lifecycle::migrate::PendingMigrationInfo>>,
+        sqlx::migrate::MigrateError,
+    > {
+        match &self.backends {
+            Some(backends) => backends.pending_database_migrations().await,
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn prepare_database_for_startup(
+        &self,
+    ) -> Result<
+        Option<Vec<aether_data::lifecycle::migrate::PendingMigrationInfo>>,
+        sqlx::migrate::MigrateError,
+    > {
+        match &self.backends {
+            Some(backends) => backends.prepare_database_for_startup().await,
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn pending_database_backfills(
+        &self,
+    ) -> Result<
+        Option<Vec<aether_data::lifecycle::backfill::PendingBackfillInfo>>,
+        sqlx::migrate::MigrateError,
+    > {
+        match &self.backends {
+            Some(backends) => backends.pending_database_backfills().await,
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) fn database_pool_summary(&self) -> Option<aether_data::DatabasePoolSummary> {
+        self.backends
+            .as_ref()
+            .and_then(|backends| backends.database_pool_summary())
+    }
+
+    pub(crate) async fn aggregate_wallet_daily_usage(
+        &self,
+        input: &WalletDailyUsageAggregationInput,
+    ) -> Result<WalletDailyUsageAggregationResult, DataLayerError> {
+        match &self.backends {
+            Some(backends) => backends.aggregate_wallet_daily_usage(input).await,
+            None => Ok(WalletDailyUsageAggregationResult::default()),
+        }
+    }
+
+    pub(crate) async fn aggregate_stats_hourly(
+        &self,
+        input: &aether_data::StatsHourlyAggregationInput,
+    ) -> Result<Option<aether_data::StatsHourlyAggregationSummary>, DataLayerError> {
+        match &self.backends {
+            Some(backends) => backends.aggregate_stats_hourly(input).await,
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn aggregate_stats_daily(
+        &self,
+        input: &aether_data::StatsDailyAggregationInput,
+    ) -> Result<Option<aether_data::StatsDailyAggregationSummary>, DataLayerError> {
+        match &self.backends {
+            Some(backends) => backends.aggregate_stats_daily(input).await,
+            None => Ok(None),
+        }
+    }
+
     pub(crate) async fn list_announcements(
         &self,
         query: &AnnouncementListQuery,
@@ -49,6 +152,91 @@ impl GatewayDataState {
             Some(repository) => repository.find_by_id(announcement_id).await,
             None => Ok(None),
         }
+    }
+
+    pub(crate) async fn list_admin_audit_logs(
+        &self,
+        query: &AuditLogListQuery,
+    ) -> Result<StoredAdminAuditLogPage, DataLayerError> {
+        let Some(repository) = self
+            .backends
+            .as_ref()
+            .and_then(|backends| backends.read().audit_logs())
+        else {
+            return Ok(StoredAdminAuditLogPage {
+                items: Vec::new(),
+                total: 0,
+            });
+        };
+        repository.list_admin_audit_logs(query).await
+    }
+
+    pub(crate) async fn list_admin_suspicious_activities(
+        &self,
+        cutoff_unix_secs: u64,
+    ) -> Result<Vec<StoredSuspiciousActivity>, DataLayerError> {
+        let Some(repository) = self
+            .backends
+            .as_ref()
+            .and_then(|backends| backends.read().audit_logs())
+        else {
+            return Ok(Vec::new());
+        };
+        repository
+            .list_admin_suspicious_activities(cutoff_unix_secs)
+            .await
+    }
+
+    pub(crate) async fn read_admin_user_behavior_event_counts(
+        &self,
+        user_id: &str,
+        cutoff_unix_secs: u64,
+    ) -> Result<std::collections::BTreeMap<String, u64>, DataLayerError> {
+        let Some(repository) = self
+            .backends
+            .as_ref()
+            .and_then(|backends| backends.read().audit_logs())
+        else {
+            return Ok(std::collections::BTreeMap::new());
+        };
+        repository
+            .read_admin_user_behavior_event_counts(user_id, cutoff_unix_secs)
+            .await
+    }
+
+    pub(crate) async fn list_user_audit_logs(
+        &self,
+        user_id: &str,
+        query: &AuditLogListQuery,
+    ) -> Result<StoredUserAuditLogPage, DataLayerError> {
+        let Some(repository) = self
+            .backends
+            .as_ref()
+            .and_then(|backends| backends.read().audit_logs())
+        else {
+            return Ok(StoredUserAuditLogPage {
+                items: Vec::new(),
+                total: 0,
+            });
+        };
+        repository.list_user_audit_logs(user_id, query).await
+    }
+
+    pub(crate) async fn delete_audit_logs_before(
+        &self,
+        cutoff_unix_secs: u64,
+        limit: usize,
+    ) -> Result<usize, DataLayerError> {
+        let Some(repository) = self
+            .backends
+            .as_ref()
+            .and_then(|backends| backends.read().audit_logs())
+        else {
+            return Ok(0);
+        };
+        repository
+            .delete_audit_logs_before(cutoff_unix_secs, limit)
+            .await
     }
 
     pub(crate) async fn count_unread_active_announcements(
@@ -748,6 +936,44 @@ impl GatewayDataState {
         }
     }
 
+    pub(crate) async fn cleanup_stale_pending_requests(
+        &self,
+        cutoff_unix_secs: u64,
+        now_unix_secs: u64,
+        timeout_minutes: u64,
+        batch_size: usize,
+    ) -> Result<PendingUsageCleanupSummary, DataLayerError> {
+        match &self.usage_writer {
+            Some(repository) => {
+                repository
+                    .cleanup_stale_pending_requests(
+                        cutoff_unix_secs,
+                        now_unix_secs,
+                        timeout_minutes,
+                        batch_size,
+                    )
+                    .await
+            }
+            None => Ok(PendingUsageCleanupSummary::default()),
+        }
+    }
+
+    pub(crate) async fn cleanup_usage(
+        &self,
+        window: &UsageCleanupWindow,
+        batch_size: usize,
+        auto_delete_expired_keys: bool,
+    ) -> Result<UsageCleanupSummary, DataLayerError> {
+        match &self.usage_writer {
+            Some(repository) => {
+                repository
+                    .cleanup_usage(window, batch_size, auto_delete_expired_keys)
+                    .await
+            }
+            None => Ok(UsageCleanupSummary::default()),
+        }
+    }
+
     pub(crate) async fn find_request_usage_by_request_id(
         &self,
         request_id: &str,
@@ -1269,6 +1495,153 @@ impl GatewayDataState {
                     .await
             }
             None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn admin_billing_enabled_default_value_exists(
+        &self,
+        api_format: &str,
+        task_type: &str,
+        dimension_name: &str,
+        existing_id: Option<&str>,
+    ) -> Result<Option<bool>, DataLayerError> {
+        match &self.billing_reader {
+            Some(repository) => {
+                repository
+                    .admin_billing_enabled_default_value_exists(
+                        api_format,
+                        task_type,
+                        dimension_name,
+                        existing_id,
+                    )
+                    .await
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn create_admin_billing_rule(
+        &self,
+        input: &AdminBillingRuleWriteInput,
+    ) -> Result<AdminBillingMutationOutcome<AdminBillingRuleRecord>, DataLayerError> {
+        match &self.billing_reader {
+            Some(repository) => repository.create_admin_billing_rule(input).await,
+            None => Ok(AdminBillingMutationOutcome::Unavailable),
+        }
+    }
+
+    pub(crate) async fn list_admin_billing_rules(
+        &self,
+        task_type: Option<&str>,
+        is_enabled: Option<bool>,
+        page: u32,
+        page_size: u32,
+    ) -> Result<Option<(Vec<AdminBillingRuleRecord>, u64)>, DataLayerError> {
+        match &self.billing_reader {
+            Some(repository) => {
+                repository
+                    .list_admin_billing_rules(task_type, is_enabled, page, page_size)
+                    .await
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn find_admin_billing_rule(
+        &self,
+        rule_id: &str,
+    ) -> Result<Option<AdminBillingRuleRecord>, DataLayerError> {
+        match &self.billing_reader {
+            Some(repository) => repository.find_admin_billing_rule(rule_id).await,
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn update_admin_billing_rule(
+        &self,
+        rule_id: &str,
+        input: &AdminBillingRuleWriteInput,
+    ) -> Result<AdminBillingMutationOutcome<AdminBillingRuleRecord>, DataLayerError> {
+        match &self.billing_reader {
+            Some(repository) => repository.update_admin_billing_rule(rule_id, input).await,
+            None => Ok(AdminBillingMutationOutcome::Unavailable),
+        }
+    }
+
+    pub(crate) async fn create_admin_billing_collector(
+        &self,
+        input: &AdminBillingCollectorWriteInput,
+    ) -> Result<AdminBillingMutationOutcome<AdminBillingCollectorRecord>, DataLayerError> {
+        match &self.billing_reader {
+            Some(repository) => repository.create_admin_billing_collector(input).await,
+            None => Ok(AdminBillingMutationOutcome::Unavailable),
+        }
+    }
+
+    pub(crate) async fn list_admin_billing_collectors(
+        &self,
+        api_format: Option<&str>,
+        task_type: Option<&str>,
+        dimension_name: Option<&str>,
+        is_enabled: Option<bool>,
+        page: u32,
+        page_size: u32,
+    ) -> Result<Option<(Vec<AdminBillingCollectorRecord>, u64)>, DataLayerError> {
+        match &self.billing_reader {
+            Some(repository) => {
+                repository
+                    .list_admin_billing_collectors(
+                        api_format,
+                        task_type,
+                        dimension_name,
+                        is_enabled,
+                        page,
+                        page_size,
+                    )
+                    .await
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn find_admin_billing_collector(
+        &self,
+        collector_id: &str,
+    ) -> Result<Option<AdminBillingCollectorRecord>, DataLayerError> {
+        match &self.billing_reader {
+            Some(repository) => repository.find_admin_billing_collector(collector_id).await,
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn update_admin_billing_collector(
+        &self,
+        collector_id: &str,
+        input: &AdminBillingCollectorWriteInput,
+    ) -> Result<AdminBillingMutationOutcome<AdminBillingCollectorRecord>, DataLayerError> {
+        match &self.billing_reader {
+            Some(repository) => {
+                repository
+                    .update_admin_billing_collector(collector_id, input)
+                    .await
+            }
+            None => Ok(AdminBillingMutationOutcome::Unavailable),
+        }
+    }
+
+    pub(crate) async fn apply_admin_billing_preset(
+        &self,
+        preset: &str,
+        mode: &str,
+        collectors: &[AdminBillingCollectorWriteInput],
+    ) -> Result<AdminBillingMutationOutcome<AdminBillingPresetApplyResult>, DataLayerError> {
+        match &self.billing_reader {
+            Some(repository) => {
+                repository
+                    .apply_admin_billing_preset(preset, mode, collectors)
+                    .await
+            }
+            None => Ok(AdminBillingMutationOutcome::Unavailable),
         }
     }
 

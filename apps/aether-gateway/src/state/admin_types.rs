@@ -4,6 +4,6 @@ pub(crate) use aether_data::repository::wallet::{
     AdminWalletTransactionRecord,
 };
 pub(crate) use aether_data_contracts::repository::billing::{
-    AdminBillingCollectorRecord, AdminBillingCollectorWriteInput, AdminBillingPresetApplyResult,
-    AdminBillingRuleRecord, AdminBillingRuleWriteInput,
+    AdminBillingCollectorRecord, AdminBillingCollectorWriteInput, AdminBillingMutationOutcome,
+    AdminBillingPresetApplyResult, AdminBillingRuleRecord, AdminBillingRuleWriteInput,
 };

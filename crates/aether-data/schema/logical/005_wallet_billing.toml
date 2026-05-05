@@ -1,0 +1,816 @@
+[table.wallets]
+domain = "wallet_billing"
+order = 10
+primary_key = ["id"]
+
+[[table.wallets.columns]]
+name = "id"
+type = "text_id"
+length = 64
+
+[[table.wallets.columns]]
+name = "user_id"
+type = "text_id"
+length = 64
+nullable = true
+
+[[table.wallets.columns]]
+name = "api_key_id"
+type = "text_id"
+length = 64
+nullable = true
+
+[[table.wallets.columns]]
+name = "balance"
+type = "float64"
+default = 0
+
+[[table.wallets.columns]]
+name = "gift_balance"
+type = "float64"
+default = 0
+
+[[table.wallets.columns]]
+name = "limit_mode"
+type = "text"
+length = 64
+default = "finite"
+
+[[table.wallets.columns]]
+name = "currency"
+type = "text"
+length = 16
+default = "USD"
+
+[[table.wallets.columns]]
+name = "status"
+type = "text"
+length = 64
+default = "active"
+
+[[table.wallets.columns]]
+name = "total_recharged"
+type = "float64"
+default = 0
+
+[[table.wallets.columns]]
+name = "total_consumed"
+type = "float64"
+default = 0
+
+[[table.wallets.columns]]
+name = "total_refunded"
+type = "float64"
+default = 0
+
+[[table.wallets.columns]]
+name = "total_adjusted"
+type = "float64"
+default = 0
+
+[[table.wallets.columns]]
+name = "created_at"
+type = "unix_seconds"
+
+[[table.wallets.columns]]
+name = "updated_at"
+type = "unix_seconds"
+
+[[table.wallets.uniques]]
+name = "wallets_user_id_key"
+columns = ["user_id"]
+
+[[table.wallets.uniques]]
+name = "wallets_api_key_id_key"
+columns = ["api_key_id"]
+
+[[table.wallets.indexes]]
+name = "wallets_api_key_id_idx"
+columns = ["api_key_id"]
+
+[[table.wallets.indexes]]
+name = "wallets_user_id_idx"
+columns = ["user_id"]
+
+[table.wallet_transactions]
+domain = "wallet_billing"
+order = 20
+primary_key = ["id"]
+
+[[table.wallet_transactions.columns]]
+name = "id"
+type = "text_id"
+length = 64
+
+[[table.wallet_transactions.columns]]
+name = "wallet_id"
+type = "text_id"
+length = 64
+
+[[table.wallet_transactions.columns]]
+name = "category"
+type = "text"
+length = 64
+
+[[table.wallet_transactions.columns]]
+name = "reason_code"
+type = "text"
+length = 64
+
+[[table.wallet_transactions.columns]]
+name = "amount"
+type = "float64"
+
+[[table.wallet_transactions.columns]]
+name = "balance_before"
+type = "float64"
+
+[[table.wallet_transactions.columns]]
+name = "balance_after"
+type = "float64"
+
+[[table.wallet_transactions.columns]]
+name = "recharge_balance_before"
+type = "float64"
+
+[[table.wallet_transactions.columns]]
+name = "recharge_balance_after"
+type = "float64"
+
+[[table.wallet_transactions.columns]]
+name = "gift_balance_before"
+type = "float64"
+
+[[table.wallet_transactions.columns]]
+name = "gift_balance_after"
+type = "float64"
+
+[[table.wallet_transactions.columns]]
+name = "link_type"
+type = "text"
+length = 64
+nullable = true
+
+[[table.wallet_transactions.columns]]
+name = "link_id"
+type = "text"
+length = 128
+nullable = true
+
+[[table.wallet_transactions.columns]]
+name = "operator_id"
+type = "text_id"
+length = 64
+nullable = true
+
+[[table.wallet_transactions.columns]]
+name = "description"
+type = "long_text"
+nullable = true
+
+[[table.wallet_transactions.columns]]
+name = "created_at"
+type = "unix_seconds"
+
+[[table.wallet_transactions.indexes]]
+name = "idx_wallet_tx_wallet_created"
+columns = ["wallet_id", "created_at"]
+
+[[table.wallet_transactions.indexes]]
+name = "idx_wallet_tx_category_created"
+columns = ["category", "created_at"]
+
+[[table.wallet_transactions.indexes]]
+name = "idx_wallet_tx_reason_created"
+columns = ["reason_code", "created_at"]
+
+[[table.wallet_transactions.indexes]]
+name = "idx_wallet_tx_link"
+columns = ["link_type", "link_id"]
+
+[[table.wallet_transactions.indexes]]
+name = "ix_wallet_transactions_operator_id"
+columns = ["operator_id"]
+
+[table.wallet_daily_usage_ledgers]
+domain = "wallet_billing"
+order = 30
+primary_key = ["id"]
+
+[[table.wallet_daily_usage_ledgers.columns]]
+name = "id"
+type = "text_id"
+length = 64
+
+[[table.wallet_daily_usage_ledgers.columns]]
+name = "wallet_id"
+type = "text_id"
+length = 64
+
+[[table.wallet_daily_usage_ledgers.columns]]
+name = "billing_date"
+type = "text"
+length = 16
+
+[[table.wallet_daily_usage_ledgers.columns]]
+name = "billing_timezone"
+type = "text"
+length = 64
+
+[[table.wallet_daily_usage_ledgers.columns]]
+name = "total_cost_usd"
+type = "float64"
+default = 0
+
+[[table.wallet_daily_usage_ledgers.columns]]
+name = "total_requests"
+type = "int64"
+default = 0
+
+[[table.wallet_daily_usage_ledgers.columns]]
+name = "input_tokens"
+type = "int64"
+default = 0
+
+[[table.wallet_daily_usage_ledgers.columns]]
+name = "output_tokens"
+type = "int64"
+default = 0
+
+[[table.wallet_daily_usage_ledgers.columns]]
+name = "cache_creation_tokens"
+type = "int64"
+default = 0
+
+[[table.wallet_daily_usage_ledgers.columns]]
+name = "cache_read_tokens"
+type = "int64"
+default = 0
+
+[[table.wallet_daily_usage_ledgers.columns]]
+name = "first_finalized_at"
+type = "unix_seconds"
+nullable = true
+
+[[table.wallet_daily_usage_ledgers.columns]]
+name = "last_finalized_at"
+type = "unix_seconds"
+nullable = true
+
+[[table.wallet_daily_usage_ledgers.columns]]
+name = "aggregated_at"
+type = "unix_seconds"
+
+[[table.wallet_daily_usage_ledgers.columns]]
+name = "created_at"
+type = "unix_seconds"
+
+[[table.wallet_daily_usage_ledgers.columns]]
+name = "updated_at"
+type = "unix_seconds"
+
+[[table.wallet_daily_usage_ledgers.indexes]]
+name = "idx_wallet_daily_usage_wallet_date"
+columns = ["wallet_id", "billing_timezone", "billing_date"]
+
+[table.payment_orders]
+domain = "wallet_billing"
+order = 40
+primary_key = ["id"]
+
+[[table.payment_orders.columns]]
+name = "id"
+type = "text_id"
+length = 64
+
+[[table.payment_orders.columns]]
+name = "order_no"
+type = "text"
+length = 128
+
+[[table.payment_orders.columns]]
+name = "wallet_id"
+type = "text_id"
+length = 64
+
+[[table.payment_orders.columns]]
+name = "user_id"
+type = "text_id"
+length = 64
+nullable = true
+
+[[table.payment_orders.columns]]
+name = "amount_usd"
+type = "float64"
+
+[[table.payment_orders.columns]]
+name = "pay_amount"
+type = "float64"
+nullable = true
+
+[[table.payment_orders.columns]]
+name = "pay_currency"
+type = "text"
+length = 16
+nullable = true
+
+[[table.payment_orders.columns]]
+name = "exchange_rate"
+type = "float64"
+nullable = true
+
+[[table.payment_orders.columns]]
+name = "refunded_amount_usd"
+type = "float64"
+default = 0
+
+[[table.payment_orders.columns]]
+name = "refundable_amount_usd"
+type = "float64"
+default = 0
+
+[[table.payment_orders.columns]]
+name = "payment_method"
+type = "text"
+length = 64
+
+[[table.payment_orders.columns]]
+name = "gateway_order_id"
+type = "text"
+length = 128
+nullable = true
+
+[[table.payment_orders.columns]]
+name = "gateway_response"
+type = "json"
+nullable = true
+
+[[table.payment_orders.columns]]
+name = "status"
+type = "text"
+length = 64
+default = "pending"
+
+[[table.payment_orders.columns]]
+name = "created_at"
+type = "unix_seconds"
+
+[[table.payment_orders.columns]]
+name = "paid_at"
+type = "unix_seconds"
+nullable = true
+
+[[table.payment_orders.columns]]
+name = "credited_at"
+type = "unix_seconds"
+nullable = true
+
+[[table.payment_orders.columns]]
+name = "expires_at"
+type = "unix_seconds"
+nullable = true
+
+[[table.payment_orders.uniques]]
+name = "uq_payment_orders_order_no"
+columns = ["order_no"]
+
+[[table.payment_orders.indexes]]
+name = "idx_payment_orders_wallet_created"
+columns = ["wallet_id", "created_at"]
+
+[[table.payment_orders.indexes]]
+name = "idx_payment_orders_user_created"
+columns = ["user_id", "created_at"]
+
+[[table.payment_orders.indexes]]
+name = "idx_payment_orders_status"
+columns = ["status"]
+
+[[table.payment_orders.indexes]]
+name = "idx_payment_orders_gateway_order_id"
+columns = ["gateway_order_id"]
+
+[table.payment_callbacks]
+domain = "wallet_billing"
+order = 50
+primary_key = ["id"]
+
+[[table.payment_callbacks.columns]]
+name = "id"
+type = "text_id"
+length = 64
+
+[[table.payment_callbacks.columns]]
+name = "payment_order_id"
+type = "text_id"
+length = 64
+nullable = true
+
+[[table.payment_callbacks.columns]]
+name = "payment_method"
+type = "text"
+length = 64
+
+[[table.payment_callbacks.columns]]
+name = "callback_key"
+type = "text"
+length = 128
+
+[[table.payment_callbacks.columns]]
+name = "order_no"
+type = "text"
+length = 128
+nullable = true
+
+[[table.payment_callbacks.columns]]
+name = "gateway_order_id"
+type = "text"
+length = 128
+nullable = true
+
+[[table.payment_callbacks.columns]]
+name = "payload_hash"
+type = "text"
+length = 128
+nullable = true
+
+[[table.payment_callbacks.columns]]
+name = "signature_valid"
+type = "bool"
+default = false
+
+[[table.payment_callbacks.columns]]
+name = "status"
+type = "text"
+length = 64
+default = "received"
+
+[[table.payment_callbacks.columns]]
+name = "payload"
+type = "json"
+nullable = true
+
+[[table.payment_callbacks.columns]]
+name = "error_message"
+type = "long_text"
+nullable = true
+
+[[table.payment_callbacks.columns]]
+name = "created_at"
+type = "unix_seconds"
+
+[[table.payment_callbacks.columns]]
+name = "processed_at"
+type = "unix_seconds"
+nullable = true
+
+[[table.payment_callbacks.uniques]]
+name = "uq_payment_callbacks_callback_key"
+columns = ["callback_key"]
+
+[[table.payment_callbacks.indexes]]
+name = "idx_payment_callbacks_order"
+columns = ["order_no"]
+
+[[table.payment_callbacks.indexes]]
+name = "idx_payment_callbacks_gateway_order"
+columns = ["gateway_order_id"]
+
+[[table.payment_callbacks.indexes]]
+name = "idx_payment_callbacks_created"
+columns = ["created_at"]
+
+[[table.payment_callbacks.indexes]]
+name = "ix_payment_callbacks_payment_order_id"
+columns = ["payment_order_id"]
+
+[table.refund_requests]
+domain = "wallet_billing"
+order = 60
+primary_key = ["id"]
+
+[[table.refund_requests.columns]]
+name = "id"
+type = "text_id"
+length = 64
+
+[[table.refund_requests.columns]]
+name = "refund_no"
+type = "text"
+length = 128
+
+[[table.refund_requests.columns]]
+name = "wallet_id"
+type = "text_id"
+length = 64
+
+[[table.refund_requests.columns]]
+name = "user_id"
+type = "text_id"
+length = 64
+nullable = true
+
+[[table.refund_requests.columns]]
+name = "payment_order_id"
+type = "text_id"
+length = 64
+nullable = true
+
+[[table.refund_requests.columns]]
+name = "source_type"
+type = "text"
+length = 64
+
+[[table.refund_requests.columns]]
+name = "source_id"
+type = "text"
+length = 128
+nullable = true
+
+[[table.refund_requests.columns]]
+name = "refund_mode"
+type = "text"
+length = 64
+
+[[table.refund_requests.columns]]
+name = "amount_usd"
+type = "float64"
+
+[[table.refund_requests.columns]]
+name = "status"
+type = "text"
+length = 64
+default = "pending_approval"
+
+[[table.refund_requests.columns]]
+name = "reason"
+type = "long_text"
+nullable = true
+
+[[table.refund_requests.columns]]
+name = "requested_by"
+type = "text_id"
+length = 64
+nullable = true
+
+[[table.refund_requests.columns]]
+name = "approved_by"
+type = "text_id"
+length = 64
+nullable = true
+
+[[table.refund_requests.columns]]
+name = "processed_by"
+type = "text_id"
+length = 64
+nullable = true
+
+[[table.refund_requests.columns]]
+name = "gateway_refund_id"
+type = "text"
+length = 128
+nullable = true
+
+[[table.refund_requests.columns]]
+name = "payout_method"
+type = "text"
+length = 64
+nullable = true
+
+[[table.refund_requests.columns]]
+name = "payout_reference"
+type = "text"
+length = 255
+nullable = true
+
+[[table.refund_requests.columns]]
+name = "payout_proof"
+type = "json"
+nullable = true
+
+[[table.refund_requests.columns]]
+name = "failure_reason"
+type = "long_text"
+nullable = true
+
+[[table.refund_requests.columns]]
+name = "idempotency_key"
+type = "text"
+length = 128
+nullable = true
+
+[[table.refund_requests.columns]]
+name = "created_at"
+type = "unix_seconds"
+
+[[table.refund_requests.columns]]
+name = "updated_at"
+type = "unix_seconds"
+
+[[table.refund_requests.columns]]
+name = "processed_at"
+type = "unix_seconds"
+nullable = true
+
+[[table.refund_requests.columns]]
+name = "completed_at"
+type = "unix_seconds"
+nullable = true
+
+[[table.refund_requests.uniques]]
+name = "uq_refund_requests_refund_no"
+columns = ["refund_no"]
+
+[[table.refund_requests.uniques]]
+name = "uq_refund_requests_idempotency_key"
+columns = ["idempotency_key"]
+
+[[table.refund_requests.indexes]]
+name = "idx_refund_wallet_created"
+columns = ["wallet_id", "created_at"]
+
+[[table.refund_requests.indexes]]
+name = "idx_refund_user_created"
+columns = ["user_id", "created_at"]
+
+[[table.refund_requests.indexes]]
+name = "idx_refund_status"
+columns = ["status"]
+
+[[table.refund_requests.indexes]]
+name = "ix_refund_requests_payment_order_id"
+columns = ["payment_order_id"]
+
+[[table.refund_requests.indexes]]
+name = "ix_refund_requests_requested_by"
+columns = ["requested_by"]
+
+[[table.refund_requests.indexes]]
+name = "ix_refund_requests_approved_by"
+columns = ["approved_by"]
+
+[[table.refund_requests.indexes]]
+name = "ix_refund_requests_processed_by"
+columns = ["processed_by"]
+
+[table.redeem_code_batches]
+domain = "wallet_billing"
+order = 70
+primary_key = ["id"]
+
+[[table.redeem_code_batches.columns]]
+name = "id"
+type = "text_id"
+length = 64
+
+[[table.redeem_code_batches.columns]]
+name = "name"
+type = "text"
+length = 255
+
+[[table.redeem_code_batches.columns]]
+name = "amount_usd"
+type = "float64"
+
+[[table.redeem_code_batches.columns]]
+name = "currency"
+type = "text"
+length = 16
+default = "USD"
+
+[[table.redeem_code_batches.columns]]
+name = "balance_bucket"
+type = "text"
+length = 64
+default = "gift"
+
+[[table.redeem_code_batches.columns]]
+name = "total_count"
+type = "int32"
+
+[[table.redeem_code_batches.columns]]
+name = "status"
+type = "text"
+length = 64
+default = "active"
+
+[[table.redeem_code_batches.columns]]
+name = "description"
+type = "long_text"
+nullable = true
+
+[[table.redeem_code_batches.columns]]
+name = "created_by"
+type = "text_id"
+length = 64
+nullable = true
+
+[[table.redeem_code_batches.columns]]
+name = "expires_at"
+type = "unix_seconds"
+nullable = true
+
+[[table.redeem_code_batches.columns]]
+name = "created_at"
+type = "unix_seconds"
+
+[[table.redeem_code_batches.columns]]
+name = "updated_at"
+type = "unix_seconds"
+
+[[table.redeem_code_batches.indexes]]
+name = "idx_redeem_code_batches_status"
+columns = ["status", "created_at"]
+
+[table.redeem_codes]
+domain = "wallet_billing"
+order = 80
+primary_key = ["id"]
+
+[[table.redeem_codes.columns]]
+name = "id"
+type = "text_id"
+length = 64
+
+[[table.redeem_codes.columns]]
+name = "batch_id"
+type = "text_id"
+length = 64
+
+[[table.redeem_codes.columns]]
+name = "code_hash"
+type = "text"
+length = 128
+
+[[table.redeem_codes.columns]]
+name = "code_prefix"
+type = "text"
+length = 16
+
+[[table.redeem_codes.columns]]
+name = "code_suffix"
+type = "text"
+length = 16
+
+[[table.redeem_codes.columns]]
+name = "status"
+type = "text"
+length = 64
+default = "active"
+
+[[table.redeem_codes.columns]]
+name = "redeemed_by_user_id"
+type = "text_id"
+length = 64
+nullable = true
+
+[[table.redeem_codes.columns]]
+name = "redeemed_wallet_id"
+type = "text_id"
+length = 64
+nullable = true
+
+[[table.redeem_codes.columns]]
+name = "redeemed_payment_order_id"
+type = "text_id"
+length = 64
+nullable = true
+
+[[table.redeem_codes.columns]]
+name = "redeemed_at"
+type = "unix_seconds"
+nullable = true
+
+[[table.redeem_codes.columns]]
+name = "disabled_by"
+type = "text_id"
+length = 64
+nullable = true
+
+[[table.redeem_codes.columns]]
+name = "created_at"
+type = "unix_seconds"
+
+[[table.redeem_codes.columns]]
+name = "updated_at"
+type = "unix_seconds"
+
+[[table.redeem_codes.uniques]]
+name = "uq_redeem_codes_code_hash"
+columns = ["code_hash"]
+
+[[table.redeem_codes.indexes]]
+name = "idx_redeem_codes_batch_created"
+columns = ["batch_id", "created_at"]
+
+[[table.redeem_codes.indexes]]
+name = "idx_redeem_codes_status"
+columns = ["status", "updated_at"]
+
+[[table.redeem_codes.indexes]]
+name = "idx_redeem_codes_redeemed_user"
+columns = ["redeemed_by_user_id", "redeemed_at"]
+
+[[table.redeem_codes.indexes]]
+name = "idx_redeem_codes_redeemed_order"
+columns = ["redeemed_payment_order_id"]

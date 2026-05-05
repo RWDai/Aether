@@ -71,7 +71,7 @@ use self::support_test_connection::maybe_build_local_test_connection_response;
 use self::support_user_me::maybe_build_local_users_me_response;
 use self::support_wallet::{
     maybe_build_local_wallet_response, sanitize_wallet_gateway_response,
-    wallet_normalize_optional_string_field, wallet_payment_order_payload_from_row,
+    wallet_normalize_optional_string_field,
 };
 
 pub(crate) fn build_unhandled_public_support_response(

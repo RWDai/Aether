@@ -753,6 +753,64 @@ pub trait WalletReadRepository: Send + Sync {
         key: WalletLookupKey<'_>,
     ) -> Result<Option<StoredWalletSnapshot>, crate::DataLayerError>;
 
+    async fn update_auth_user_wallet_limit_mode(
+        &self,
+        user_id: &str,
+        limit_mode: &str,
+    ) -> Result<Option<StoredWalletSnapshot>, crate::DataLayerError>;
+
+    async fn update_auth_api_key_wallet_limit_mode(
+        &self,
+        api_key_id: &str,
+        limit_mode: &str,
+    ) -> Result<Option<StoredWalletSnapshot>, crate::DataLayerError>;
+
+    async fn initialize_auth_user_wallet(
+        &self,
+        user_id: &str,
+        initial_gift_usd: f64,
+        unlimited: bool,
+    ) -> Result<Option<StoredWalletSnapshot>, crate::DataLayerError>;
+
+    async fn initialize_auth_api_key_wallet(
+        &self,
+        api_key_id: &str,
+        initial_gift_usd: f64,
+        unlimited: bool,
+    ) -> Result<Option<StoredWalletSnapshot>, crate::DataLayerError>;
+
+    #[allow(clippy::too_many_arguments)]
+    async fn update_auth_user_wallet_snapshot(
+        &self,
+        user_id: &str,
+        balance: f64,
+        gift_balance: f64,
+        limit_mode: &str,
+        currency: &str,
+        status: &str,
+        total_recharged: f64,
+        total_consumed: f64,
+        total_refunded: f64,
+        total_adjusted: f64,
+        updated_at_unix_secs: Option<u64>,
+    ) -> Result<Option<StoredWalletSnapshot>, crate::DataLayerError>;
+
+    #[allow(clippy::too_many_arguments)]
+    async fn update_auth_api_key_wallet_snapshot(
+        &self,
+        api_key_id: &str,
+        balance: f64,
+        gift_balance: f64,
+        limit_mode: &str,
+        currency: &str,
+        status: &str,
+        total_recharged: f64,
+        total_consumed: f64,
+        total_refunded: f64,
+        total_adjusted: f64,
+        updated_at_unix_secs: Option<u64>,
+    ) -> Result<Option<StoredWalletSnapshot>, crate::DataLayerError>;
+
     async fn list_wallets_by_user_ids(
         &self,
         user_ids: &[String],
@@ -821,6 +879,16 @@ pub trait WalletReadRepository: Send + Sync {
         limit: usize,
         offset: usize,
     ) -> Result<StoredAdminPaymentOrderPage, crate::DataLayerError>;
+
+    async fn count_pending_refunds_by_user_id(
+        &self,
+        user_id: &str,
+    ) -> Result<u64, crate::DataLayerError>;
+
+    async fn count_pending_payment_orders_by_user_id(
+        &self,
+        user_id: &str,
+    ) -> Result<u64, crate::DataLayerError>;
 
     async fn find_wallet_payment_order_by_user_id(
         &self,

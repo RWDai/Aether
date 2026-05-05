@@ -255,7 +255,14 @@
               {{ getStreamModeLabel(record) }}
             </Badge>
             <span class="text-muted-foreground/50">|</span>
-            <span>{{ formatDateTime(record.created_at) }}</span>
+            <div class="flex flex-col leading-tight tabular-nums">
+              <span class="text-[11px] text-foreground whitespace-nowrap">
+                {{ formatRecordTime(record.created_at) }}
+              </span>
+              <span class="text-[10px] text-muted-foreground whitespace-nowrap">
+                {{ formatRecordDate(record.created_at) }}
+              </span>
+            </div>
             <template v-if="record.api_format">
               <span class="text-muted-foreground/50">|</span>
               <span>{{ formatApiFormat(record.api_format) }}</span>
@@ -273,15 +280,8 @@
             /></span>
             <span
               v-else-if="record.response_time_ms != null || record.first_byte_time_ms != null"
-              class="flex flex-col items-end tabular-nums leading-3 shrink-0"
-              :title="getRecordPerformanceTitle(record)"
-            >
-              <span class="whitespace-nowrap">{{ formatRecordLatencyPair(record) }}</span>
-              <span
-                v-if="getRecordDisplayOutputRate(record) != null"
-                class="text-primary/80 whitespace-nowrap"
-              >{{ formatOutputRate(getRecordDisplayOutputRate(record)) }}</span>
-            </span>
+              class="tabular-nums"
+            >{{ record.first_byte_time_ms != null ? (record.first_byte_time_ms / 1000).toFixed(1) + '/' : '' }}{{ record.response_time_ms != null ? (record.response_time_ms / 1000).toFixed(1) : '-' }}{{ record.response_time_ms != null ? 's' : '' }}</span>
             <span
               v-else
               class="tabular-nums"
@@ -295,36 +295,36 @@
     </div>
 
     <!-- 桌面端表格视图 -->
-    <Table :class="isAdmin ? 'hidden md:table table-fixed min-w-[1304px]' : 'hidden md:table table-fixed min-w-[1218px]'">
+    <Table class="hidden md:table table-fixed w-full">
       <colgroup v-if="isAdmin">
-        <col class="w-[88px]">
-        <col class="w-[180px]">
-        <col class="w-[190px]">
-        <col class="w-[160px]">
-        <col class="w-[190px]">
-        <col class="w-[108px]">
-        <col class="w-[150px]">
-        <col class="w-[108px]">
-        <col class="w-[130px]">
+        <col class="w-[8%]">
+        <col class="w-[12%]">
+        <col class="w-[20%]">
+        <col class="w-[23%]">
+        <col class="w-[12%]">
+        <col class="w-[5%]">
+        <col class="w-[9%]">
+        <col class="w-[5%]">
+        <col class="w-[6%]">
       </colgroup>
       <colgroup v-else>
-        <col class="w-[88px]">
-        <col class="w-[200px]">
-        <col class="w-[220px]">
-        <col class="w-[190px]">
-        <col class="w-[120px]">
-        <col class="w-[150px]">
-        <col class="w-[120px]">
-        <col class="w-[130px]">
+        <col class="w-[9%]">
+        <col class="w-[17%]">
+        <col class="w-[26%]">
+        <col class="w-[15%]">
+        <col class="w-[7%]">
+        <col class="w-[11%]">
+        <col class="w-[7%]">
+        <col class="w-[8%]">
       </colgroup>
       <TableHeader>
         <TableRow class="border-b border-border/60 hover:bg-transparent">
-          <TableHead class="h-12 font-semibold w-[70px]">
+          <TableHead class="h-12 font-semibold w-[8%]">
             时间
           </TableHead>
           <SortableTableHead
             v-if="isAdmin"
-            class="h-12 font-semibold w-[100px]"
+            class="h-12 font-semibold w-[12%]"
             column-key="user"
             :sortable="false"
             :filter-active="filterUser !== '__all__'"
@@ -343,12 +343,12 @@
           </SortableTableHead>
           <TableHead
             v-if="!isAdmin"
-            class="h-12 font-semibold w-[100px]"
+            class="h-12 font-semibold w-[17%]"
           >
             密钥
           </TableHead>
           <SortableTableHead
-            class="h-12 font-semibold w-[140px]"
+            class="h-12 font-semibold w-[20%]"
             column-key="model"
             :sortable="false"
             :filter-active="filterModel !== '__all__'"
@@ -367,7 +367,7 @@
           </SortableTableHead>
           <SortableTableHead
             v-if="isAdmin"
-            class="h-12 font-semibold w-[100px]"
+            class="h-12 font-semibold w-[23%]"
             column-key="provider"
             :sortable="false"
             :filter-active="filterProvider !== '__all__'"
@@ -385,7 +385,7 @@
             </template>
           </SortableTableHead>
           <SortableTableHead
-            class="h-12 font-semibold w-[120px]"
+            class="h-12 font-semibold w-[12%]"
             column-key="api_format"
             :sortable="false"
             :filter-active="filterApiFormat !== '__all__'"
@@ -403,7 +403,7 @@
             </template>
           </SortableTableHead>
           <SortableTableHead
-            class="h-12 font-semibold w-[108px] text-center"
+            class="h-12 font-semibold w-[5%] text-center"
             column-key="status"
             :sortable="false"
             align="center"
@@ -421,16 +421,16 @@
               />
             </template>
           </SortableTableHead>
-          <TableHead class="h-12 font-semibold w-[140px] text-right">
+          <TableHead class="h-12 font-semibold w-[9%] text-center">
             Tokens
           </TableHead>
-          <TableHead class="h-12 font-semibold w-[108px] text-right">
+          <TableHead class="h-12 font-semibold w-[5%] text-right">
             费用
           </TableHead>
-          <TableHead class="h-12 font-semibold w-[130px] text-right">
+          <TableHead class="h-12 font-semibold w-[6%] text-right">
             <div class="flex flex-col items-end text-xs gap-0.5">
-              <span class="whitespace-nowrap">首字/总耗时</span>
-              <span class="text-muted-foreground font-normal">输出速度</span>
+              <span>首字</span>
+              <span class="text-muted-foreground font-normal">总耗时</span>
             </div>
           </TableHead>
         </TableRow>
@@ -452,12 +452,19 @@
           @mousedown="handleRowMouseDown($event, record.id)"
           @click="handleRowClick($event, record.id)"
         >
-          <TableCell class="text-xs py-4 w-[70px]">
-            {{ formatDateTime(record.created_at) }}
+          <TableCell class="py-4 w-[8%] align-top">
+            <div class="flex flex-col gap-0.5 leading-tight">
+              <span class="text-xs text-foreground tabular-nums whitespace-nowrap">
+                {{ formatRecordTime(record.created_at) }}
+              </span>
+              <span class="text-[11px] text-muted-foreground tabular-nums whitespace-nowrap">
+                {{ formatRecordDate(record.created_at) }}
+              </span>
+            </div>
           </TableCell>
           <TableCell
             v-if="isAdmin"
-            class="py-4 w-[100px] truncate"
+            class="py-4 w-[12%] truncate"
             :title="record.username || record.user_email || (record.user_id ? `User ${record.user_id}` : '已删除用户')"
           >
             <div class="flex flex-col text-xs gap-0.5">
@@ -476,7 +483,7 @@
           <!-- 用户页面的密钥列 -->
           <TableCell
             v-if="!isAdmin"
-            class="py-4 w-[100px]"
+            class="py-4 w-[17%]"
             :title="record.api_key?.name || '-'"
           >
             <div class="flex flex-col text-xs gap-0.5">
@@ -490,7 +497,7 @@
             </div>
           </TableCell>
           <TableCell
-            class="font-medium py-4 w-[140px]"
+            class="font-medium py-4 w-[20%]"
             :title="getModelTooltip(record)"
           >
             <div
@@ -521,11 +528,11 @@
           </TableCell>
           <TableCell
             v-if="isAdmin"
-            class="py-4 w-[60px]"
+            class="py-4 w-[23%]"
           >
-            <div class="flex items-center gap-1">
-              <div class="flex flex-col text-xs gap-0.5">
-                <span>{{ record.provider }}</span>
+            <div class="flex min-w-0 items-center gap-1">
+              <div class="flex min-w-0 flex-col text-xs gap-0.5">
+                <span class="truncate">{{ record.provider }}</span>
                 <span
                   v-if="record.provider_key_name"
                   class="text-muted-foreground truncate"
@@ -577,7 +584,7 @@
             </div>
           </TableCell>
           <TableCell
-            class="py-4 w-[120px]"
+            class="py-4 w-[12%]"
             :title="getApiFormatTooltip(record)"
           >
             <!-- 有格式转换或同族格式差异：两行显示 -->
@@ -612,7 +619,7 @@
               class="text-muted-foreground text-xs"
             >-</span>
           </TableCell>
-          <TableCell class="text-center py-4 w-[108px]">
+          <TableCell class="text-center py-4 w-[5%]">
             <!-- 优先显示请求状态 -->
             <Badge
               v-if="getDisplayStatus(record) === 'pending'"
@@ -663,21 +670,41 @@
               {{ getStreamModeLabel(record) }}
             </Badge>
           </TableCell>
-          <TableCell class="text-right py-4 w-[140px]">
-            <div class="flex flex-col items-end text-xs gap-0.5">
-              <div class="flex items-center gap-1">
-                <span>{{ formatTokens(getRecordEffectiveInputTokens(record)) }}</span>
-                <span class="text-muted-foreground">/</span>
-                <span>{{ formatTokens(record.output_tokens || 0) }}</span>
-              </div>
-              <div class="flex items-center gap-1 text-muted-foreground">
-                <span :class="hasPositiveTokens(getRecordCacheReadTokens(record)) ? 'text-foreground/70' : ''">{{ formatOptionalTokens(getRecordCacheReadTokens(record)) }}</span>
-                <span>/</span>
-                <span :class="hasPositiveTokens(getRecordCacheCreationTokens(record)) ? 'text-foreground/70' : ''">{{ formatOptionalTokens(getRecordCacheCreationTokens(record)) }}</span>
-              </div>
+          <TableCell class="py-4 w-[9%]">
+            <div class="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] gap-x-1 text-xs leading-tight tabular-nums">
+              <span class="justify-self-end whitespace-nowrap text-right">
+                {{ formatTokens(getRecordEffectiveInputTokens(record)) }}
+              </span>
+              <span class="justify-self-center text-muted-foreground">
+                /
+              </span>
+              <span class="justify-self-start whitespace-nowrap text-left">
+                {{ formatTokens(record.output_tokens || 0) }}
+              </span>
+            </div>
+            <div class="mt-0.5 grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] gap-x-1 text-xs leading-tight tabular-nums text-muted-foreground">
+              <span
+                :class="[
+                  'justify-self-end whitespace-nowrap text-right',
+                  hasPositiveTokens(getRecordCacheReadTokens(record)) ? 'text-foreground/70' : ''
+                ]"
+              >
+                {{ formatOptionalTokens(getRecordCacheReadTokens(record)) }}
+              </span>
+              <span class="justify-self-center">
+                /
+              </span>
+              <span
+                :class="[
+                  'justify-self-start whitespace-nowrap text-left',
+                  hasPositiveTokens(getRecordCacheCreationTokens(record)) ? 'text-foreground/70' : ''
+                ]"
+              >
+                {{ formatOptionalTokens(getRecordCacheCreationTokens(record)) }}
+              </span>
             </div>
           </TableCell>
-          <TableCell class="text-right py-4 w-[108px]">
+          <TableCell class="text-right py-4 w-[5%]">
             <div class="flex flex-col items-end text-xs gap-0.5">
               <span class="text-primary font-medium">{{ formatCurrency(record.cost || 0) }}</span>
               <span
@@ -688,7 +715,7 @@
               </span>
             </div>
           </TableCell>
-          <TableCell class="text-right py-4 w-[130px]">
+          <TableCell class="text-right py-4 w-[6%]">
             <!-- pending 状态：只显示增长的总时间 -->
             <div
               v-if="getDisplayStatus(record) === 'pending'"
@@ -724,13 +751,23 @@
             <div
               v-else-if="record.response_time_ms != null || record.first_byte_time_ms != null"
               class="flex flex-col items-end text-xs gap-0.5"
-              :title="getRecordPerformanceTitle(record)"
             >
-              <span class="tabular-nums whitespace-nowrap">{{ formatRecordLatencyPair(record) }}</span>
               <span
-                v-if="getRecordDisplayOutputRate(record) != null"
-                class="text-primary/80 tabular-nums whitespace-nowrap"
-              >{{ formatOutputRate(getRecordDisplayOutputRate(record)) }}</span>
+                v-if="record.first_byte_time_ms != null"
+                class="tabular-nums"
+              >{{ (record.first_byte_time_ms / 1000).toFixed(2) }}s</span>
+              <span
+                v-else
+                class="text-muted-foreground"
+              >-</span>
+              <span
+                v-if="record.response_time_ms != null"
+                class="text-muted-foreground tabular-nums"
+              >{{ (record.response_time_ms / 1000).toFixed(2) }}s</span>
+              <span
+                v-else
+                class="text-muted-foreground"
+              >-</span>
             </div>
             <span
               v-else
@@ -782,15 +819,7 @@ import {
 } from '@/components/ui'
 import { RefreshCcw, Search } from 'lucide-vue-next'
 import { formatTokens, formatCurrency } from '@/utils/format'
-import { formatDateTime } from '../composables'
 import { getCacheCreationTokens, getCacheReadTokens, getEffectiveInputTokens } from '../token-normalization'
-import {
-  formatDurationMs,
-  formatOutputRate,
-  getDisplayOutputRate,
-  getGenerationTimeMs,
-  isOutputRateUsingGenerationTime,
-} from '../performance'
 import {
   formatUsageStreamLabel,
   isUsageRecordFailed,
@@ -943,6 +972,27 @@ function getUpstreamStream(record: UsageRecord): boolean {
   return isUsageUpstreamStream(record)
 }
 
+function parseRecordDateTime(dateStr: string): Date {
+  const utcDateStr = dateStr.includes('Z') || dateStr.includes('+') ? dateStr : `${dateStr}Z`
+  return new Date(utcDateStr)
+}
+
+function formatRecordDate(dateStr: string): string {
+  const date = parseRecordDateTime(dateStr)
+  const year = String(date.getFullYear())
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function formatRecordTime(dateStr: string): string {
+  const date = parseRecordDateTime(dateStr)
+  const hours = String(date.getHours()).padStart(2, '0')
+  const minutes = String(date.getMinutes()).padStart(2, '0')
+  const seconds = String(date.getSeconds()).padStart(2, '0')
+  return `${hours}:${minutes}:${seconds}`
+}
+
 watch(() => props.filterSearch, (value) => {
   if (value !== localSearch.value) {
     localSearch.value = value
@@ -980,27 +1030,6 @@ function getRecordCacheReadTokens(record: UsageRecord): number {
 
 function getRecordCacheCreationTokens(record: UsageRecord): number {
   return getCacheCreationTokens(record)
-}
-
-function getRecordDisplayOutputRate(record: UsageRecord): number | null {
-  return getDisplayOutputRate(record)
-}
-
-function formatRecordLatencyPair(record: UsageRecord): string {
-  const firstByte = formatDurationMs(record.first_byte_time_ms)
-  const total = formatDurationMs(record.response_time_ms)
-  return `${firstByte} / ${total}`
-}
-
-function getRecordPerformanceTitle(record: UsageRecord): string {
-  const outputRate = getRecordDisplayOutputRate(record)
-  const outputRateBasis = isOutputRateUsingGenerationTime(record) ? '首字后生成耗时' : '总耗时'
-  return [
-    `首字: ${formatDurationMs(record.first_byte_time_ms)}`,
-    `总耗时: ${formatDurationMs(record.response_time_ms)}`,
-    `生成耗时: ${formatDurationMs(getGenerationTimeMs(record))}`,
-    `输出速度: ${formatOutputRate(outputRate)} (${outputRateBasis})`,
-  ].join('\n')
 }
 
 function hasPositiveTokens(value: number | null | undefined): boolean {

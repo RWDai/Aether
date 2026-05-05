@@ -260,7 +260,10 @@ export function useUsageData(options: UseUsageDataOptions) {
       }
       stats.value = createDefaultStats()
       modelStats.value = []
-      currentRecords.value = []
+      if (!isAdminPage.value) {
+        currentRecords.value = []
+        totalRecords.value = 0
+      }
     } finally {
       if (requestId === loadStatsRequestId) {
         isLoadingStats.value = false

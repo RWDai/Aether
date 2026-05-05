@@ -1244,10 +1244,10 @@ SELECT
   COALESCE(SUM(cache_creation_tokens), 0)::BIGINT AS cache_creation_tokens,
   COALESCE(SUM(cache_read_tokens), 0)::BIGINT AS cache_read_tokens,
   COALESCE(SUM(total_input_context), 0)::BIGINT AS total_input_context,
-  COALESCE(SUM(cache_creation_cost), 0) AS cache_creation_cost_usd,
-  COALESCE(SUM(cache_read_cost), 0) AS cache_read_cost_usd,
-  COALESCE(SUM(total_cost), 0) AS total_cost_usd,
-  COALESCE(SUM(actual_total_cost), 0) AS actual_total_cost_usd,
+  COALESCE(SUM(cache_creation_cost), 0)::DOUBLE PRECISION AS cache_creation_cost_usd,
+  COALESCE(SUM(cache_read_cost), 0)::DOUBLE PRECISION AS cache_read_cost_usd,
+  COALESCE(SUM(total_cost), 0)::DOUBLE PRECISION AS total_cost_usd,
+  COALESCE(SUM(actual_total_cost), 0)::DOUBLE PRECISION AS actual_total_cost_usd,
   COALESCE(SUM(error_requests), 0)::BIGINT AS error_requests,
   COALESCE(SUM(response_time_sum_ms), 0) AS response_time_sum_ms,
   COALESCE(SUM(response_time_samples), 0)::BIGINT AS response_time_samples
@@ -1275,10 +1275,10 @@ SELECT
   COALESCE(SUM(cache_creation_tokens), 0)::BIGINT AS cache_creation_tokens,
   COALESCE(SUM(cache_read_tokens), 0)::BIGINT AS cache_read_tokens,
   COALESCE(SUM(total_input_context), 0)::BIGINT AS total_input_context,
-  COALESCE(SUM(cache_creation_cost), 0) AS cache_creation_cost_usd,
-  COALESCE(SUM(cache_read_cost), 0) AS cache_read_cost_usd,
-  COALESCE(SUM(total_cost), 0) AS total_cost_usd,
-  COALESCE(SUM(actual_total_cost), 0) AS actual_total_cost_usd,
+  COALESCE(SUM(cache_creation_cost), 0)::DOUBLE PRECISION AS cache_creation_cost_usd,
+  COALESCE(SUM(cache_read_cost), 0)::DOUBLE PRECISION AS cache_read_cost_usd,
+  COALESCE(SUM(total_cost), 0)::DOUBLE PRECISION AS total_cost_usd,
+  COALESCE(SUM(actual_total_cost), 0)::DOUBLE PRECISION AS actual_total_cost_usd,
   COALESCE(SUM(error_requests), 0)::BIGINT AS error_requests,
   COALESCE(SUM(response_time_sum_ms), 0) AS response_time_sum_ms,
   COALESCE(SUM(response_time_samples), 0)::BIGINT AS response_time_samples
@@ -2274,10 +2274,10 @@ SELECT
   COALESCE(SUM(cache_creation_ephemeral_1h_tokens), 0)::BIGINT
     AS cache_creation_ephemeral_1h_tokens,
   COALESCE(SUM(cache_read_tokens), 0)::BIGINT AS cache_read_tokens,
-  COALESCE(SUM(total_cost), 0) AS total_cost_usd,
-  COALESCE(SUM(actual_total_cost), 0) AS actual_total_cost_usd,
-  COALESCE(SUM(cache_creation_cost), 0) AS cache_creation_cost_usd,
-  COALESCE(SUM(cache_read_cost), 0) AS cache_read_cost_usd,
+  COALESCE(SUM(total_cost), 0)::DOUBLE PRECISION AS total_cost_usd,
+  COALESCE(SUM(actual_total_cost), 0)::DOUBLE PRECISION AS actual_total_cost_usd,
+  COALESCE(SUM(cache_creation_cost), 0)::DOUBLE PRECISION AS cache_creation_cost_usd,
+  COALESCE(SUM(cache_read_cost), 0)::DOUBLE PRECISION AS cache_read_cost_usd,
   COALESCE(SUM(response_time_sum_ms), 0) AS total_response_time_ms,
   COALESCE(SUM(error_requests), 0)::BIGINT AS error_requests
 FROM stats_user_daily
@@ -2306,10 +2306,10 @@ SELECT
   COALESCE(SUM(cache_creation_ephemeral_1h_tokens), 0)::BIGINT
     AS cache_creation_ephemeral_1h_tokens,
   COALESCE(SUM(cache_read_tokens), 0)::BIGINT AS cache_read_tokens,
-  COALESCE(SUM(total_cost), 0) AS total_cost_usd,
-  COALESCE(SUM(actual_total_cost), 0) AS actual_total_cost_usd,
-  COALESCE(SUM(cache_creation_cost), 0) AS cache_creation_cost_usd,
-  COALESCE(SUM(cache_read_cost), 0) AS cache_read_cost_usd,
+  COALESCE(SUM(total_cost), 0)::DOUBLE PRECISION AS total_cost_usd,
+  COALESCE(SUM(actual_total_cost), 0)::DOUBLE PRECISION AS actual_total_cost_usd,
+  COALESCE(SUM(cache_creation_cost), 0)::DOUBLE PRECISION AS cache_creation_cost_usd,
+  COALESCE(SUM(cache_read_cost), 0)::DOUBLE PRECISION AS cache_read_cost_usd,
   COALESCE(SUM(response_time_sum_ms), 0) AS total_response_time_ms,
   COALESCE(SUM(error_requests), 0)::BIGINT AS error_requests
 FROM stats_daily

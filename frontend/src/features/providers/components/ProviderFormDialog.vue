@@ -54,6 +54,9 @@
                   <SelectItem value="codex">
                     Codex
                   </SelectItem>
+                  <SelectItem value="chatgpt_web">
+                    ChatGPT Web
+                  </SelectItem>
                   <SelectItem value="gemini_cli">
                     Gemini CLI
                   </SelectItem>
@@ -77,6 +80,9 @@
                   </SelectItem>
                   <SelectItem value="codex">
                     Codex
+                  </SelectItem>
+                  <SelectItem value="chatgpt_web">
+                    ChatGPT Web
                   </SelectItem>
                   <SelectItem value="gemini_cli">
                     Gemini CLI
@@ -340,7 +346,7 @@ const defaultPriority = computed(() => {
 // 表单数据
 const form = ref({
   name: '',
-  provider_type: 'custom' as 'custom' | 'vertex_ai' | 'claude_code' | 'codex' | 'gemini_cli' | 'antigravity' | 'kiro',
+  provider_type: 'custom' as 'custom' | 'vertex_ai' | 'claude_code' | 'codex' | 'chatgpt_web' | 'gemini_cli' | 'antigravity' | 'kiro',
   description: '',
   website: '',
   // 计费配置

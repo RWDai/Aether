@@ -854,6 +854,7 @@ const PROVIDER_TYPE_LABELS: Record<string, string> = {
   vertex_ai: 'Vertex AI',
   claude_code: 'ClaudeCode',
   codex: 'Codex',
+  chatgpt_web: 'ChatGPT Web',
   gemini_cli: 'Gemini CLI',
   antigravity: 'Antigravity',
   kiro: 'Kiro',

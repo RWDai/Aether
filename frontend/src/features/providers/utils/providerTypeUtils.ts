@@ -7,6 +7,7 @@
 const oauthAccountProviderTypes = new Set([
   'claude_code',
   'codex',
+  'chatgpt_web',
   'gemini_cli',
   'antigravity',
   'kiro',

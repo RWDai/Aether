@@ -6,7 +6,8 @@ use std::time::{Duration, Instant};
 
 use aether_contracts::{
     ExecutionPlan, ExecutionResult, ExecutionTelemetry, ProxySnapshot, ResolvedTransportProfile,
-    ResponseBody, EXECUTION_REQUEST_FOLLOW_REDIRECTS_HEADER, EXECUTION_REQUEST_HTTP1_ONLY_HEADER,
+    ResponseBody, EXECUTION_REQUEST_ACCEPT_INVALID_CERTS_HEADER,
+    EXECUTION_REQUEST_FOLLOW_REDIRECTS_HEADER, EXECUTION_REQUEST_HTTP1_ONLY_HEADER,
     TRANSPORT_BACKEND_REQWEST_RUSTLS, TRANSPORT_HTTP_MODE_HTTP1_ONLY,
 };
 use aether_data::repository::proxy_nodes::ProxyNodeTrafficMutation;
@@ -141,6 +142,7 @@ pub(crate) struct DirectSyncExecutionRuntime;
 struct ExecutionTransportControls {
     follow_redirects: Option<bool>,
     http1_only: bool,
+    accept_invalid_certs: bool,
 }
 
 pub(crate) enum DirectUpstreamResponse {
@@ -894,6 +896,9 @@ fn build_client(
         builder,
         transport_profile.map(|profile| profile.profile_id.as_str()),
     );
+    if transport_controls.accept_invalid_certs {
+        builder = builder.danger_accept_invalid_certs(true);
+    }
     if let Some(proxy_url) = resolve_proxy_url(proxy)? {
         let proxy = reqwest::Proxy::all(&proxy_url)
             .map_err(ExecutionRuntimeTransportError::InvalidProxy)?;
@@ -1025,6 +1030,7 @@ fn build_request_headers(
             || normalized_key == "content-encoding"
             || normalized_key == EXECUTION_REQUEST_FOLLOW_REDIRECTS_HEADER
             || normalized_key == EXECUTION_REQUEST_HTTP1_ONLY_HEADER
+            || normalized_key == EXECUTION_REQUEST_ACCEPT_INVALID_CERTS_HEADER
         {
             continue;
         }
@@ -1058,6 +1064,12 @@ fn resolve_execution_transport_controls(
         http1_only: execution_transport_header_value(headers, EXECUTION_REQUEST_HTTP1_ONLY_HEADER)
             .and_then(|value| parse_execution_transport_bool(value))
             .unwrap_or(false),
+        accept_invalid_certs: execution_transport_header_value(
+            headers,
+            EXECUTION_REQUEST_ACCEPT_INVALID_CERTS_HEADER,
+        )
+        .and_then(|value| parse_execution_transport_bool(value))
+        .unwrap_or(false),
     }
 }
 
@@ -1201,9 +1213,10 @@ mod tests {
     use tokio::sync::watch;
 
     use super::{
-        build_client, execute_sync_plan, record_manual_proxy_request_failure,
-        record_manual_proxy_request_outcome, record_manual_proxy_request_success,
-        record_manual_proxy_stream_error, DirectSyncExecutionRuntime,
+        build_client, build_request_headers, execute_sync_plan,
+        record_manual_proxy_request_failure, record_manual_proxy_request_outcome,
+        record_manual_proxy_request_success, record_manual_proxy_stream_error,
+        resolve_execution_transport_controls, DirectSyncExecutionRuntime,
         ExecutionRuntimeTransportError, ExecutionTransportControls,
     };
     use crate::constants::{
@@ -1283,6 +1296,27 @@ mod tests {
             )
             .unwrap_or_else(|err| panic!("client should build for {proxy_url}: {err}"));
         }
+    }
+
+    #[test]
+    fn direct_sync_execution_runtime_strips_accept_invalid_certs_control_header() {
+        let headers = BTreeMap::from([
+            ("content-type".into(), "application/json".into()),
+            (
+                "x-aether-execution-accept-invalid-certs".into(),
+                "true".into(),
+            ),
+        ]);
+
+        let controls = resolve_execution_transport_controls(&headers);
+        assert!(controls.accept_invalid_certs);
+
+        let forwarded = build_request_headers(&headers, None, false)
+            .expect("headers should build after stripping internal controls");
+        assert!(forwarded.get("content-type").is_some());
+        assert!(forwarded
+            .get("x-aether-execution-accept-invalid-certs")
+            .is_none());
     }
 
     fn tunnel_proxy_snapshot(base_url: String) -> ProxySnapshot {

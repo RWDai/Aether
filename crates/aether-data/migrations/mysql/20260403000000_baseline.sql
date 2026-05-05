@@ -504,7 +504,7 @@ CREATE TABLE IF NOT EXISTS ldap_configs (
     bind_dn TEXT NOT NULL,
     bind_password_encrypted TEXT,
     base_dn TEXT NOT NULL,
-    user_search_filter TEXT NOT NULL DEFAULT '(uid={username})',
+    user_search_filter VARCHAR(512) NOT NULL DEFAULT '(uid={username})',
     username_attr VARCHAR(50) NOT NULL DEFAULT 'uid',
     email_attr VARCHAR(50) NOT NULL DEFAULT 'mail',
     display_name_attr VARCHAR(50) NOT NULL DEFAULT 'cn',

@@ -289,6 +289,9 @@ fn key_auth_channel_matches(row: &CandidateSelectionRow, api_format: &str) -> bo
                     "openai:responses" | "openai:responses:compact" | "openai:image"
                 )
         }
+        "chatgpt_web" => {
+            matches!(auth_type.as_str(), "oauth" | "bearer") && api_format == "openai:image"
+        }
         "claude_code" => auth_type == "oauth" && api_format == "claude:messages",
         "kiro" => {
             api_format == "claude:messages"
@@ -666,6 +669,25 @@ mod tests {
             .expect("pool keys should load");
         assert_eq!(pool_keys.len(), 1);
         assert_eq!(pool_keys[0].key_id, "key-2");
+
+        let image_rows = repository
+            .list_for_exact_api_format_and_requested_model_page(
+                &StoredRequestedModelCandidateRowsQuery {
+                    api_format: "openai:image".to_string(),
+                    requested_model_name: "gpt-image-2".to_string(),
+                    offset: 0,
+                    limit: 10,
+                },
+            )
+            .await
+            .expect("chatgpt web image rows should load");
+        assert_eq!(
+            image_rows
+                .iter()
+                .map(|row| row.key_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["key-chatgpt-web-oauth", "key-chatgpt-web-bearer"]
+        );
     }
 
     async fn seed_candidate_selection(pool: &sqlx::SqlitePool) {
@@ -688,10 +710,33 @@ VALUES
   ('key-1', 'provider-1', 'Key One', 'api_key', '["openai:chat"]', 10, 1, 1, 1),
   ('key-2', 'provider-1', 'Key Two', 'api_key', '["openai:chat"]', 20, 1, 1, 1);
 
+INSERT INTO providers (
+  id, name, provider_type, provider_priority, is_active, created_at, updated_at
+)
+VALUES ('provider-chatgpt-web', 'ChatGPT Web', 'chatgpt_web', 20, 1, 1, 1);
+
+INSERT INTO provider_endpoints (
+  id, provider_id, name, base_url, api_format, is_active, created_at, updated_at
+)
+VALUES (
+  'endpoint-chatgpt-web', 'provider-chatgpt-web', 'ChatGPT Web Image',
+  'https://chatgpt.com', 'openai:image', 1, 1, 1
+);
+
+INSERT INTO provider_api_keys (
+  id, provider_id, name, auth_type, api_formats, internal_priority, is_active, created_at, updated_at
+)
+VALUES
+  ('key-chatgpt-web-oauth', 'provider-chatgpt-web', 'OAuth', 'oauth', '["openai:image"]', 10, 1, 1, 1),
+  ('key-chatgpt-web-bearer', 'provider-chatgpt-web', 'Bearer', 'bearer', '["openai:image"]', 20, 1, 1, 1),
+  ('key-chatgpt-web-api-key', 'provider-chatgpt-web', 'API Key', 'api_key', '["openai:image"]', 30, 1, 1, 1);
+
 INSERT INTO global_models (
   id, name, config, is_active, created_at, updated_at
 )
-VALUES ('global-1', 'gpt-5', '{"model_mappings":["alias-global"],"streaming":true}', 1, 1, 1);
+VALUES
+  ('global-1', 'gpt-5', '{"model_mappings":["alias-global"],"streaming":true}', 1, 1, 1),
+  ('global-image-1', 'gpt-image-2', NULL, 1, 1, 1);
 
 INSERT INTO models (
   id, provider_id, global_model_id, provider_model_name, provider_model_mappings,
@@ -701,6 +746,10 @@ VALUES (
   'model-1', 'provider-1', 'global-1', 'provider-model',
   '[{"name":"alias-provider","api_formats":["openai:chat"],"priority":1}]',
   1, 1, 1, 1, 1
+),
+(
+  'model-chatgpt-web-image', 'provider-chatgpt-web', 'global-image-1', 'gpt-image-2',
+  NULL, 1, 1, 1, 1, 1
 );
 "#,
         )

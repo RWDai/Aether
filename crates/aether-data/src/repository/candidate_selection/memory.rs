@@ -184,6 +184,9 @@ fn key_auth_channel_matches(row: &StoredMinimalCandidateSelectionRow, api_format
                     "openai:responses" | "openai:responses:compact" | "openai:image"
                 )
         }
+        "chatgpt_web" => {
+            matches!(auth_type.as_str(), "oauth" | "bearer") && api_format == "openai:image"
+        }
         "claude_code" => auth_type == "oauth" && api_format == "claude:messages",
         "kiro" => {
             matches!(auth_type.as_str(), "oauth" | "bearer") && api_format == "claude:messages"
@@ -321,6 +324,38 @@ mod tests {
                 .map(|row| row.provider_id.as_str())
                 .collect::<Vec<_>>(),
             vec!["provider-2", "provider-3"]
+        );
+    }
+
+    #[tokio::test]
+    async fn allows_chatgpt_web_oauth_and_bearer_for_openai_image_only() {
+        let mut oauth = sample_row("chatgpt-web-oauth", "openai:image", "gpt-image-2", 10);
+        oauth.provider_type = "chatgpt_web".to_string();
+        oauth.key_auth_type = "oauth".to_string();
+        let mut bearer = sample_row("chatgpt-web-bearer", "openai:image", "gpt-image-2", 20);
+        bearer.provider_type = "chatgpt_web".to_string();
+        bearer.key_auth_type = "bearer".to_string();
+        let mut api_key = sample_row("chatgpt-web-api-key", "openai:image", "gpt-image-2", 30);
+        api_key.provider_type = "chatgpt_web".to_string();
+        api_key.key_auth_type = "api_key".to_string();
+        let mut responses = sample_row("chatgpt-web-responses", "openai:responses", "gpt-5", 40);
+        responses.provider_type = "chatgpt_web".to_string();
+        responses.key_auth_type = "oauth".to_string();
+
+        let repository = InMemoryMinimalCandidateSelectionReadRepository::seed(vec![
+            oauth, bearer, api_key, responses,
+        ]);
+
+        let rows = repository
+            .list_for_exact_api_format_and_requested_model("openai:image", "gpt-image-2")
+            .await
+            .expect("list should succeed");
+
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.provider_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["chatgpt-web-oauth", "chatgpt-web-bearer"]
         );
     }
 

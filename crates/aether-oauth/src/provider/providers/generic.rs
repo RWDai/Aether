@@ -52,6 +52,18 @@ pub const GENERIC_PROVIDER_OAUTH_TEMPLATES: &[GenericProviderOAuthTemplate] = &[
         uses_json_payload: false,
     },
     GenericProviderOAuthTemplate {
+        provider_type: "chatgpt_web",
+        display_name: "ChatGPT Web",
+        authorize_url: "https://auth.openai.com/oauth/authorize",
+        token_url: "https://auth.openai.com/oauth/token",
+        client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
+        client_secret: "",
+        scopes: &["openid", "email", "profile", "offline_access"],
+        redirect_uri: "http://localhost:1455/auth/callback",
+        use_pkce: true,
+        uses_json_payload: false,
+    },
+    GenericProviderOAuthTemplate {
         provider_type: "gemini_cli",
         display_name: "GeminiCli",
         authorize_url: "https://accounts.google.com/o/oauth2/v2/auth",

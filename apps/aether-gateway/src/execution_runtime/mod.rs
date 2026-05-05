@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+mod chatgpt_web_image;
 mod constants;
 mod fallback;
 mod kiro_web_search;

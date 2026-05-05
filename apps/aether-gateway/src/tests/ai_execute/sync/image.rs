@@ -523,3 +523,334 @@ async fn gateway_executes_codex_image_sync_via_local_decision_gate_after_oauth_r
     execution_runtime_handle.abort();
     refresh_handle.abort();
 }
+
+#[tokio::test]
+async fn gateway_plans_chatgpt_web_image_sync_with_internal_web_executor_url() {
+    #[derive(Debug, Clone)]
+    struct SeenExecutionRuntimeSyncRequest {
+        trace_id: String,
+        url: String,
+        marker: String,
+        authorization: String,
+        operation: String,
+        model: String,
+        web_model: String,
+        prompt: String,
+        size: String,
+        ratio: String,
+    }
+
+    fn hash_api_key(value: &str) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(value.as_bytes());
+        format!("{:x}", hasher.finalize())
+    }
+
+    fn sample_auth_snapshot(api_key_id: &str, user_id: &str) -> StoredAuthApiKeySnapshot {
+        StoredAuthApiKeySnapshot::new(
+            user_id.to_string(),
+            "alice".to_string(),
+            Some("alice@example.com".to_string()),
+            "user".to_string(),
+            "local".to_string(),
+            true,
+            false,
+            Some(serde_json::json!(["openai", "chatgpt_web"])),
+            Some(serde_json::json!(["openai:image"])),
+            Some(serde_json::json!(["gpt-image-2"])),
+            api_key_id.to_string(),
+            Some("default".to_string()),
+            true,
+            false,
+            false,
+            Some(60),
+            Some(5),
+            Some(4_102_444_800_i64),
+            Some(serde_json::json!(["openai", "chatgpt_web"])),
+            Some(serde_json::json!(["openai:image"])),
+            Some(serde_json::json!(["gpt-image-2"])),
+        )
+        .expect("auth snapshot should build")
+    }
+
+    fn sample_candidate_row() -> StoredMinimalCandidateSelectionRow {
+        StoredMinimalCandidateSelectionRow {
+            provider_id: "provider-chatgpt-web-image-plan-1".to_string(),
+            provider_name: "ChatGPT Web".to_string(),
+            provider_type: "chatgpt_web".to_string(),
+            provider_priority: 10,
+            provider_is_active: true,
+            endpoint_id: "endpoint-chatgpt-web-image-plan-1".to_string(),
+            endpoint_api_format: "openai:image".to_string(),
+            endpoint_api_family: Some("openai".to_string()),
+            endpoint_kind: Some("image".to_string()),
+            endpoint_is_active: true,
+            key_id: "key-chatgpt-web-image-plan-1".to_string(),
+            key_name: "manual bearer".to_string(),
+            key_auth_type: "bearer".to_string(),
+            key_is_active: true,
+            key_api_formats: Some(vec!["openai:image".to_string()]),
+            key_allowed_models: None,
+            key_capabilities: None,
+            key_internal_priority: 5,
+            key_global_priority_by_format: Some(serde_json::json!({"openai:image": 1})),
+            model_id: "model-chatgpt-web-image-plan-1".to_string(),
+            global_model_id: "global-model-chatgpt-web-image-plan-1".to_string(),
+            global_model_name: "gpt-image-2".to_string(),
+            global_model_mappings: None,
+            global_model_supports_streaming: Some(true),
+            model_provider_model_name: "gpt-image-2".to_string(),
+            model_provider_model_mappings: Some(vec![StoredProviderModelMapping {
+                name: "gpt-image-2".to_string(),
+                priority: 1,
+                api_formats: Some(vec!["openai:image".to_string()]),
+            }]),
+            model_supports_streaming: Some(true),
+            model_is_active: true,
+            model_is_available: true,
+        }
+    }
+
+    fn sample_provider_catalog_provider() -> StoredProviderCatalogProvider {
+        StoredProviderCatalogProvider::new(
+            "provider-chatgpt-web-image-plan-1".to_string(),
+            "ChatGPT Web".to_string(),
+            Some("https://chatgpt.com".to_string()),
+            "chatgpt_web".to_string(),
+        )
+        .expect("provider should build")
+        .with_transport_fields(
+            true,
+            false,
+            false,
+            None,
+            Some(2),
+            None,
+            Some(20.0),
+            None,
+            None,
+        )
+    }
+
+    fn sample_provider_catalog_endpoint() -> StoredProviderCatalogEndpoint {
+        StoredProviderCatalogEndpoint::new(
+            "endpoint-chatgpt-web-image-plan-1".to_string(),
+            "provider-chatgpt-web-image-plan-1".to_string(),
+            "openai:image".to_string(),
+            Some("openai".to_string()),
+            Some("image".to_string()),
+            true,
+        )
+        .expect("endpoint should build")
+        .with_transport_fields(
+            "https://chatgpt.com".to_string(),
+            None,
+            None,
+            Some(2),
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("endpoint transport should build")
+    }
+
+    fn sample_provider_catalog_key() -> StoredProviderCatalogKey {
+        StoredProviderCatalogKey::new(
+            "key-chatgpt-web-image-plan-1".to_string(),
+            "provider-chatgpt-web-image-plan-1".to_string(),
+            "manual bearer".to_string(),
+            "bearer".to_string(),
+            None,
+            true,
+        )
+        .expect("key should build")
+        .with_transport_fields(
+            Some(serde_json::json!(["openai:image"])),
+            encrypt_python_fernet_plaintext(DEVELOPMENT_ENCRYPTION_KEY, "chatgpt-web-access-token")
+                .expect("access token should encrypt"),
+            None,
+            None,
+            Some(serde_json::json!({"openai:image": 1})),
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("key transport should build")
+    }
+
+    let seen_execution_runtime = Arc::new(Mutex::new(None::<SeenExecutionRuntimeSyncRequest>));
+    let seen_execution_runtime_clone = Arc::clone(&seen_execution_runtime);
+    let execution_runtime = Router::new().route(
+        "/v1/execute/sync",
+        any(move |request: Request| {
+            let seen_execution_runtime_inner = Arc::clone(&seen_execution_runtime_clone);
+            async move {
+                let (parts, body) = request.into_parts();
+                let raw_body = to_bytes(body, usize::MAX).await.expect("body should read");
+                let payload: serde_json::Value = serde_json::from_slice(&raw_body)
+                    .expect("execution runtime payload should parse");
+                let body = payload
+                    .get("body")
+                    .and_then(|value| value.get("json_body"))
+                    .cloned()
+                    .unwrap_or_else(|| json!({}));
+                *seen_execution_runtime_inner
+                    .lock()
+                    .expect("mutex should lock") = Some(SeenExecutionRuntimeSyncRequest {
+                    trace_id: parts
+                        .headers
+                        .get(TRACE_ID_HEADER)
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or_default()
+                        .to_string(),
+                    url: payload
+                        .get("url")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    marker: payload
+                        .get("headers")
+                        .and_then(|value| value.get("x-aether-chatgpt-web-image"))
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    authorization: payload
+                        .get("headers")
+                        .and_then(|value| value.get("authorization"))
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    operation: body
+                        .get("operation")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    model: body
+                        .get("model")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    web_model: body
+                        .get("web_model")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    prompt: body
+                        .get("prompt")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    size: body
+                        .get("size")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    ratio: body
+                        .get("ratio")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                });
+                Json(json!({
+                    "request_id": "trace-chatgpt-web-image-plan-123",
+                    "status_code": 200,
+                    "headers": {
+                        "content-type": "text/event-stream"
+                    },
+                    "body": {
+                        "body_bytes_b64": base64::engine::general_purpose::STANDARD.encode(
+                            concat!(
+                                "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"ig_chatgpt_web_123\",\"type\":\"image_generation_call\",\"output_format\":\"png\",\"result\":\"aGVsbG8=\"}}\n\n",
+                                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_chatgpt_web_123\",\"object\":\"response\",\"model\":\"gpt-image-2\",\"status\":\"completed\",\"output\":[]}}\n\n",
+                                "data: [DONE]\n\n"
+                            )
+                        )
+                    },
+                    "telemetry": {
+                        "elapsed_ms": 41
+                    }
+                }))
+            }
+        }),
+    );
+
+    let client_api_key = "sk-client-chatgpt-web-image-plan";
+    let auth_repository = Arc::new(InMemoryAuthApiKeySnapshotRepository::seed(vec![(
+        Some(hash_api_key(client_api_key)),
+        sample_auth_snapshot(
+            "key-chatgpt-web-image-client-123",
+            "user-chatgpt-web-image-client-123",
+        ),
+    )]));
+    let candidate_selection_repository =
+        Arc::new(InMemoryMinimalCandidateSelectionReadRepository::seed(vec![
+            sample_candidate_row(),
+        ]));
+    let provider_catalog_repository = Arc::new(InMemoryProviderCatalogReadRepository::seed(
+        vec![sample_provider_catalog_provider()],
+        vec![sample_provider_catalog_endpoint()],
+        vec![sample_provider_catalog_key()],
+    ));
+
+    let (execution_runtime_url, execution_runtime_handle) = start_server(execution_runtime).await;
+    let gateway_state = build_state_with_execution_runtime_override(execution_runtime_url)
+        .with_data_state_for_tests(
+            crate::data::GatewayDataState::with_auth_candidate_selection_provider_catalog_and_request_candidate_repository_for_tests(
+                auth_repository,
+                candidate_selection_repository,
+                provider_catalog_repository,
+                Arc::new(InMemoryRequestCandidateRepository::default()),
+                DEVELOPMENT_ENCRYPTION_KEY,
+            ),
+        );
+    let gateway = build_router_with_state(gateway_state);
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+
+    let response = reqwest::Client::new()
+        .post(format!("{gateway_url}/v1/images/generations"))
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .header(
+            http::header::AUTHORIZATION,
+            format!("Bearer {client_api_key}"),
+        )
+        .header(TRACE_ID_HEADER, "trace-chatgpt-web-image-plan-123")
+        .body("{\"model\":\"gpt-image-2\",\"prompt\":\"生成一张测试图\",\"size\":\"1024x1024\",\"response_format\":\"b64_json\"}")
+        .send()
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let response_json: serde_json::Value = response.json().await.expect("body should parse");
+    assert_eq!(response_json["data"][0]["b64_json"], "aGVsbG8=");
+
+    let seen_execution_runtime_request = seen_execution_runtime
+        .lock()
+        .expect("mutex should lock")
+        .clone()
+        .expect("execution runtime sync should be captured");
+    assert_eq!(
+        seen_execution_runtime_request.trace_id,
+        "trace-chatgpt-web-image-plan-123"
+    );
+    assert_eq!(
+        seen_execution_runtime_request.url,
+        "https://chatgpt.com/__aether/chatgpt-web-image"
+    );
+    assert!(!seen_execution_runtime_request.url.contains("/v1/responses"));
+    assert_eq!(seen_execution_runtime_request.marker, "1");
+    assert_eq!(
+        seen_execution_runtime_request.authorization,
+        "Bearer chatgpt-web-access-token"
+    );
+    assert_eq!(seen_execution_runtime_request.operation, "generate");
+    assert_eq!(seen_execution_runtime_request.model, "gpt-image-2");
+    assert_eq!(seen_execution_runtime_request.web_model, "gpt-5-5-thinking");
+    assert_eq!(seen_execution_runtime_request.prompt, "生成一张测试图");
+    assert_eq!(seen_execution_runtime_request.size, "1024x1024");
+    assert_eq!(seen_execution_runtime_request.ratio, "1:1");
+
+    gateway_handle.abort();
+    execution_runtime_handle.abort();
+}

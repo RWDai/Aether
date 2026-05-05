@@ -24,6 +24,7 @@ use crate::api::response::{
 };
 use crate::clock::current_unix_ms as current_request_candidate_unix_ms;
 use crate::control::GatewayControlDecision;
+use crate::execution_runtime::chatgpt_web_image::maybe_execute_chatgpt_web_image_sync;
 use crate::execution_runtime::oauth_retry::refresh_oauth_plan_auth_for_retry;
 #[cfg(test)]
 use crate::execution_runtime::remote_compat::post_sync_plan_to_remote_execution_runtime;
@@ -193,11 +194,47 @@ pub(crate) async fn execute_execution_runtime_sync(
     .await;
     #[cfg(not(test))]
     let mut result = {
-        match DirectSyncExecutionRuntime::new().execute_sync(&plan).await {
-            Ok(result) => result,
+        match maybe_execute_chatgpt_web_image_sync(state, &plan, report_context.as_ref()).await {
+            Ok(Some(result)) => result,
+            Ok(None) => match DirectSyncExecutionRuntime::new().execute_sync(&plan).await {
+                Ok(result) => result,
+                Err(err) => {
+                    warn!(
+                        event_name = "sync_execution_runtime_unavailable",
+                        log_type = "ops",
+                        trace_id = %trace_id,
+                        request_id = %plan_request_id_for_log,
+                        candidate_id = ?plan_candidate_id,
+                        provider_name,
+                        endpoint_id,
+                        key_id,
+                        model_name,
+                        candidate_index = candidate_index.as_str(),
+                        error = %err,
+                        "gateway in-process sync execution unavailable"
+                    );
+                    let terminal_unix_secs = current_request_candidate_unix_ms();
+                    record_local_request_candidate_status(
+                        state,
+                        &plan,
+                        report_context.as_ref(),
+                        SchedulerRequestCandidateStatusUpdate {
+                            status: RequestCandidateStatus::Failed,
+                            status_code: None,
+                            error_type: Some("execution_runtime_unavailable".to_string()),
+                            error_message: Some(err.to_string()),
+                            latency_ms: None,
+                            started_at_unix_ms: Some(candidate_started_unix_secs),
+                            finished_at_unix_ms: Some(terminal_unix_secs),
+                        },
+                    )
+                    .await;
+                    return Ok(None);
+                }
+            },
             Err(err) => {
                 warn!(
-                    event_name = "sync_execution_runtime_unavailable",
+                    event_name = "chatgpt_web_image_execution_unavailable",
                     log_type = "ops",
                     trace_id = %trace_id,
                     request_id = %plan_request_id_for_log,
@@ -208,7 +245,7 @@ pub(crate) async fn execute_execution_runtime_sync(
                     model_name,
                     candidate_index = candidate_index.as_str(),
                     error = %err,
-                    "gateway in-process sync execution unavailable"
+                    "gateway ChatGPT-Web image execution unavailable"
                 );
                 let terminal_unix_secs = current_request_candidate_unix_ms();
                 record_local_request_candidate_status(
@@ -218,7 +255,7 @@ pub(crate) async fn execute_execution_runtime_sync(
                     SchedulerRequestCandidateStatusUpdate {
                         status: RequestCandidateStatus::Failed,
                         status_code: None,
-                        error_type: Some("execution_runtime_unavailable".to_string()),
+                        error_type: Some("chatgpt_web_image_execution_unavailable".to_string()),
                         error_message: Some(err.to_string()),
                         latency_ms: None,
                         started_at_unix_ms: Some(candidate_started_unix_secs),
@@ -275,11 +312,48 @@ pub(crate) async fn execute_execution_runtime_sync(
             .trim()
             .is_empty()
         {
-            match DirectSyncExecutionRuntime::new().execute_sync(&plan).await {
-                Ok(result) => result,
+            match maybe_execute_chatgpt_web_image_sync(state, &plan, report_context.as_ref()).await
+            {
+                Ok(Some(result)) => result,
+                Ok(None) => match DirectSyncExecutionRuntime::new().execute_sync(&plan).await {
+                    Ok(result) => result,
+                    Err(err) => {
+                        warn!(
+                            event_name = "sync_execution_runtime_unavailable",
+                            log_type = "ops",
+                            trace_id = %trace_id,
+                            request_id = %plan_request_id_for_log,
+                            candidate_id = ?plan_candidate_id,
+                            provider_name,
+                            endpoint_id,
+                            key_id,
+                            model_name,
+                            candidate_index = candidate_index.as_str(),
+                            error = %err,
+                            "gateway in-process sync execution unavailable"
+                        );
+                        let terminal_unix_secs = current_request_candidate_unix_ms();
+                        record_local_request_candidate_status(
+                            state,
+                            &plan,
+                            report_context.as_ref(),
+                            SchedulerRequestCandidateStatusUpdate {
+                                status: RequestCandidateStatus::Failed,
+                                status_code: None,
+                                error_type: Some("execution_runtime_unavailable".to_string()),
+                                error_message: Some(err.to_string()),
+                                latency_ms: None,
+                                started_at_unix_ms: Some(candidate_started_unix_secs),
+                                finished_at_unix_ms: Some(terminal_unix_secs),
+                            },
+                        )
+                        .await;
+                        return Ok(None);
+                    }
+                },
                 Err(err) => {
                     warn!(
-                        event_name = "sync_execution_runtime_unavailable",
+                        event_name = "chatgpt_web_image_execution_unavailable",
                         log_type = "ops",
                         trace_id = %trace_id,
                         request_id = %plan_request_id_for_log,
@@ -290,7 +364,7 @@ pub(crate) async fn execute_execution_runtime_sync(
                         model_name,
                         candidate_index = candidate_index.as_str(),
                         error = %err,
-                        "gateway in-process sync execution unavailable"
+                        "gateway ChatGPT-Web image execution unavailable"
                     );
                     let terminal_unix_secs = current_request_candidate_unix_ms();
                     record_local_request_candidate_status(
@@ -300,7 +374,7 @@ pub(crate) async fn execute_execution_runtime_sync(
                         SchedulerRequestCandidateStatusUpdate {
                             status: RequestCandidateStatus::Failed,
                             status_code: None,
-                            error_type: Some("execution_runtime_unavailable".to_string()),
+                            error_type: Some("chatgpt_web_image_execution_unavailable".to_string()),
                             error_message: Some(err.to_string()),
                             latency_ms: None,
                             started_at_unix_ms: Some(candidate_started_unix_secs),

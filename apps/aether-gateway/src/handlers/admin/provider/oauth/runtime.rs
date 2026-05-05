@@ -22,6 +22,16 @@ pub(crate) fn provider_oauth_runtime_endpoint_for_provider(
                     && crate::ai_serving::is_openai_responses_format(&endpoint.api_format)
             })
             .cloned(),
+        "chatgpt_web" => endpoints
+            .iter()
+            .find(|endpoint| {
+                endpoint.is_active
+                    && endpoint
+                        .api_format
+                        .trim()
+                        .eq_ignore_ascii_case("openai:image")
+            })
+            .cloned(),
         "antigravity" => endpoints
             .iter()
             .find(|endpoint| {

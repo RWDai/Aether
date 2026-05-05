@@ -480,7 +480,7 @@ export interface PublicEndpointStatusMonitorResponse {
   formats: PublicEndpointStatusMonitor[]
 }
 
-export type ProviderType = 'custom' | 'claude_code' | 'codex' | 'gemini_cli' | 'antigravity' | 'kiro' | 'vertex_ai'
+export type ProviderType = 'custom' | 'claude_code' | 'codex' | 'chatgpt_web' | 'gemini_cli' | 'antigravity' | 'kiro' | 'vertex_ai'
 
 export interface ClaudeCodeAdvancedConfig {
   // 会话数量控制：null/undefined 表示不限制

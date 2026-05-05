@@ -95,6 +95,18 @@ const CODEX_FIXED_PROVIDER_TEMPLATE: FixedProviderTemplate = FixedProviderTempla
     ],
 };
 
+const CHATGPT_WEB_FIXED_PROVIDER_TEMPLATE: FixedProviderTemplate = FixedProviderTemplate {
+    provider_type: "chatgpt_web",
+    version: 1,
+    base_url: "https://chatgpt.com",
+    endpoints: &[FixedProviderEndpointTemplate {
+        item_key: "openai:image",
+        api_format: "openai:image",
+        custom_path: None,
+        config_defaults: FORCE_STREAM_ENDPOINT_CONFIG_DEFAULTS,
+    }],
+};
+
 const KIRO_FIXED_PROVIDER_TEMPLATE: FixedProviderTemplate = FixedProviderTemplate {
     provider_type: "kiro",
     version: 1,
@@ -154,7 +166,13 @@ const ANTIGRAVITY_FIXED_PROVIDER_TEMPLATE: FixedProviderTemplate = FixedProvider
 pub fn provider_type_is_fixed(provider_type: &str) -> bool {
     matches!(
         provider_type.trim().to_ascii_lowercase().as_str(),
-        "claude_code" | "kiro" | "codex" | "gemini_cli" | "antigravity" | "vertex_ai"
+        "claude_code"
+            | "kiro"
+            | "codex"
+            | "chatgpt_web"
+            | "gemini_cli"
+            | "antigravity"
+            | "vertex_ai"
     )
 }
 
@@ -167,6 +185,7 @@ pub fn fixed_provider_key_inherits_api_formats(
     let auth_type = auth_type.trim().to_ascii_lowercase();
     provider_type_is_fixed(&provider_type)
         && (auth_type == "oauth"
+            || provider_type == "chatgpt_web" && auth_type == "bearer"
             || provider_type == "kiro"
                 && auth_type == "bearer"
                 && decrypted_auth_config
@@ -177,7 +196,7 @@ pub fn fixed_provider_key_inherits_api_formats(
 pub fn provider_type_enables_format_conversion_by_default(provider_type: &str) -> bool {
     matches!(
         provider_type.trim().to_ascii_lowercase().as_str(),
-        "claude_code" | "kiro" | "codex" | "antigravity" | "vertex_ai"
+        "claude_code" | "kiro" | "codex" | "chatgpt_web" | "antigravity" | "vertex_ai"
     )
 }
 
@@ -185,6 +204,7 @@ pub fn fixed_provider_template(provider_type: &str) -> Option<&'static FixedProv
     match provider_type.trim().to_ascii_lowercase().as_str() {
         "claude_code" => Some(&CLAUDE_CODE_FIXED_PROVIDER_TEMPLATE),
         "codex" => Some(&CODEX_FIXED_PROVIDER_TEMPLATE),
+        "chatgpt_web" => Some(&CHATGPT_WEB_FIXED_PROVIDER_TEMPLATE),
         "kiro" => Some(&KIRO_FIXED_PROVIDER_TEMPLATE),
         "gemini_cli" => Some(&GEMINI_CLI_FIXED_PROVIDER_TEMPLATE),
         "vertex_ai" => Some(&VERTEX_AI_FIXED_PROVIDER_TEMPLATE),
@@ -207,21 +227,27 @@ pub fn fixed_provider_endpoint_template_by_api_format(
 pub fn provider_type_supports_model_fetch(provider_type: &str) -> bool {
     !matches!(
         provider_type.trim().to_ascii_lowercase().as_str(),
-        "vertex_ai" | "antigravity" | "codex" | "kiro" | "claude_code"
+        "vertex_ai" | "antigravity" | "codex" | "chatgpt_web" | "kiro" | "claude_code"
     )
 }
 
 pub fn provider_type_supports_local_openai_chat_transport(provider_type: &str) -> bool {
     !matches!(
         provider_type.trim().to_ascii_lowercase().as_str(),
-        "antigravity" | "claude_code" | "codex" | "gemini_cli" | "kiro" | "vertex_ai"
+        "antigravity"
+            | "claude_code"
+            | "codex"
+            | "chatgpt_web"
+            | "gemini_cli"
+            | "kiro"
+            | "vertex_ai"
     )
 }
 
 pub fn provider_type_supports_local_same_format_transport(provider_type: &str) -> bool {
     !matches!(
         provider_type.trim().to_ascii_lowercase().as_str(),
-        "antigravity" | "claude_code" | "kiro" | "vertex_ai"
+        "antigravity" | "chatgpt_web" | "claude_code" | "kiro" | "vertex_ai"
     )
 }
 
@@ -276,6 +302,17 @@ pub fn provider_type_admin_oauth_template(provider_type: &str) -> Option<Provide
             redirect_uri: "http://localhost:1455/auth/callback",
             use_pkce: true,
         }),
+        "chatgpt_web" => Some(ProviderOAuthTemplate {
+            provider_type: "chatgpt_web",
+            display_name: "ChatGPT Web",
+            authorize_url: "https://auth.openai.com/oauth/authorize",
+            token_url: "https://auth.openai.com/oauth/token",
+            client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
+            client_secret: "",
+            scopes: &["openid", "email", "profile", "offline_access"],
+            redirect_uri: "http://localhost:1455/auth/callback",
+            use_pkce: true,
+        }),
         "gemini_cli" => Some(ProviderOAuthTemplate {
             provider_type: "gemini_cli",
             display_name: "GeminiCli",
@@ -312,15 +349,20 @@ pub fn provider_type_admin_oauth_template(provider_type: &str) -> Option<Provide
     }
 }
 
-pub const ADMIN_PROVIDER_OAUTH_TEMPLATE_TYPES: &[&str] =
-    &["claude_code", "codex", "gemini_cli", "antigravity"];
+pub const ADMIN_PROVIDER_OAUTH_TEMPLATE_TYPES: &[&str] = &[
+    "claude_code",
+    "codex",
+    "chatgpt_web",
+    "gemini_cli",
+    "antigravity",
+];
 
 #[cfg(test)]
 mod tests {
     use super::{
         fixed_provider_endpoint_template_by_api_format, fixed_provider_key_inherits_api_formats,
         fixed_provider_template, provider_type_supports_local_embedding_transport,
-        FixedProviderEndpointConfigValue,
+        provider_type_supports_local_same_format_transport, FixedProviderEndpointConfigValue,
     };
 
     #[test]
@@ -358,9 +400,45 @@ mod tests {
     }
 
     #[test]
+    fn chatgpt_web_fixed_provider_template_only_exposes_openai_image() {
+        let template =
+            fixed_provider_template("chatgpt_web").expect("chatgpt_web template should exist");
+        assert_eq!(template.base_url, "https://chatgpt.com");
+        assert_eq!(template.version, 1);
+        assert_eq!(
+            template
+                .endpoints
+                .iter()
+                .map(|item| item.api_format)
+                .collect::<Vec<_>>(),
+            vec!["openai:image"]
+        );
+
+        let image_template =
+            fixed_provider_endpoint_template_by_api_format("chatgpt_web", "openai:image")
+                .expect("chatgpt_web image endpoint should exist");
+        assert_eq!(
+            image_template
+                .config_defaults
+                .iter()
+                .map(|item| (item.key, item.value))
+                .collect::<Vec<_>>(),
+            vec![(
+                "upstream_stream_policy",
+                FixedProviderEndpointConfigValue::String("force_stream")
+            )]
+        );
+    }
+
+    #[test]
     fn fixed_provider_key_inheritance_keeps_oauth_and_kiro_configured_bearer_keys_open() {
         assert!(fixed_provider_key_inherits_api_formats(
             "codex", "oauth", None
+        ));
+        assert!(fixed_provider_key_inherits_api_formats(
+            "chatgpt_web",
+            "oauth",
+            None
         ));
         assert!(fixed_provider_key_inherits_api_formats(
             "kiro",
@@ -372,6 +450,13 @@ mod tests {
         ));
         assert!(!fixed_provider_key_inherits_api_formats(
             "custom", "oauth", None
+        ));
+    }
+
+    #[test]
+    fn chatgpt_web_does_not_use_generic_same_format_transport() {
+        assert!(!provider_type_supports_local_same_format_transport(
+            "chatgpt_web"
         ));
     }
 

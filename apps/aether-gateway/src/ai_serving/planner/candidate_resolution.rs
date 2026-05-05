@@ -453,7 +453,7 @@ fn resolve_transport_auth_type_for_endpoint_format(
 fn provider_uses_bearer_like_oauth(provider_type: &str) -> bool {
     matches!(
         provider_type.trim().to_ascii_lowercase().as_str(),
-        "claude_code" | "gemini_cli" | "antigravity" | "kiro"
+        "claude_code" | "chatgpt_web" | "gemini_cli" | "antigravity" | "kiro"
     )
 }
 

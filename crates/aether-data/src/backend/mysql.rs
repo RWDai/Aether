@@ -284,6 +284,18 @@ mod tests {
         let request_zero = format!("request-daily-zero-{suffix}");
         let request_outside = format!("request-daily-outside-{suffix}");
         let stale_ledger_id = format!("stale-ledger-{suffix}");
+        let unique_offset = chrono::Utc::now()
+            .timestamp_nanos_opt()
+            .unwrap_or_default()
+            .rem_euclid(10_000_000);
+        let window_start = 4_100_000_000_i64 + unique_offset * 1_000;
+        let window_end = window_start + 200;
+        let first_finalized_at = window_start;
+        let last_finalized_at = window_start + 100;
+        let zero_finalized_at = window_start + 150;
+        let outside_finalized_at = window_end;
+        let seed_created_at = window_start - 100;
+        let aggregated_at = window_end + 100;
 
         sqlx::query(
             r#"
@@ -309,19 +321,31 @@ INSERT INTO `usage` (
   cache_read_input_tokens, finalized_at, created_at_unix_ms, updated_at_unix_secs
 ) VALUES
   (?, 'wrong-wallet', 'provider', 'model', 'completed', 'pending',
-   1.25, 10, 20, 3, 4, 4099999900, 4099999900000, 4099999900),
+   1.25, 10, 20, 3, 4, ?, ?, ?),
   (?, NULL, 'provider', 'model', 'completed', 'pending',
-   2.00, 5, 7, 1, 2, 4099999901, 4099999901000, 4099999901),
+   2.00, 5, 7, 1, 2, ?, ?, ?),
   (?, NULL, 'provider', 'model', 'completed', 'pending',
-   0.00, 100, 100, 0, 0, 4099999902, 4099999902000, 4099999902),
+   0.00, 100, 100, 0, 0, ?, ?, ?),
   (?, NULL, 'provider', 'model', 'completed', 'pending',
-   9.00, 50, 50, 0, 0, 4099999903, 4099999903000, 4099999903)
+   9.00, 50, 50, 0, 0, ?, ?, ?)
 "#,
         )
         .bind(&request_one)
+        .bind(seed_created_at)
+        .bind(seed_created_at * 1000)
+        .bind(seed_created_at)
         .bind(&request_two)
+        .bind(seed_created_at + 1)
+        .bind((seed_created_at + 1) * 1000)
+        .bind(seed_created_at + 1)
         .bind(&request_zero)
+        .bind(seed_created_at + 2)
+        .bind((seed_created_at + 2) * 1000)
+        .bind(seed_created_at + 2)
         .bind(&request_outside)
+        .bind(seed_created_at + 3)
+        .bind((seed_created_at + 3) * 1000)
+        .bind(seed_created_at + 3)
         .execute(backend.pool())
         .await
         .expect("usage should seed");
@@ -331,20 +355,32 @@ INSERT INTO `usage` (
 INSERT INTO usage_settlement_snapshots (
   request_id, billing_status, wallet_id, finalized_at, created_at, updated_at
 ) VALUES
-  (?, 'settled', ?, 4100000000, 4100000000, 4100000000),
-  (?, 'settled', ?, 4100000100, 4100000100, 4100000100),
-  (?, 'settled', ?, 4100000150, 4100000150, 4100000150),
-  (?, 'settled', ?, 4100000200, 4100000200, 4100000200)
+  (?, 'settled', ?, ?, ?, ?),
+  (?, 'settled', ?, ?, ?, ?),
+  (?, 'settled', ?, ?, ?, ?),
+  (?, 'settled', ?, ?, ?, ?)
 "#,
         )
         .bind(&request_one)
         .bind(&wallet_id)
+        .bind(first_finalized_at)
+        .bind(first_finalized_at)
+        .bind(first_finalized_at)
         .bind(&request_two)
         .bind(&wallet_id)
+        .bind(last_finalized_at)
+        .bind(last_finalized_at)
+        .bind(last_finalized_at)
         .bind(&request_zero)
         .bind(&wallet_id)
+        .bind(zero_finalized_at)
+        .bind(zero_finalized_at)
+        .bind(zero_finalized_at)
         .bind(&request_outside)
         .bind(&wallet_id)
+        .bind(outside_finalized_at)
+        .bind(outside_finalized_at)
+        .bind(outside_finalized_at)
         .execute(backend.pool())
         .await
         .expect("settlement snapshots should seed");
@@ -355,12 +391,15 @@ INSERT INTO wallet_daily_usage_ledgers (
   id, wallet_id, billing_date, billing_timezone, total_cost_usd,
   total_requests, input_tokens, output_tokens, cache_creation_tokens,
   cache_read_tokens, aggregated_at, created_at, updated_at
-) VALUES (?, ?, '2026-05-03', ?, 7.0, 3, 1, 1, 0, 0, 4099999999, 4099999999, 4099999999)
+) VALUES (?, ?, '2026-05-03', ?, 7.0, 3, 1, 1, 0, 0, ?, ?, ?)
 "#,
         )
         .bind(&stale_ledger_id)
         .bind(&stale_wallet_id)
         .bind(&timezone)
+        .bind(seed_created_at)
+        .bind(seed_created_at)
+        .bind(seed_created_at)
         .execute(backend.pool())
         .await
         .expect("stale ledger should seed");
@@ -369,9 +408,9 @@ INSERT INTO wallet_daily_usage_ledgers (
             .aggregate_wallet_daily_usage(&WalletDailyUsageAggregationInput {
                 billing_date: "2026-05-03".to_string(),
                 billing_timezone: timezone.clone(),
-                window_start_unix_secs: 4_100_000_000,
-                window_end_unix_secs: 4_100_000_200,
-                aggregated_at_unix_secs: 4_100_000_300,
+                window_start_unix_secs: window_start as u64,
+                window_end_unix_secs: window_end as u64,
+                aggregated_at_unix_secs: aggregated_at as u64,
             })
             .await
             .expect("wallet daily usage aggregation should run");
@@ -425,9 +464,9 @@ WHERE wallet_id = ?
         assert_eq!(ledger.4, 27);
         assert_eq!(ledger.5, 4);
         assert_eq!(ledger.6, 6);
-        assert_eq!(ledger.7, Some(4_100_000_000));
-        assert_eq!(ledger.8, Some(4_100_000_100));
-        assert_eq!(ledger.9, 4_100_000_300);
+        assert_eq!(ledger.7, Some(first_finalized_at));
+        assert_eq!(ledger.8, Some(last_finalized_at));
+        assert_eq!(ledger.9, aggregated_at);
 
         let stale_count: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM wallet_daily_usage_ledgers WHERE id = ?")
@@ -462,6 +501,18 @@ WHERE wallet_id = ?
         run_mysql_migrations(backend.pool())
             .await
             .expect("mysql migrations should run");
+
+        for sql in [
+            "DELETE FROM stats_daily WHERE `date` = 0",
+            "DELETE FROM stats_hourly WHERE hour_utc = 3600",
+            "DELETE FROM usage_settlement_snapshots WHERE request_id LIKE 'request-daily-%' OR request_id LIKE 'stats-%'",
+            "DELETE FROM `usage` WHERE request_id LIKE 'request-%' OR request_id LIKE 'export-request-%' OR request_id LIKE 'stats-%'",
+        ] {
+            sqlx::query(sql)
+                .execute(backend.pool())
+                .await
+                .expect("stats smoke cleanup should run");
+        }
 
         sqlx::query(
             r#"

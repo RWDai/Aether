@@ -289,6 +289,9 @@ fn key_auth_channel_matches(row: &CandidateSelectionRow, api_format: &str) -> bo
                     "openai:responses" | "openai:responses:compact" | "openai:image"
                 )
         }
+        "chatgpt_web" => {
+            matches!(auth_type.as_str(), "oauth" | "bearer") && api_format == "openai:image"
+        }
         "claude_code" => auth_type == "oauth" && api_format == "claude:messages",
         "kiro" => {
             api_format == "claude:messages"

@@ -3,10 +3,10 @@ use std::collections::BTreeSet;
 pub(crate) fn normalize_provider_type_input(value: &str) -> Result<String, String> {
     let normalized = value.trim().to_ascii_lowercase();
     match normalized.as_str() {
-        "custom" | "claude_code" | "kiro" | "codex" | "gemini_cli" | "antigravity"
-        | "vertex_ai" => Ok(normalized),
+        "custom" | "claude_code" | "kiro" | "codex" | "chatgpt_web" | "gemini_cli"
+        | "antigravity" | "vertex_ai" => Ok(normalized),
         _ => Err(
-            "provider_type 仅支持 custom / claude_code / kiro / codex / gemini_cli / antigravity / vertex_ai"
+            "provider_type 仅支持 custom / claude_code / kiro / codex / chatgpt_web / gemini_cli / antigravity / vertex_ai"
                 .to_string(),
         ),
     }
@@ -180,7 +180,8 @@ fn normalize_json_like_object(
 mod tests {
     use super::{
         normalize_api_format_json_object_keys, normalize_api_format_list, normalize_auth_type,
-        normalize_auth_type_by_format, normalize_pool_advanced_config, validate_vertex_api_formats,
+        normalize_auth_type_by_format, normalize_pool_advanced_config,
+        normalize_provider_type_input, validate_vertex_api_formats,
     };
     use serde_json::json;
 
@@ -209,6 +210,14 @@ mod tests {
         assert_eq!(
             normalize_auth_type(Some("bearer")).expect("bearer should normalize"),
             "bearer"
+        );
+    }
+
+    #[test]
+    fn normalize_provider_type_supports_chatgpt_web() {
+        assert_eq!(
+            normalize_provider_type_input(" ChatGPT_Web ").expect("type should normalize"),
+            "chatgpt_web"
         );
     }
 

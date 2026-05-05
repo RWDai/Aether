@@ -478,29 +478,48 @@ fn split_baseline_sources_match_executable_migrations() {
 
 #[test]
 fn mysql_and_sqlite_migrations_do_not_use_postgres_jsonb() {
-    let mysql_sources = [
-        include_str!("../../../migrations/mysql/20260403000000_baseline.sql"),
-        include_str!("../../../migrations/mysql/20260504000000_add_audit_logs.sql"),
-        include_str!("../../../migrations/mysql/20260504010000_add_auth_user_runtime_tables.sql"),
-        include_str!("../../../migrations/mysql/20260504020000_add_ldap_user_columns.sql"),
-        include_str!("../../../migrations/mysql/20260504030000_add_user_oauth_link_uniques.sql"),
-        include_str!("../../../migrations/mysql/20260504040000_add_stats_aggregation_tables.sql"),
-    ];
-    let sqlite_sources = [
-        include_str!("../../../migrations/sqlite/20260403000000_baseline.sql"),
-        include_str!("../../../migrations/sqlite/20260504000000_add_audit_logs.sql"),
-        include_str!("../../../migrations/sqlite/20260504010000_add_auth_user_runtime_tables.sql"),
-        include_str!("../../../migrations/sqlite/20260504020000_add_ldap_user_columns.sql"),
-        include_str!("../../../migrations/sqlite/20260504030000_add_user_oauth_link_uniques.sql"),
-        include_str!("../../../migrations/sqlite/20260504040000_add_stats_aggregation_tables.sql"),
-    ];
+    let mysql_sources = super::mysql::MIGRATOR
+        .iter()
+        .filter(|migration| migration.migration_type.is_up_migration())
+        .map(|migration| migration.sql.as_ref());
+    let sqlite_sources = super::sqlite::MIGRATOR
+        .iter()
+        .filter(|migration| migration.migration_type.is_up_migration())
+        .map(|migration| migration.sql.as_ref());
 
-    for source in mysql_sources.into_iter().chain(sqlite_sources) {
+    for source in mysql_sources.chain(sqlite_sources) {
         assert!(
             !source.to_ascii_lowercase().contains("jsonb"),
             "Postgres jsonb must stay out of MySQL/SQLite migrations"
         );
     }
+}
+
+#[test]
+fn mysql_and_sqlite_migrations_are_baseline_only_until_enabled() {
+    let mysql_versions = super::mysql::MIGRATOR
+        .iter()
+        .filter(|migration| migration.migration_type.is_up_migration())
+        .map(|migration| migration.version)
+        .collect::<Vec<_>>();
+    let sqlite_versions = super::sqlite::MIGRATOR
+        .iter()
+        .filter(|migration| migration.migration_type.is_up_migration())
+        .map(|migration| migration.version)
+        .collect::<Vec<_>>();
+
+    assert_eq!(mysql_versions, vec![20260403000000]);
+    assert_eq!(sqlite_versions, vec![20260403000000]);
+}
+
+#[test]
+fn fresh_usage_schema_projects_upstream_stream_mode_for_all_drivers() {
+    let mysql_baseline = include_str!("../../../migrations/mysql/20260403000000_baseline.sql");
+    let sqlite_baseline = include_str!("../../../migrations/sqlite/20260403000000_baseline.sql");
+
+    assert!(EMPTY_DATABASE_SNAPSHOT_SQL.contains("upstream_is_stream boolean"));
+    assert!(mysql_baseline.contains("upstream_is_stream TINYINT(1)"));
+    assert!(sqlite_baseline.contains("upstream_is_stream INTEGER"));
 }
 
 #[tokio::test]
@@ -1088,6 +1107,17 @@ async fn sqlite_migrations_create_core_config_tables() {
         total_adjusted_exists, 1,
         "missing sqlite wallets.total_adjusted"
     );
+
+    let upstream_is_stream_exists: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM pragma_table_info('usage') WHERE name = ?")
+            .bind("upstream_is_stream")
+            .fetch_one(&pool)
+            .await
+            .expect("sqlite usage column query should succeed");
+    assert_eq!(
+        upstream_is_stream_exists, 1,
+        "missing sqlite usage.upstream_is_stream"
+    );
 }
 
 #[tokio::test]
@@ -1257,6 +1287,23 @@ WHERE table_schema = DATABASE()
     assert_eq!(
         total_adjusted_exists, 1,
         "missing mysql wallets.total_adjusted"
+    );
+
+    let upstream_is_stream_exists: i64 = sqlx::query_scalar(
+        r#"
+SELECT COUNT(*)
+FROM information_schema.columns
+WHERE table_schema = DATABASE()
+  AND table_name = 'usage'
+  AND column_name = 'upstream_is_stream'
+"#,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("mysql usage column query should succeed");
+    assert_eq!(
+        upstream_is_stream_exists, 1,
+        "missing mysql usage.upstream_is_stream"
     );
 }
 

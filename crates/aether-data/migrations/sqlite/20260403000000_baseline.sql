@@ -17,7 +17,9 @@ CREATE TABLE IF NOT EXISTS users (
     metadata TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
-    last_login_at INTEGER
+    last_login_at INTEGER,
+    ldap_dn TEXT,
+    ldap_username TEXT
 );
 
 CREATE TABLE IF NOT EXISTS api_keys (
@@ -114,6 +116,55 @@ CREATE TABLE IF NOT EXISTS management_tokens (
     UNIQUE (user_id, name)
 );
 CREATE INDEX IF NOT EXISTS management_tokens_user_id_idx ON management_tokens (user_id);
+
+CREATE TABLE IF NOT EXISTS user_preferences (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL UNIQUE,
+    avatar_url TEXT,
+    bio TEXT,
+    default_provider_id TEXT,
+    theme TEXT NOT NULL DEFAULT 'light',
+    language TEXT NOT NULL DEFAULT 'zh-CN',
+    timezone TEXT NOT NULL DEFAULT 'Asia/Shanghai',
+    email_notifications INTEGER NOT NULL DEFAULT 1,
+    usage_alerts INTEGER NOT NULL DEFAULT 1,
+    announcement_notifications INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS user_preferences_default_provider_id_idx
+    ON user_preferences (default_provider_id);
+CREATE INDEX IF NOT EXISTS user_preferences_user_id_idx
+    ON user_preferences (user_id);
+
+CREATE TABLE IF NOT EXISTS user_sessions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    client_device_id TEXT NOT NULL,
+    device_label TEXT,
+    device_type TEXT NOT NULL DEFAULT 'unknown',
+    browser_name TEXT,
+    browser_version TEXT,
+    os_name TEXT,
+    os_version TEXT,
+    device_model TEXT,
+    ip_address TEXT,
+    user_agent TEXT,
+    client_hints TEXT,
+    refresh_token_hash TEXT NOT NULL,
+    prev_refresh_token_hash TEXT,
+    rotated_at INTEGER,
+    last_seen_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    revoked_at INTEGER,
+    revoke_reason TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS user_sessions_user_active_idx
+    ON user_sessions (user_id, revoked_at, expires_at);
+CREATE INDEX IF NOT EXISTS user_sessions_user_device_idx
+    ON user_sessions (user_id, client_device_id);
 CREATE TABLE IF NOT EXISTS billing_rules (
     id TEXT PRIMARY KEY,
     global_model_id TEXT,
@@ -478,6 +529,10 @@ CREATE TABLE IF NOT EXISTS user_oauth_links (
     linked_at INTEGER NOT NULL,
     last_login_at INTEGER
 );
+CREATE UNIQUE INDEX IF NOT EXISTS uq_user_oauth_links_provider_user
+    ON user_oauth_links (provider_type, provider_user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_user_oauth_links_user_provider
+    ON user_oauth_links (user_id, provider_type);
 CREATE INDEX IF NOT EXISTS user_oauth_links_provider_type_idx ON user_oauth_links (provider_type);
 CREATE INDEX IF NOT EXISTS user_oauth_links_user_id_idx ON user_oauth_links (user_id);
 CREATE TABLE IF NOT EXISTS proxy_nodes (
@@ -741,6 +796,7 @@ CREATE TABLE IF NOT EXISTS "usage" (
     provider_endpoint_kind TEXT,
     has_format_conversion INTEGER NOT NULL DEFAULT 0,
     is_stream INTEGER NOT NULL DEFAULT 0,
+    upstream_is_stream INTEGER,
     input_tokens INTEGER NOT NULL DEFAULT 0,
     output_tokens INTEGER NOT NULL DEFAULT 0,
     total_tokens INTEGER NOT NULL DEFAULT 0,
@@ -808,3 +864,180 @@ CREATE INDEX IF NOT EXISTS usage_settlement_snapshots_billing_status_idx
     ON usage_settlement_snapshots (billing_status);
 CREATE INDEX IF NOT EXISTS usage_settlement_snapshots_wallet_id_idx
     ON usage_settlement_snapshots (wallet_id);
+
+
+CREATE TABLE IF NOT EXISTS stats_hourly (
+    id TEXT PRIMARY KEY,
+    hour_utc INTEGER NOT NULL UNIQUE,
+    total_requests INTEGER NOT NULL DEFAULT 0,
+    success_requests INTEGER NOT NULL DEFAULT 0,
+    error_requests INTEGER NOT NULL DEFAULT 0,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    total_cost REAL NOT NULL DEFAULT 0,
+    actual_total_cost REAL NOT NULL DEFAULT 0,
+    avg_response_time_ms REAL NOT NULL DEFAULT 0,
+    is_complete INTEGER NOT NULL DEFAULT 0,
+    aggregated_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS stats_hourly_user (
+    id TEXT PRIMARY KEY,
+    hour_utc INTEGER NOT NULL,
+    user_id TEXT NOT NULL,
+    total_requests INTEGER NOT NULL DEFAULT 0,
+    success_requests INTEGER NOT NULL DEFAULT 0,
+    error_requests INTEGER NOT NULL DEFAULT 0,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    total_cost REAL NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE (hour_utc, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS stats_hourly_user_model (
+    id TEXT PRIMARY KEY,
+    hour_utc INTEGER NOT NULL,
+    user_id TEXT NOT NULL,
+    model TEXT NOT NULL,
+    total_requests INTEGER NOT NULL DEFAULT 0,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    total_cost REAL NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE (hour_utc, user_id, model)
+);
+
+CREATE TABLE IF NOT EXISTS stats_hourly_model (
+    id TEXT PRIMARY KEY,
+    hour_utc INTEGER NOT NULL,
+    model TEXT NOT NULL,
+    total_requests INTEGER NOT NULL DEFAULT 0,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    total_cost REAL NOT NULL DEFAULT 0,
+    avg_response_time_ms REAL NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE (hour_utc, model)
+);
+
+CREATE TABLE IF NOT EXISTS stats_hourly_provider (
+    id TEXT PRIMARY KEY,
+    hour_utc INTEGER NOT NULL,
+    provider_name TEXT NOT NULL,
+    total_requests INTEGER NOT NULL DEFAULT 0,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    total_cost REAL NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE (hour_utc, provider_name)
+);
+
+CREATE TABLE IF NOT EXISTS stats_daily (
+    id TEXT PRIMARY KEY,
+    "date" INTEGER NOT NULL UNIQUE,
+    total_requests INTEGER NOT NULL DEFAULT 0,
+    success_requests INTEGER NOT NULL DEFAULT 0,
+    error_requests INTEGER NOT NULL DEFAULT 0,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    total_cost REAL NOT NULL DEFAULT 0,
+    actual_total_cost REAL NOT NULL DEFAULT 0,
+    avg_response_time_ms REAL NOT NULL DEFAULT 0,
+    fallback_count INTEGER NOT NULL DEFAULT 0,
+    unique_models INTEGER NOT NULL DEFAULT 0,
+    unique_providers INTEGER NOT NULL DEFAULT 0,
+    is_complete INTEGER NOT NULL DEFAULT 0,
+    aggregated_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS stats_daily_model (
+    id TEXT PRIMARY KEY,
+    "date" INTEGER NOT NULL,
+    model TEXT NOT NULL,
+    total_requests INTEGER NOT NULL DEFAULT 0,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    total_cost REAL NOT NULL DEFAULT 0,
+    avg_response_time_ms REAL NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE ("date", model)
+);
+
+CREATE TABLE IF NOT EXISTS stats_daily_provider (
+    id TEXT PRIMARY KEY,
+    "date" INTEGER NOT NULL,
+    provider_name TEXT NOT NULL,
+    total_requests INTEGER NOT NULL DEFAULT 0,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    total_cost REAL NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE ("date", provider_name)
+);
+
+CREATE TABLE IF NOT EXISTS stats_daily_api_key (
+    id TEXT PRIMARY KEY,
+    api_key_id TEXT NOT NULL,
+    "date" INTEGER NOT NULL,
+    total_requests INTEGER NOT NULL DEFAULT 0,
+    success_requests INTEGER NOT NULL DEFAULT 0,
+    error_requests INTEGER NOT NULL DEFAULT 0,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    total_cost REAL NOT NULL DEFAULT 0,
+    api_key_name TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE ("date", api_key_id)
+);
+
+CREATE TABLE IF NOT EXISTS stats_daily_error (
+    id TEXT PRIMARY KEY,
+    "date" INTEGER NOT NULL,
+    error_category TEXT NOT NULL,
+    provider_name TEXT,
+    model TEXT,
+    count INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE ("date", error_category, provider_name, model)
+);
+
+CREATE TABLE IF NOT EXISTS stats_user_daily (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    "date" INTEGER NOT NULL,
+    total_requests INTEGER NOT NULL DEFAULT 0,
+    success_requests INTEGER NOT NULL DEFAULT 0,
+    error_requests INTEGER NOT NULL DEFAULT 0,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    total_cost REAL NOT NULL DEFAULT 0,
+    username TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE ("date", user_id)
+);

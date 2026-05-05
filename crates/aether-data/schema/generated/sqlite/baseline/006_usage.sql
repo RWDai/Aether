@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS "usage" (
     provider_endpoint_kind TEXT,
     has_format_conversion INTEGER NOT NULL DEFAULT 0,
     is_stream INTEGER NOT NULL DEFAULT 0,
+    upstream_is_stream INTEGER,
     input_tokens INTEGER NOT NULL DEFAULT 0,
     output_tokens INTEGER NOT NULL DEFAULT 0,
     input_output_total_tokens INTEGER NOT NULL DEFAULT 0,

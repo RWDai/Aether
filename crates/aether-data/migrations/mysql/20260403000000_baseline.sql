@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS users (
     created_at BIGINT NOT NULL,
     updated_at BIGINT NOT NULL,
     last_login_at BIGINT,
+    ldap_dn VARCHAR(1024),
+    ldap_username VARCHAR(255),
     UNIQUE KEY users_email_key (email),
     UNIQUE KEY users_username_key (username)
 );
@@ -117,6 +119,51 @@ CREATE TABLE IF NOT EXISTS management_tokens (
     UNIQUE KEY management_tokens_token_hash_key (token_hash),
     UNIQUE KEY uq_management_tokens_user_name (user_id, name),
     KEY management_tokens_user_id_idx (user_id)
+);
+
+CREATE TABLE IF NOT EXISTS user_preferences (
+    id VARCHAR(36) PRIMARY KEY,
+    user_id VARCHAR(36) NOT NULL UNIQUE,
+    avatar_url VARCHAR(500),
+    bio TEXT,
+    default_provider_id VARCHAR(36),
+    theme VARCHAR(20) NOT NULL DEFAULT 'light',
+    language VARCHAR(10) NOT NULL DEFAULT 'zh-CN',
+    timezone VARCHAR(50) NOT NULL DEFAULT 'Asia/Shanghai',
+    email_notifications BOOLEAN NOT NULL DEFAULT TRUE,
+    usage_alerts BOOLEAN NOT NULL DEFAULT TRUE,
+    announcement_notifications BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL,
+    INDEX user_preferences_default_provider_id_idx (default_provider_id),
+    INDEX user_preferences_user_id_idx (user_id)
+);
+
+CREATE TABLE IF NOT EXISTS user_sessions (
+    id VARCHAR(36) PRIMARY KEY,
+    user_id VARCHAR(36) NOT NULL,
+    client_device_id VARCHAR(128) NOT NULL,
+    device_label VARCHAR(120),
+    device_type VARCHAR(20) NOT NULL DEFAULT 'unknown',
+    browser_name VARCHAR(50),
+    browser_version VARCHAR(50),
+    os_name VARCHAR(50),
+    os_version VARCHAR(50),
+    device_model VARCHAR(100),
+    ip_address VARCHAR(45),
+    user_agent VARCHAR(1000),
+    client_hints TEXT,
+    refresh_token_hash VARCHAR(64) NOT NULL,
+    prev_refresh_token_hash VARCHAR(64),
+    rotated_at BIGINT,
+    last_seen_at BIGINT NOT NULL,
+    expires_at BIGINT NOT NULL,
+    revoked_at BIGINT,
+    revoke_reason VARCHAR(100),
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL,
+    INDEX user_sessions_user_active_idx (user_id, revoked_at, expires_at),
+    INDEX user_sessions_user_device_idx (user_id, client_device_id)
 );
 CREATE TABLE IF NOT EXISTS billing_rules (
     id VARCHAR(64) PRIMARY KEY,
@@ -479,6 +526,8 @@ CREATE TABLE IF NOT EXISTS user_oauth_links (
     extra_data TEXT,
     linked_at BIGINT NOT NULL,
     last_login_at BIGINT,
+    UNIQUE KEY uq_user_oauth_links_provider_user (provider_type, provider_user_id),
+    UNIQUE KEY uq_user_oauth_links_user_provider (user_id, provider_type),
     KEY user_oauth_links_provider_type_idx (provider_type),
     KEY user_oauth_links_user_id_idx (user_id)
 );
@@ -724,6 +773,7 @@ CREATE TABLE IF NOT EXISTS `usage` (
     provider_endpoint_kind VARCHAR(64),
     has_format_conversion TINYINT(1) NOT NULL DEFAULT 0,
     is_stream TINYINT(1) NOT NULL DEFAULT 0,
+    upstream_is_stream TINYINT(1),
     input_tokens BIGINT NOT NULL DEFAULT 0,
     output_tokens BIGINT NOT NULL DEFAULT 0,
     total_tokens BIGINT NOT NULL DEFAULT 0,
@@ -788,4 +838,183 @@ CREATE TABLE IF NOT EXISTS usage_settlement_snapshots (
     updated_at BIGINT NOT NULL,
     KEY usage_settlement_snapshots_billing_status_idx (billing_status),
     KEY usage_settlement_snapshots_wallet_id_idx (wallet_id)
+);
+
+
+CREATE TABLE IF NOT EXISTS stats_hourly (
+    id VARCHAR(64) PRIMARY KEY,
+    hour_utc BIGINT NOT NULL,
+    total_requests BIGINT NOT NULL DEFAULT 0,
+    success_requests BIGINT NOT NULL DEFAULT 0,
+    error_requests BIGINT NOT NULL DEFAULT 0,
+    input_tokens BIGINT NOT NULL DEFAULT 0,
+    output_tokens BIGINT NOT NULL DEFAULT 0,
+    cache_creation_tokens BIGINT NOT NULL DEFAULT 0,
+    cache_read_tokens BIGINT NOT NULL DEFAULT 0,
+    total_cost DOUBLE NOT NULL DEFAULT 0,
+    actual_total_cost DOUBLE NOT NULL DEFAULT 0,
+    avg_response_time_ms DOUBLE NOT NULL DEFAULT 0,
+    is_complete TINYINT(1) NOT NULL DEFAULT 0,
+    aggregated_at BIGINT,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL,
+    UNIQUE KEY uq_stats_hourly_hour (hour_utc)
+);
+
+CREATE TABLE IF NOT EXISTS stats_hourly_user (
+    id VARCHAR(64) PRIMARY KEY,
+    hour_utc BIGINT NOT NULL,
+    user_id VARCHAR(64) NOT NULL,
+    total_requests BIGINT NOT NULL DEFAULT 0,
+    success_requests BIGINT NOT NULL DEFAULT 0,
+    error_requests BIGINT NOT NULL DEFAULT 0,
+    input_tokens BIGINT NOT NULL DEFAULT 0,
+    output_tokens BIGINT NOT NULL DEFAULT 0,
+    total_cost DOUBLE NOT NULL DEFAULT 0,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL,
+    UNIQUE KEY uq_stats_hourly_user (hour_utc, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS stats_hourly_user_model (
+    id VARCHAR(64) PRIMARY KEY,
+    hour_utc BIGINT NOT NULL,
+    user_id VARCHAR(64) NOT NULL,
+    model VARCHAR(255) NOT NULL,
+    total_requests BIGINT NOT NULL DEFAULT 0,
+    input_tokens BIGINT NOT NULL DEFAULT 0,
+    output_tokens BIGINT NOT NULL DEFAULT 0,
+    total_cost DOUBLE NOT NULL DEFAULT 0,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL,
+    UNIQUE KEY uq_stats_hourly_user_model (hour_utc, user_id, model)
+);
+
+CREATE TABLE IF NOT EXISTS stats_hourly_model (
+    id VARCHAR(64) PRIMARY KEY,
+    hour_utc BIGINT NOT NULL,
+    model VARCHAR(255) NOT NULL,
+    total_requests BIGINT NOT NULL DEFAULT 0,
+    input_tokens BIGINT NOT NULL DEFAULT 0,
+    output_tokens BIGINT NOT NULL DEFAULT 0,
+    total_cost DOUBLE NOT NULL DEFAULT 0,
+    avg_response_time_ms DOUBLE NOT NULL DEFAULT 0,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL,
+    UNIQUE KEY uq_stats_hourly_model (hour_utc, model)
+);
+
+CREATE TABLE IF NOT EXISTS stats_hourly_provider (
+    id VARCHAR(64) PRIMARY KEY,
+    hour_utc BIGINT NOT NULL,
+    provider_name VARCHAR(255) NOT NULL,
+    total_requests BIGINT NOT NULL DEFAULT 0,
+    input_tokens BIGINT NOT NULL DEFAULT 0,
+    output_tokens BIGINT NOT NULL DEFAULT 0,
+    total_cost DOUBLE NOT NULL DEFAULT 0,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL,
+    UNIQUE KEY uq_stats_hourly_provider (hour_utc, provider_name)
+);
+
+CREATE TABLE IF NOT EXISTS stats_daily (
+    id VARCHAR(64) PRIMARY KEY,
+    `date` BIGINT NOT NULL,
+    total_requests BIGINT NOT NULL DEFAULT 0,
+    success_requests BIGINT NOT NULL DEFAULT 0,
+    error_requests BIGINT NOT NULL DEFAULT 0,
+    input_tokens BIGINT NOT NULL DEFAULT 0,
+    output_tokens BIGINT NOT NULL DEFAULT 0,
+    cache_creation_tokens BIGINT NOT NULL DEFAULT 0,
+    cache_read_tokens BIGINT NOT NULL DEFAULT 0,
+    total_cost DOUBLE NOT NULL DEFAULT 0,
+    actual_total_cost DOUBLE NOT NULL DEFAULT 0,
+    avg_response_time_ms DOUBLE NOT NULL DEFAULT 0,
+    fallback_count BIGINT NOT NULL DEFAULT 0,
+    unique_models BIGINT NOT NULL DEFAULT 0,
+    unique_providers BIGINT NOT NULL DEFAULT 0,
+    is_complete TINYINT(1) NOT NULL DEFAULT 0,
+    aggregated_at BIGINT,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL,
+    UNIQUE KEY uq_stats_daily_date (`date`)
+);
+
+CREATE TABLE IF NOT EXISTS stats_daily_model (
+    id VARCHAR(64) PRIMARY KEY,
+    `date` BIGINT NOT NULL,
+    model VARCHAR(255) NOT NULL,
+    total_requests BIGINT NOT NULL DEFAULT 0,
+    input_tokens BIGINT NOT NULL DEFAULT 0,
+    output_tokens BIGINT NOT NULL DEFAULT 0,
+    cache_creation_tokens BIGINT NOT NULL DEFAULT 0,
+    cache_read_tokens BIGINT NOT NULL DEFAULT 0,
+    total_cost DOUBLE NOT NULL DEFAULT 0,
+    avg_response_time_ms DOUBLE NOT NULL DEFAULT 0,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL,
+    UNIQUE KEY uq_stats_daily_model (`date`, model)
+);
+
+CREATE TABLE IF NOT EXISTS stats_daily_provider (
+    id VARCHAR(64) PRIMARY KEY,
+    `date` BIGINT NOT NULL,
+    provider_name VARCHAR(255) NOT NULL,
+    total_requests BIGINT NOT NULL DEFAULT 0,
+    input_tokens BIGINT NOT NULL DEFAULT 0,
+    output_tokens BIGINT NOT NULL DEFAULT 0,
+    cache_creation_tokens BIGINT NOT NULL DEFAULT 0,
+    cache_read_tokens BIGINT NOT NULL DEFAULT 0,
+    total_cost DOUBLE NOT NULL DEFAULT 0,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL,
+    UNIQUE KEY uq_stats_daily_provider (`date`, provider_name)
+);
+
+CREATE TABLE IF NOT EXISTS stats_daily_api_key (
+    id VARCHAR(64) PRIMARY KEY,
+    api_key_id VARCHAR(64) NOT NULL,
+    `date` BIGINT NOT NULL,
+    total_requests BIGINT NOT NULL DEFAULT 0,
+    success_requests BIGINT NOT NULL DEFAULT 0,
+    error_requests BIGINT NOT NULL DEFAULT 0,
+    input_tokens BIGINT NOT NULL DEFAULT 0,
+    output_tokens BIGINT NOT NULL DEFAULT 0,
+    cache_creation_tokens BIGINT NOT NULL DEFAULT 0,
+    cache_read_tokens BIGINT NOT NULL DEFAULT 0,
+    total_cost DOUBLE NOT NULL DEFAULT 0,
+    api_key_name VARCHAR(255),
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL,
+    UNIQUE KEY uq_stats_daily_api_key (`date`, api_key_id)
+);
+
+CREATE TABLE IF NOT EXISTS stats_daily_error (
+    id VARCHAR(64) PRIMARY KEY,
+    `date` BIGINT NOT NULL,
+    error_category VARCHAR(255) NOT NULL,
+    provider_name VARCHAR(255),
+    model VARCHAR(255),
+    count BIGINT NOT NULL DEFAULT 0,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL,
+    UNIQUE KEY uq_stats_daily_error (`date`, error_category, provider_name, model)
+);
+
+CREATE TABLE IF NOT EXISTS stats_user_daily (
+    id VARCHAR(64) PRIMARY KEY,
+    user_id VARCHAR(64) NOT NULL,
+    `date` BIGINT NOT NULL,
+    total_requests BIGINT NOT NULL DEFAULT 0,
+    success_requests BIGINT NOT NULL DEFAULT 0,
+    error_requests BIGINT NOT NULL DEFAULT 0,
+    input_tokens BIGINT NOT NULL DEFAULT 0,
+    output_tokens BIGINT NOT NULL DEFAULT 0,
+    cache_creation_tokens BIGINT NOT NULL DEFAULT 0,
+    cache_read_tokens BIGINT NOT NULL DEFAULT 0,
+    total_cost DOUBLE NOT NULL DEFAULT 0,
+    username VARCHAR(255),
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL,
+    UNIQUE KEY uq_stats_user_daily (`date`, user_id)
 );

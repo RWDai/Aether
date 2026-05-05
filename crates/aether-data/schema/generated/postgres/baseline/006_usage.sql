@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS public.usage (
     provider_endpoint_kind character varying(64),
     has_format_conversion boolean DEFAULT false NOT NULL,
     is_stream boolean DEFAULT false NOT NULL,
+    upstream_is_stream boolean,
     input_tokens bigint DEFAULT 0 NOT NULL,
     output_tokens bigint DEFAULT 0 NOT NULL,
     input_output_total_tokens bigint DEFAULT 0 NOT NULL,

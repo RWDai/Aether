@@ -34,6 +34,7 @@ SELECT
   provider_endpoint_kind,
   has_format_conversion,
   is_stream,
+  upstream_is_stream,
   input_tokens,
   output_tokens,
   total_tokens,
@@ -89,6 +90,7 @@ INSERT INTO "usage" (
   provider_endpoint_kind,
   has_format_conversion,
   is_stream,
+  upstream_is_stream,
   input_tokens,
   output_tokens,
   total_tokens,
@@ -122,7 +124,8 @@ INSERT INTO "usage" (
   updated_at_unix_secs
 ) VALUES (
   ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+  ?
 )
 ON CONFLICT (request_id) DO UPDATE SET
   user_id = excluded.user_id,
@@ -142,6 +145,7 @@ ON CONFLICT (request_id) DO UPDATE SET
   provider_endpoint_kind = excluded.provider_endpoint_kind,
   has_format_conversion = excluded.has_format_conversion,
   is_stream = excluded.is_stream,
+  upstream_is_stream = excluded.upstream_is_stream,
   input_tokens = excluded.input_tokens,
   output_tokens = excluded.output_tokens,
   total_tokens = excluded.total_tokens,
@@ -738,6 +742,7 @@ fn bind_upsert<'q>(
         .bind(usage.provider_endpoint_kind.as_deref())
         .bind(i64::from(usage.has_format_conversion.unwrap_or(false)))
         .bind(i64::from(usage.is_stream.unwrap_or(false)))
+        .bind(i64::from(usage_upstream_is_stream(usage)))
         .bind(to_i64(input_tokens, "input_tokens")?)
         .bind(to_i64(output_tokens, "output_tokens")?)
         .bind(to_i64(total_tokens, "total_tokens")?)
@@ -841,6 +846,11 @@ fn map_usage_row(row: &SqliteRow) -> Result<StoredRequestUsageAudit, DataLayerEr
         .map(|raw| serde_json::from_str(&raw))
         .transpose()
         .map_err(|err| DataLayerError::UnexpectedValue(err.to_string()))?;
+    let upstream_is_stream = row
+        .try_get::<Option<i64>, _>("upstream_is_stream")
+        .map_sql_err()?
+        .map(|value| value != 0);
+    merge_usage_stream_metadata(&mut audit.request_metadata, upstream_is_stream);
     audit.candidate_id = row.try_get("candidate_id").map_sql_err()?;
     audit.candidate_index = row
         .try_get::<Option<i64>, _>("candidate_index")
@@ -859,6 +869,29 @@ fn map_usage_row(row: &SqliteRow) -> Result<StoredRequestUsageAudit, DataLayerEr
 
 fn to_i64(value: u64, field: &str) -> Result<i64, DataLayerError> {
     i64::try_from(value).map_err(|_| DataLayerError::InvalidInput(format!("{field} overflow")))
+}
+
+fn usage_upstream_is_stream(usage: &UpsertUsageRecord) -> bool {
+    usage
+        .request_metadata
+        .as_ref()
+        .and_then(serde_json::Value::as_object)
+        .and_then(|metadata| metadata.get("upstream_is_stream"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or_else(|| usage.is_stream.unwrap_or(false))
+}
+
+fn merge_usage_stream_metadata(metadata: &mut Option<serde_json::Value>, upstream: Option<bool>) {
+    let Some(upstream) = upstream else {
+        return;
+    };
+    let value = metadata.get_or_insert_with(|| serde_json::json!({}));
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    object
+        .entry("upstream_is_stream")
+        .or_insert(serde_json::Value::Bool(upstream));
 }
 
 fn row_i32(row: &SqliteRow, field: &str) -> Result<i32, DataLayerError> {
@@ -916,6 +949,17 @@ mod tests {
             record.request_metadata.as_ref().unwrap()["trace_id"],
             "trace-1"
         );
+        assert_eq!(
+            record.request_metadata.as_ref().unwrap()["upstream_is_stream"],
+            true
+        );
+        let upstream_is_stream: Option<i64> =
+            sqlx::query_scalar("SELECT upstream_is_stream FROM \"usage\" WHERE request_id = ?")
+                .bind("request-1")
+                .fetch_one(&pool)
+                .await
+                .expect("usage stream mode should load");
+        assert_eq!(upstream_is_stream, Some(1));
 
         let loaded = repository
             .find_by_request_id("request-1")
@@ -1216,7 +1260,10 @@ VALUES ('provider-key-1', 'provider-1', 'Provider Key One', 1, 1);
             route_kind: Some("completion".to_string()),
             execution_path: Some("remote".to_string()),
             local_execution_runtime_miss_reason: None,
-            request_metadata: Some(serde_json::json!({ "trace_id": "trace-1" })),
+            request_metadata: Some(serde_json::json!({
+                "trace_id": "trace-1",
+                "upstream_is_stream": true,
+            })),
             finalized_at_unix_secs: Some(updated_at),
             created_at_unix_ms: Some(updated_at),
             updated_at_unix_secs: updated_at,

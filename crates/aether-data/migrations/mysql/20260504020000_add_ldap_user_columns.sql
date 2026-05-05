@@ -1,2 +1,0 @@
-ALTER TABLE users ADD COLUMN ldap_dn VARCHAR(1024);
-ALTER TABLE users ADD COLUMN ldap_username VARCHAR(255);

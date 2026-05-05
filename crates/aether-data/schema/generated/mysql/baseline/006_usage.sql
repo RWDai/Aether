@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS `usage` (
     `provider_endpoint_kind` VARCHAR(64),
     `has_format_conversion` TINYINT(1) NOT NULL DEFAULT 0,
     `is_stream` TINYINT(1) NOT NULL DEFAULT 0,
+    `upstream_is_stream` TINYINT(1),
     `input_tokens` BIGINT NOT NULL DEFAULT 0,
     `output_tokens` BIGINT NOT NULL DEFAULT 0,
     `input_output_total_tokens` BIGINT NOT NULL DEFAULT 0,

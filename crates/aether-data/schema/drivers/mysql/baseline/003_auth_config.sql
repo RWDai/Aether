@@ -64,6 +64,8 @@ CREATE TABLE IF NOT EXISTS user_oauth_links (
     extra_data TEXT,
     linked_at BIGINT NOT NULL,
     last_login_at BIGINT,
+    UNIQUE KEY uq_user_oauth_links_provider_user (provider_type, provider_user_id),
+    UNIQUE KEY uq_user_oauth_links_user_provider (user_id, provider_type),
     KEY user_oauth_links_provider_type_idx (provider_type),
     KEY user_oauth_links_user_id_idx (user_id)
 );

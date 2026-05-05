@@ -63,5 +63,9 @@ CREATE TABLE IF NOT EXISTS user_oauth_links (
     linked_at INTEGER NOT NULL,
     last_login_at INTEGER
 );
+CREATE UNIQUE INDEX IF NOT EXISTS uq_user_oauth_links_provider_user
+    ON user_oauth_links (provider_type, provider_user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_user_oauth_links_user_provider
+    ON user_oauth_links (user_id, provider_type);
 CREATE INDEX IF NOT EXISTS user_oauth_links_provider_type_idx ON user_oauth_links (provider_type);
 CREATE INDEX IF NOT EXISTS user_oauth_links_user_id_idx ON user_oauth_links (user_id);

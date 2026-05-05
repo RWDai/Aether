@@ -115,6 +115,11 @@ type = "bool"
 default = false
 
 [[table.usage.columns]]
+name = "upstream_is_stream"
+type = "bool"
+nullable = true
+
+[[table.usage.columns]]
 name = "input_tokens"
 type = "int64"
 default = 0

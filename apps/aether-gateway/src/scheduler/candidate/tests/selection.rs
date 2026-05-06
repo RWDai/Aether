@@ -707,6 +707,7 @@ async fn selects_next_candidate_when_first_provider_quota_is_exhausted() {
         name: "gpt-4.1-primary".to_string(),
         priority: 1,
         api_formats: Some(vec!["openai:chat".to_string()]),
+        endpoint_ids: None,
     }]);
     first.key_global_priority_by_format = Some(serde_json::json!({"openai:chat": 1}));
 
@@ -721,6 +722,7 @@ async fn selects_next_candidate_when_first_provider_quota_is_exhausted() {
         name: "gpt-4.1-secondary".to_string(),
         priority: 1,
         api_formats: Some(vec!["openai:chat".to_string()]),
+        endpoint_ids: None,
     }]);
     second.key_global_priority_by_format = Some(serde_json::json!({"openai:chat": 2}));
 
@@ -776,6 +778,7 @@ async fn cooled_down_when_recent_failures_are_recorded_for_same_key() {
         name: "gpt-4.1-primary".to_string(),
         priority: 1,
         api_formats: Some(vec!["openai:chat".to_string()]),
+        endpoint_ids: None,
     }]);
     first.key_global_priority_by_format = Some(serde_json::json!({"openai:chat": 1}));
 
@@ -790,6 +793,7 @@ async fn cooled_down_when_recent_failures_are_recorded_for_same_key() {
         name: "gpt-4.1-secondary".to_string(),
         priority: 1,
         api_formats: Some(vec!["openai:chat".to_string()]),
+        endpoint_ids: None,
     }]);
     second.key_global_priority_by_format = Some(serde_json::json!({"openai:chat": 2}));
 

@@ -98,6 +98,7 @@ async fn gateway_executes_openai_chat_stream_via_local_decision_gate_without_exe
                 name: "gpt-5-upstream".to_string(),
                 priority: 1,
                 api_formats: Some(vec!["openai:chat".to_string()]),
+                endpoint_ids: None,
             }]),
             model_supports_streaming: Some(true),
             model_is_active: true,
@@ -322,6 +323,7 @@ async fn gateway_executes_openai_chat_stream_via_local_decision_gate_without_exe
         name: "gpt-5-upstream-backup".to_string(),
         priority: 1,
         api_formats: Some(vec!["openai:chat".to_string()]),
+        endpoint_ids: None,
     }]);
     let candidate_selection_repository =
         Arc::new(InMemoryMinimalCandidateSelectionReadRepository::seed(vec![
@@ -523,6 +525,7 @@ async fn gateway_executes_openai_chat_stream_via_local_openai_responses_cross_fo
                 name: "gpt-5.4".to_string(),
                 priority: 1,
                 api_formats: Some(vec!["openai:responses".to_string()]),
+                endpoint_ids: None,
             }]),
             model_supports_streaming: Some(true),
             model_is_active: true,
@@ -1010,6 +1013,7 @@ async fn gateway_executes_openai_chat_stream_with_custom_path_via_local_decision
                 name: "gpt-5-upstream".to_string(),
                 priority: 1,
                 api_formats: Some(vec!["openai:chat".to_string()]),
+                endpoint_ids: None,
             }]),
             model_supports_streaming: Some(true),
             model_is_active: true,
@@ -1504,6 +1508,7 @@ async fn gateway_retries_next_local_openai_chat_stream_candidate_after_retryable
                 name: mapped_model.to_string(),
                 priority: 1,
                 api_formats: Some(vec!["openai:chat".to_string()]),
+                endpoint_ids: None,
             }]),
             model_supports_streaming: Some(true),
             model_is_active: true,

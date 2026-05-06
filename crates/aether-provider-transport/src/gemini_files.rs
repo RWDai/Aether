@@ -6,6 +6,7 @@ use crate::auth::{build_passthrough_headers_with_auth, resolve_local_gemini_auth
 use crate::policy::local_gemini_transport_unsupported_reason_with_network;
 use crate::rules::{
     apply_local_body_rules_with_request_headers, apply_local_header_rules_with_request_headers,
+    body_rules_have_enabled_rules,
 };
 use crate::snapshot::GatewayProviderTransportSnapshot;
 use crate::url::build_gemini_files_passthrough_url;
@@ -87,7 +88,7 @@ pub fn build_gemini_files_request_body(
     } else {
         None
     };
-    if provider_request_body_base64.is_some() && body_rules.is_some() {
+    if provider_request_body_base64.is_some() && body_rules_have_enabled_rules(body_rules) {
         return Err(GeminiFilesRequestBodyError::BodyRulesUnsupportedForBinaryUpload);
     }
     if let Some(body) = provider_request_body.as_mut() {

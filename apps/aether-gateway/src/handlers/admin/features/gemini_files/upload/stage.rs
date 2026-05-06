@@ -143,7 +143,9 @@ async fn admin_gemini_files_upload_single_key(
     if !state.supports_local_gemini_transport_with_network(&transport, "gemini:generate_content") {
         return Err("Key 传输配置不支持 Gemini Files 上传".to_string());
     }
-    if transport.endpoint.body_rules.is_some() {
+    if crate::provider_transport::body_rules_have_enabled_rules(
+        transport.endpoint.body_rules.as_ref(),
+    ) {
         return Err("Gemini Files 二进制上传暂不支持 endpoint body_rules".to_string());
     }
     let (auth_header, auth_value) = state

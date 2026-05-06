@@ -41,7 +41,7 @@ pub fn resolve_requested_global_model_name_with_model_directives(
                             .as_ref()
                             .is_some_and(|mappings| {
                                 mappings.iter().any(|mapping| {
-                                    mapping_scope_matches(mapping, api_format)
+                                    mapping_scope_matches(mapping, row, api_format)
                                         && mapping.name == requested_model_name
                                 })
                             })
@@ -93,7 +93,7 @@ fn row_supports_requested_model_exact(
             .as_ref()
             .is_some_and(|mappings| {
                 mappings.iter().any(|mapping| {
-                    mapping_scope_matches(mapping, api_format)
+                    mapping_scope_matches(mapping, row, api_format)
                         && mapping.name == requested_model_name
                 })
             })
@@ -201,7 +201,7 @@ pub fn select_provider_model_name(
 
     mappings
         .iter()
-        .filter(|mapping| mapping_scope_matches(mapping, api_format))
+        .filter(|mapping| mapping_scope_matches(mapping, row, api_format))
         .min_by(|left, right| {
             left.priority
                 .cmp(&right.priority)
@@ -218,7 +218,7 @@ pub fn candidate_model_names(
     let mut names = BTreeSet::from([row.model_provider_model_name.clone()]);
     if let Some(mappings) = row.model_provider_model_mappings.as_ref() {
         for mapping in mappings {
-            if mapping_scope_matches(mapping, api_format) {
+            if mapping_scope_matches(mapping, row, api_format) {
                 names.insert(mapping.name.clone());
             }
         }
@@ -226,14 +226,25 @@ pub fn candidate_model_names(
     names
 }
 
-fn mapping_scope_matches(mapping: &StoredProviderModelMapping, api_format: &str) -> bool {
-    let Some(api_formats) = mapping.api_formats.as_ref() else {
-        return true;
-    };
+fn mapping_scope_matches(
+    mapping: &StoredProviderModelMapping,
+    row: &StoredMinimalCandidateSelectionRow,
+    api_format: &str,
+) -> bool {
+    let api_format_matches_scope = mapping.api_formats.as_ref().is_none_or(|api_formats| {
+        api_formats
+            .iter()
+            .any(|value| api_format_matches(value, api_format))
+    });
+    if !api_format_matches_scope {
+        return false;
+    }
 
-    api_formats
-        .iter()
-        .any(|value| api_format_matches(value, api_format))
+    mapping.endpoint_ids.as_ref().is_none_or(|endpoint_ids| {
+        endpoint_ids
+            .iter()
+            .any(|endpoint_id| endpoint_id == &row.endpoint_id)
+    })
 }
 
 pub fn row_supports_required_capability(
@@ -353,7 +364,7 @@ fn row_has_candidate_model_name(
             .as_ref()
             .is_some_and(|mappings| {
                 mappings.iter().any(|mapping| {
-                    mapping_scope_matches(mapping, api_format) && mapping.name == model_name
+                    mapping_scope_matches(mapping, row, api_format) && mapping.name == model_name
                 })
             })
 }

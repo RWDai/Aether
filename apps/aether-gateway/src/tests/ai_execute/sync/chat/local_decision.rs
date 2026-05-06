@@ -84,6 +84,7 @@ async fn gateway_executes_openai_chat_sync_via_local_decision_gate_without_execu
                 name: "gpt-5-upstream".to_string(),
                 priority: 1,
                 api_formats: Some(vec!["openai:chat".to_string()]),
+                endpoint_ids: None,
             }]),
             model_supports_streaming: Some(true),
             model_is_active: true,
@@ -276,6 +277,7 @@ async fn gateway_executes_openai_chat_sync_via_local_decision_gate_without_execu
         name: "gpt-5-upstream-backup".to_string(),
         priority: 1,
         api_formats: Some(vec!["openai:chat".to_string()]),
+        endpoint_ids: None,
     }]);
     let candidate_selection_repository =
         Arc::new(InMemoryMinimalCandidateSelectionReadRepository::seed(vec![
@@ -470,6 +472,7 @@ async fn gateway_executes_openai_chat_sync_via_local_cross_format_gemini_candida
                 name: "gemini-2.5-pro-upstream".to_string(),
                 priority: 1,
                 api_formats: Some(vec!["gemini:generate_content".to_string()]),
+                endpoint_ids: None,
             }]),
             model_supports_streaming: Some(true),
             model_is_active: true,
@@ -490,6 +493,7 @@ async fn gateway_executes_openai_chat_sync_via_local_cross_format_gemini_candida
             name: "gemini-2.5-flash-upstream".to_string(),
             priority: 2,
             api_formats: Some(vec!["gemini:generate_content".to_string()]),
+            endpoint_ids: None,
         }]);
         row
     }
@@ -1032,6 +1036,7 @@ async fn gateway_returns_openai_chat_error_for_local_cross_format_claude_cli_syn
                 name: "claude-code-upstream".to_string(),
                 priority: 1,
                 api_formats: Some(vec!["claude:messages".to_string()]),
+                endpoint_ids: None,
             }]),
             model_supports_streaming: Some(true),
             model_is_active: true,
@@ -1429,6 +1434,7 @@ async fn gateway_returns_openai_chat_error_for_local_cross_format_gemini_cli_syn
                 name: "gemini-cli-upstream".to_string(),
                 priority: 1,
                 api_formats: Some(vec!["gemini:generate_content".to_string()]),
+                endpoint_ids: None,
             }]),
             model_supports_streaming: Some(true),
             model_is_active: true,
@@ -1826,6 +1832,7 @@ async fn gateway_returns_openai_chat_error_for_local_cross_format_claude_sync_fa
                 name: "claude-sonnet-4-5-upstream".to_string(),
                 priority: 1,
                 api_formats: Some(vec!["claude:messages".to_string()]),
+                endpoint_ids: None,
             }]),
             model_supports_streaming: Some(true),
             model_is_active: true,
@@ -2229,6 +2236,7 @@ async fn gateway_returns_openai_chat_error_for_local_cross_format_gemini_sync_fa
                 name: "gemini-2.5-pro-upstream".to_string(),
                 priority: 1,
                 api_formats: Some(vec!["gemini:generate_content".to_string()]),
+                endpoint_ids: None,
             }]),
             model_supports_streaming: Some(true),
             model_is_active: true,
@@ -2672,6 +2680,7 @@ async fn gateway_executes_openai_chat_sync_with_custom_path_via_local_decision_g
                 name: "gpt-5-upstream".to_string(),
                 priority: 1,
                 api_formats: Some(vec!["openai:chat".to_string()]),
+                endpoint_ids: None,
             }]),
             model_supports_streaming: Some(true),
             model_is_active: true,

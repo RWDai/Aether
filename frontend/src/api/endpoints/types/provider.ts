@@ -158,10 +158,12 @@ export type BodyRuleCondition =
 
 export type HeaderRule = (HeaderRuleSet | HeaderRuleDrop | HeaderRuleRename) & {
   condition?: BodyRuleCondition
+  enabled?: boolean
 }
 
 export type BodyRule = (BodyRuleSet | BodyRuleDrop | BodyRuleRename | BodyRuleAppend | BodyRuleInsert | BodyRuleRegexReplace) & {
   condition?: BodyRuleCondition
+  enabled?: boolean
 }
 
 /**
@@ -622,6 +624,7 @@ export interface ProviderModelMapping {
   name: string
   priority: number  // 优先级（数字越小优先级越高）
   api_formats?: string[]  // 作用域（适用的 API 格式），为空表示对所有格式生效
+  endpoint_ids?: string[]  // 作用域（适用的端点 ID），为空表示对所有端点生效
 }
 
 // 保留别名以保持向后兼容

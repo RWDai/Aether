@@ -77,7 +77,8 @@ pub use request_url::{
 pub use rules::{
     apply_local_body_rules, apply_local_body_rules_with_request_headers, apply_local_header_rules,
     apply_local_header_rules_with_request_headers, body_rules_are_locally_supported,
-    body_rules_handle_path, header_rules_are_locally_supported,
+    body_rules_handle_path, body_rules_have_enabled_rules, header_rules_are_locally_supported,
+    header_rules_have_enabled_rules,
 };
 pub use same_format_provider::{
     build_same_format_provider_headers, build_same_format_provider_request_body,

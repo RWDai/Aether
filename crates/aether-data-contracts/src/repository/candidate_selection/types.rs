@@ -5,6 +5,8 @@ pub struct StoredProviderModelMapping {
     pub name: String,
     pub priority: i32,
     pub api_formats: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint_ids: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]

@@ -34,6 +34,16 @@ pub fn header_rules_are_locally_supported(rules: Option<&Value>) -> bool {
     rules.is_array()
 }
 
+pub fn header_rules_have_enabled_rules(rules: Option<&Value>) -> bool {
+    let Some(rules) = rules.and_then(Value::as_array) else {
+        return false;
+    };
+
+    rules
+        .iter()
+        .any(|rule| rule.as_object().is_some_and(header_rule_is_enabled))
+}
+
 pub fn apply_local_header_rules(
     headers: &mut BTreeMap<String, String>,
     rules: Option<&Value>,
@@ -85,6 +95,9 @@ fn apply_local_header_rules_inner(
         let Some(rule) = rule.as_object() else {
             continue;
         };
+        if !header_rule_is_enabled(rule) {
+            continue;
+        }
         if let Some(condition) = rule.get("condition").filter(|value| !value.is_null()) {
             if !condition_is_locally_supported(condition) {
                 continue;
@@ -159,11 +172,25 @@ fn header_rule_value_to_string(value: &Value) -> String {
         .unwrap_or_else(|| value.to_string())
 }
 
+fn header_rule_is_enabled(rule: &Map<String, Value>) -> bool {
+    rule.get("enabled").and_then(Value::as_bool) != Some(false)
+}
+
 pub fn body_rules_are_locally_supported(rules: Option<&Value>) -> bool {
     let Some(rules) = rules else {
         return true;
     };
     rules.is_array()
+}
+
+pub fn body_rules_have_enabled_rules(rules: Option<&Value>) -> bool {
+    let Some(rules) = rules.and_then(Value::as_array) else {
+        return false;
+    };
+
+    rules
+        .iter()
+        .any(|rule| rule.as_object().is_some_and(body_rule_is_enabled))
 }
 
 pub fn body_rules_handle_path(rules: Option<&Value>, path: &str) -> bool {
@@ -178,6 +205,9 @@ pub fn body_rules_handle_path(rules: Option<&Value>, path: &str) -> bool {
         let Some(rule) = rule.as_object() else {
             return false;
         };
+        if !body_rule_is_enabled(rule) {
+            return false;
+        }
         match rule
             .get("action")
             .and_then(Value::as_str)
@@ -249,6 +279,9 @@ fn apply_local_body_rules_inner(
         let Some(rule) = rule.as_object() else {
             continue;
         };
+        if !body_rule_is_enabled(rule) {
+            continue;
+        }
 
         let condition = rule.get("condition").filter(|value| !value.is_null());
         let item_condition = condition.is_some_and(condition_has_item_ref);
@@ -449,6 +482,10 @@ fn apply_local_body_rules_inner(
     }
 
     true
+}
+
+fn body_rule_is_enabled(rule: &Map<String, Value>) -> bool {
+    rule.get("enabled").and_then(Value::as_bool) != Some(false)
 }
 
 fn condition_is_locally_supported(condition: &Value) -> bool {
@@ -1295,8 +1332,8 @@ mod tests {
     use super::{
         apply_local_body_rules, apply_local_body_rules_with_request_headers,
         apply_local_header_rules, apply_local_header_rules_with_request_headers,
-        body_rules_are_locally_supported, body_rules_handle_path,
-        header_rules_are_locally_supported,
+        body_rules_are_locally_supported, body_rules_handle_path, body_rules_have_enabled_rules,
+        header_rules_are_locally_supported, header_rules_have_enabled_rules,
     };
 
     #[test]
@@ -1610,6 +1647,33 @@ mod tests {
     }
 
     #[test]
+    fn body_rules_skip_disabled_entries() {
+        let rules = serde_json::json!([
+            {"enabled":false,"action":"set","path":"metadata.disabled","value":true},
+            {"enabled":false,"action":"drop","path":"keep"},
+            {"action":"set","path":"metadata.enabled","value":true}
+        ]);
+        let mut body = serde_json::json!({
+            "keep": true,
+            "metadata": {}
+        });
+
+        assert!(body_rules_have_enabled_rules(Some(&rules)));
+        assert!(apply_local_body_rules(&mut body, Some(&rules), None));
+
+        assert_eq!(body["keep"], true);
+        assert!(body["metadata"].get("disabled").is_none());
+        assert_eq!(body["metadata"]["enabled"], true);
+        assert!(!body_rules_handle_path(Some(&rules), "metadata.disabled"));
+        assert!(body_rules_handle_path(Some(&rules), "metadata.enabled"));
+
+        let disabled_only = serde_json::json!([
+            {"enabled":false,"action":"set","path":"metadata.disabled","value":true}
+        ]);
+        assert!(!body_rules_have_enabled_rules(Some(&disabled_only)));
+    }
+
+    #[test]
     fn header_rules_skip_invalid_entries_without_rejecting_whole_headers() {
         let rules = serde_json::json!([
             {"action":"set","key":"","value":"bad"},
@@ -1643,6 +1707,35 @@ mod tests {
         );
         assert_eq!(headers.get("x-ok").map(String::as_str), Some("yes"));
         assert!(!headers.contains_key("x-legacy"));
+    }
+
+    #[test]
+    fn header_rules_skip_disabled_entries() {
+        let rules = serde_json::json!([
+            {"enabled":false,"action":"set","key":"x-disabled","value":"bad"},
+            {"enabled":false,"action":"drop","key":"x-keep"},
+            {"action":"set","key":"x-enabled","value":"ok"}
+        ]);
+        assert!(header_rules_have_enabled_rules(Some(&rules)));
+
+        let mut headers =
+            std::collections::BTreeMap::from([("x-keep".to_string(), "yes".to_string())]);
+        assert!(apply_local_header_rules(
+            &mut headers,
+            Some(&rules),
+            &[],
+            &serde_json::json!({}),
+            None,
+        ));
+
+        assert_eq!(headers.get("x-keep").map(String::as_str), Some("yes"));
+        assert!(!headers.contains_key("x-disabled"));
+        assert_eq!(headers.get("x-enabled").map(String::as_str), Some("ok"));
+
+        let disabled_only = serde_json::json!([
+            {"enabled":false,"action":"set","key":"x-disabled","value":"bad"}
+        ]);
+        assert!(!header_rules_have_enabled_rules(Some(&disabled_only)));
     }
 
     #[test]

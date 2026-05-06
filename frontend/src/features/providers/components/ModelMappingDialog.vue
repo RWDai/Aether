@@ -37,6 +37,27 @@
         </p>
       </div>
 
+      <!-- 端点限制 -->
+      <div class="space-y-1.5">
+        <div class="flex items-center justify-between gap-2">
+          <Label class="text-xs">限制端点</Label>
+          <span class="text-xs text-muted-foreground">{{ endpointScopeSummary }}</span>
+        </div>
+        <MultiSelect
+          v-model="selectedEndpointIds"
+          :options="endpointOptions"
+          placeholder="全部端点"
+          empty-text="暂无端点"
+          no-results-text="未找到端点"
+          trigger-class="h-9 rounded-md"
+          dropdown-min-width="24rem"
+          :search-threshold="4"
+        />
+        <p class="text-xs text-muted-foreground">
+          默认对全部端点生效；选择端点后，此映射只在选中的端点上生效
+        </p>
+      </div>
+
       <!-- 映射名称选择面板 -->
       <div class="space-y-1.5">
         <Label class="text-xs">提供商模型</Label>
@@ -260,14 +281,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui'
+import MultiSelect from '@/components/common/MultiSelect.vue'
 import { useToast } from '@/composables/useToast'
 import { parseApiError } from '@/utils/errorParser'
 import {
   type Model,
+  type ProviderEndpoint,
   type ProviderModelAlias,
   type UpstreamModel,
 } from '@/api/endpoints'
 import { updateModel } from '@/api/endpoints/models'
+import { formatApiFormat } from '@/api/endpoints/types/api-format'
 import { useUpstreamModelsCache } from '../composables/useUpstreamModelsCache'
 
 export interface AliasGroup {
@@ -276,6 +300,8 @@ export interface AliasGroup {
   apiFormatsKey: string
   /** @deprecated */
   apiFormats: string[]
+  endpointIdsKey: string
+  endpointIds: string[]
   aliases: ProviderModelAlias[]
 }
 
@@ -284,6 +310,7 @@ const props = defineProps<{
   providerId: string
   /** @deprecated */
   providerApiFormats?: string[]
+  endpoints?: ProviderEndpoint[]
   models: Model[]
   editingGroup?: AliasGroup | null
   preselectedModelId?: string | null
@@ -297,6 +324,11 @@ const emit = defineEmits<{
 
 const { error: showError, success: showSuccess } = useToast()
 const { fetchModels: fetchCachedModels } = useUpstreamModelsCache()
+
+type EndpointOption = {
+  value: string
+  label: string
+}
 
 // 状态
 const submitting = ref(false)
@@ -323,8 +355,41 @@ const formData = ref<{
 // 选中的映射名称
 const selectedNames = ref<string[]>([])
 
+// 选中的端点 ID；空数组表示全部端点
+const selectedEndpointIds = ref<string[]>([])
+
 // 自定义名称列表（手动添加的）
 const allCustomNames = ref<string[]>([])
+
+const endpointOptions = computed<EndpointOption[]>(() => {
+  return (props.endpoints ?? []).map((endpoint) => {
+    const status = endpoint.is_active ? '' : '（停用）'
+    return {
+      value: endpoint.id,
+      label: `${formatApiFormat(endpoint.api_format)}${status}`,
+    }
+  })
+})
+
+const normalizedSelectedEndpointIds = computed(() => {
+  const validIds = new Set(endpointOptions.value.map(option => option.value))
+  const selected = normalizeStringList(selectedEndpointIds.value)
+  if (selected.length === 0) {
+    return undefined
+  }
+  const invalidSelected = selected.filter(endpointId => !validIds.has(endpointId))
+  const selectedValidCount = selected.filter(endpointId => validIds.has(endpointId)).length
+  if (validIds.size > 0 && invalidSelected.length === 0 && selectedValidCount === validIds.size) {
+    return undefined
+  }
+  return selected
+})
+
+const endpointScopeSummary = computed(() => {
+  const selected = normalizedSelectedEndpointIds.value
+  if (!selected || selected.length === 0) return '全部端点'
+  return `${selected.length} 个端点`
+})
 
 // 所有已知名称集合
 const allKnownNames = computed(() => {
@@ -429,6 +494,50 @@ function toggleAllUpstreamModels() {
   }
 }
 
+function normalizeStringList(values: string[] | undefined): string[] {
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const value of values ?? []) {
+    const normalized = value.trim()
+    if (!normalized || seen.has(normalized)) continue
+    seen.add(normalized)
+    result.push(normalized)
+  }
+  return result
+}
+
+function getScopeKey(values: string[] | undefined): string {
+  return normalizeStringList(values).sort().join(',')
+}
+
+function scopesOverlap(left: string[] | undefined, right: string[] | undefined): boolean {
+  const leftValues = normalizeStringList(left)
+  const rightValues = normalizeStringList(right)
+  if (leftValues.length === 0 || rightValues.length === 0) return true
+  const rightSet = new Set(rightValues)
+  return leftValues.some(value => rightSet.has(value))
+}
+
+function findDuplicateNames(
+  existingAliases: ProviderModelAlias[],
+  names: string[],
+  endpointIds: string[] | undefined,
+  apiFormats: string[] | undefined = undefined,
+): string[] {
+  const duplicates = new Set<string>()
+  for (const rawName of names) {
+    const name = rawName.trim()
+    if (!name) continue
+    const duplicate = existingAliases.some((alias) => {
+      return alias.name === name
+        && scopesOverlap(alias.endpoint_ids, endpointIds)
+        && scopesOverlap(alias.api_formats, apiFormats)
+    })
+    if (duplicate) duplicates.add(name)
+  }
+  return Array.from(duplicates)
+}
+
 // 切换折叠状态
 function toggleGroupCollapse(group: string) {
   if (collapsedGroups.value.has(group)) {
@@ -484,12 +593,14 @@ function initForm() {
     }
     const existingNames = props.editingGroup.aliases.map(a => a.name)
     selectedNames.value = [...existingNames]
+    selectedEndpointIds.value = normalizeStringList(props.editingGroup.endpointIds)
     allCustomNames.value = [...existingNames]
   } else {
     formData.value = {
       modelId: props.preselectedModelId || ''
     }
     selectedNames.value = []
+    selectedEndpointIds.value = []
     allCustomNames.value = []
   }
   searchQuery.value = ''
@@ -505,8 +616,11 @@ function handleModelChange(value: string) {
 
 // 生成作用域唯一键
 function getApiFormatsKey(formats: string[] | undefined): string {
-  if (!formats || formats.length === 0) return ''
-  return [...formats].sort().join(',')
+  return getScopeKey(formats)
+}
+
+function getEndpointIdsKey(endpointIds: string[] | undefined): string {
+  return getScopeKey(endpointIds)
 }
 
 // 提交表单
@@ -524,25 +638,33 @@ async function handleSubmit() {
 
     const currentAliases = targetModel.provider_model_mappings || []
     let newAliases: ProviderModelAlias[]
+    const nextEndpointIds = normalizedSelectedEndpointIds.value
 
     const buildAliases = (names: string[]): ProviderModelAlias[] => {
-      return names.map((name) => ({
-        name: name.trim(),
-        priority: 1
-      }))
+      return names.map((name) => {
+        const alias: ProviderModelAlias = {
+          name: name.trim(),
+          priority: 1
+        }
+        if (nextEndpointIds && nextEndpointIds.length > 0) {
+          alias.endpoint_ids = nextEndpointIds
+        }
+        return alias
+      })
     }
 
     if (props.editingGroup) {
       const oldApiFormatsKey = props.editingGroup.apiFormatsKey
+      const oldEndpointIdsKey = props.editingGroup.endpointIdsKey
       const oldAliasNames = new Set(props.editingGroup.aliases.map(a => a.name))
 
       const filteredAliases = currentAliases.filter((a: ProviderModelAlias) => {
         const currentKey = getApiFormatsKey(a.api_formats)
-        return !(currentKey === oldApiFormatsKey && oldAliasNames.has(a.name))
+        const currentEndpointIdsKey = getEndpointIdsKey(a.endpoint_ids)
+        return !(currentKey === oldApiFormatsKey && currentEndpointIdsKey === oldEndpointIdsKey && oldAliasNames.has(a.name))
       })
 
-      const existingNames = new Set(filteredAliases.map((a: ProviderModelAlias) => a.name))
-      const duplicates = selectedNames.value.filter(name => existingNames.has(name))
+      const duplicates = findDuplicateNames(filteredAliases, selectedNames.value, nextEndpointIds)
       if (duplicates.length > 0) {
         showError(`以下映射名称已存在：${duplicates.join(', ')}`, '错误')
         return
@@ -553,8 +675,7 @@ async function handleSubmit() {
         ...buildAliases(selectedNames.value)
       ]
     } else {
-      const existingNames = new Set(currentAliases.map((a: ProviderModelAlias) => a.name))
-      const duplicates = selectedNames.value.filter(name => existingNames.has(name))
+      const duplicates = findDuplicateNames(currentAliases, selectedNames.value, nextEndpointIds)
       if (duplicates.length > 0) {
         showError(`以下映射名称已存在：${duplicates.join(', ')}`, '错误')
         return

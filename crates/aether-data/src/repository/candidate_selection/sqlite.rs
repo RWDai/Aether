@@ -272,6 +272,10 @@ fn row_matches_requested_model(
                         formats
                             .iter()
                             .any(|value| api_format_matches(value, api_format))
+                    }) && mapping.endpoint_ids.as_ref().is_none_or(|endpoint_ids| {
+                        endpoint_ids
+                            .iter()
+                            .any(|endpoint_id| endpoint_id == &row.endpoint_id)
                     }) && mapping.name == requested_model_name
                 })
             })
@@ -514,6 +518,7 @@ fn parse_embedded_provider_model_mappings(
         name: raw.to_string(),
         priority: 1,
         api_formats: None,
+        endpoint_ids: None,
     }]))
 }
 
@@ -533,6 +538,7 @@ fn parse_provider_model_mappings_array(
                     name: raw.trim().to_string(),
                     priority: 1,
                     api_formats: None,
+                    endpoint_ids: None,
                 });
             }
             _ => {}
@@ -573,6 +579,10 @@ fn parse_provider_model_mapping_object_lenient(
             .map(|value| normalize_api_format(&value))
             .collect()
     });
+    let endpoint_ids = parse_string_list(
+        object.get("endpoint_ids").cloned(),
+        "models.provider_model_mappings.endpoint_ids",
+    )?;
 
     Ok(Some(StoredProviderModelMapping {
         name: name.to_string(),
@@ -582,6 +592,7 @@ fn parse_provider_model_mapping_object_lenient(
             ))
         })?,
         api_formats,
+        endpoint_ids,
     }))
 }
 

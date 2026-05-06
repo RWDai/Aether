@@ -269,6 +269,7 @@ fn sample_models_candidate_row(
             name: global_model_name.to_string(),
             priority: 1,
             api_formats: Some(vec![api_format.to_string()]),
+            endpoint_ids: None,
         }]),
         model_supports_streaming: Some(true),
         model_is_active: true,

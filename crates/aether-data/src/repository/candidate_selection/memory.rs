@@ -167,6 +167,10 @@ fn row_matches_requested_model(
                         formats
                             .iter()
                             .any(|value| api_format_matches(value, api_format))
+                    }) && mapping.endpoint_ids.as_ref().is_none_or(|endpoint_ids| {
+                        endpoint_ids
+                            .iter()
+                            .any(|endpoint_id| endpoint_id == &row.endpoint_id)
                     }) && mapping.name == requested_model_name
                 })
             })
@@ -281,6 +285,7 @@ mod tests {
                 name: "alias-gpt-4.1".to_string(),
                 priority: 0,
                 api_formats: Some(vec!["openai:chat".to_string()]),
+                endpoint_ids: None,
             },
         ]);
         let repository = InMemoryMinimalCandidateSelectionReadRepository::seed(vec![

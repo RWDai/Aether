@@ -269,6 +269,7 @@ fn sample_candidate_row(spec: ProviderSpec) -> StoredMinimalCandidateSelectionRo
             name: spec.provider_model_name.to_string(),
             priority: 1,
             api_formats: Some(vec![spec.api_format.to_string()]),
+            endpoint_ids: None,
         }]),
         model_supports_streaming: Some(true),
         model_is_active: true,

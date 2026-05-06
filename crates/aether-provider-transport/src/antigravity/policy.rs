@@ -9,6 +9,7 @@ use super::request::{
     classify_antigravity_safe_request_body, AntigravityEnvelopeRequestType,
     AntigravityRequestEnvelopeUnsupportedReason,
 };
+use crate::rules::{body_rules_have_enabled_rules, header_rules_have_enabled_rules};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AntigravityRequestSideSpec {
@@ -76,12 +77,12 @@ pub fn classify_local_antigravity_request_support(
             AntigravityRequestSideUnsupportedReason::UnsupportedCustomPath,
         );
     }
-    if transport.endpoint.header_rules.is_some() {
+    if header_rules_have_enabled_rules(transport.endpoint.header_rules.as_ref()) {
         return AntigravityRequestSideSupport::Unsupported(
             AntigravityRequestSideUnsupportedReason::UnsupportedHeaderRules,
         );
     }
-    if transport.endpoint.body_rules.is_some() {
+    if body_rules_have_enabled_rules(transport.endpoint.body_rules.as_ref()) {
         return AntigravityRequestSideSupport::Unsupported(
             AntigravityRequestSideUnsupportedReason::UnsupportedBodyRules,
         );

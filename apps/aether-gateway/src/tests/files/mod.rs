@@ -90,6 +90,7 @@ fn sample_files_candidate_row() -> StoredMinimalCandidateSelectionRow {
             name: "gemini-2.5-pro-upstream".to_string(),
             priority: 1,
             api_formats: Some(vec!["gemini:files".to_string()]),
+            endpoint_ids: None,
         }]),
         model_supports_streaming: Some(true),
         model_is_active: true,

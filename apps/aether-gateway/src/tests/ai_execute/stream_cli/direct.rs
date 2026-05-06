@@ -113,6 +113,7 @@ async fn gateway_executes_codex_cli_stream_via_local_decision_gate_after_oauth_r
                 name: "gpt-5.4".to_string(),
                 priority: 1,
                 api_formats: Some(vec!["openai:responses".to_string()]),
+                endpoint_ids: None,
             }]),
             model_supports_streaming: Some(true),
             model_is_active: true,

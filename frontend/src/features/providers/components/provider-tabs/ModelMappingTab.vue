@@ -72,6 +72,13 @@
               <span class="text-xs text-muted-foreground shrink-0">
                 | {{ item.mappings.length }} 个映射
               </span>
+              <Badge
+                v-if="item.group"
+                variant="outline"
+                class="text-xs shrink-0"
+              >
+                {{ getGroupEndpointScopeLabel(item.group) }}
+              </Badge>
             </template>
             <!-- 正则映射 -->
             <template v-else>
@@ -290,6 +297,7 @@
     v-model:open="dialogOpen"
     :provider-id="provider.id"
     :models="models"
+    :endpoints="endpoints"
     :editing-group="editingGroup"
     :preselected-model-id="preselectedModelId"
     :has-auto-fetch-key="hasAutoFetchKey"
@@ -446,8 +454,32 @@ const expandedItems = ref<Set<string>>(new Set())
 
 // 生成作用域唯一键
 function getApiFormatsKey(formats: string[] | undefined): string {
-  if (!formats || formats.length === 0) return ''
-  return [...formats].sort().join(',')
+  return getScopeKey(formats)
+}
+
+function normalizeStringList(values: string[] | undefined): string[] {
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const value of values ?? []) {
+    const normalized = value.trim()
+    if (!normalized || seen.has(normalized)) continue
+    seen.add(normalized)
+    result.push(normalized)
+  }
+  return result
+}
+
+function getScopeKey(values: string[] | undefined): string {
+  return normalizeStringList(values).sort().join(',')
+}
+
+function getEndpointIdsKey(endpointIds: string[] | undefined): string {
+  return getScopeKey(endpointIds)
+}
+
+function getGroupEndpointScopeLabel(group: AliasGroup): string {
+  if (!group.endpointIds || group.endpointIds.length === 0) return '全部端点'
+  return `${group.endpointIds.length} 端点`
 }
 
 // 精确映射分组（来自 provider_model_mappings）
@@ -460,13 +492,16 @@ const exactMappingGroups = computed<AliasGroup[]>(() => {
 
     for (const alias of model.provider_model_mappings) {
       const apiFormatsKey = getApiFormatsKey(alias.api_formats)
-      const groupKey = `${model.id}|${apiFormatsKey}`
+      const endpointIdsKey = getEndpointIdsKey(alias.endpoint_ids)
+      const groupKey = `${model.id}|${apiFormatsKey}|${endpointIdsKey}`
 
       if (!groupMap.has(groupKey)) {
         const group: AliasGroup = {
           model,
           apiFormatsKey,
           apiFormats: alias.api_formats || [],
+          endpointIdsKey,
+          endpointIds: normalizeStringList(alias.endpoint_ids),
           aliases: []
         }
         groupMap.set(groupKey, group)
@@ -587,7 +622,8 @@ const deleteConfirmDescription = computed(() => {
   const { model, aliases } = deletingGroup.value
   const modelName = model.global_model_display_name || model.provider_model_name
   const aliasNames = aliases.map(a => a.name).join(', ')
-  return `确定要删除模型「${modelName}」的 ${aliases.length} 个映射吗？\n\n映射名称：${aliasNames}`
+  const endpointScope = getGroupEndpointScopeLabel(deletingGroup.value)
+  return `确定要删除模型「${modelName}」在「${endpointScope}」下的 ${aliases.length} 个映射吗？\n\n映射名称：${aliasNames}`
 })
 
 // 切换展开状态
@@ -634,14 +670,15 @@ function deleteGroup(group: AliasGroup) {
 async function confirmDelete() {
   if (!deletingGroup.value) return
 
-  const { model, aliases, apiFormatsKey } = deletingGroup.value
+  const { model, aliases, apiFormatsKey, endpointIdsKey } = deletingGroup.value
 
   try {
     const currentAliases = model.provider_model_mappings || []
     const aliasNamesToRemove = new Set(aliases.map(a => a.name))
     const newAliases = currentAliases.filter((a: ProviderModelAlias) => {
       const currentKey = getApiFormatsKey(a.api_formats)
-      return !(currentKey === apiFormatsKey && aliasNamesToRemove.has(a.name))
+      const currentEndpointIdsKey = getEndpointIdsKey(a.endpoint_ids)
+      return !(currentKey === apiFormatsKey && currentEndpointIdsKey === endpointIdsKey && aliasNamesToRemove.has(a.name))
     })
 
     await updateModel(props.provider.id, model.id, {

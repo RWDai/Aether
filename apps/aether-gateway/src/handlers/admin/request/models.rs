@@ -28,23 +28,41 @@ fn normalize_provider_model_mappings_api_formats(
         let Some(object) = item.as_object_mut() else {
             continue;
         };
-        let Some(api_formats) = object.get_mut("api_formats") else {
-            continue;
-        };
-        let Some(array) = api_formats.as_array() else {
-            continue;
-        };
-        let mut seen = BTreeSet::new();
-        let normalized = array
-            .iter()
-            .filter_map(serde_json::Value::as_str)
-            .map(crate::ai_serving::normalize_api_format_alias)
-            .filter(|format| seen.insert(format.clone()))
-            .map(serde_json::Value::String)
-            .collect::<Vec<_>>();
-        *api_formats = serde_json::Value::Array(normalized);
+        normalize_provider_model_mapping_string_array_field(
+            object,
+            "api_formats",
+            crate::ai_serving::normalize_api_format_alias,
+        );
+        normalize_provider_model_mapping_string_array_field(object, "endpoint_ids", |value| {
+            value.trim().to_string()
+        });
     }
     Some(value)
+}
+
+fn normalize_provider_model_mapping_string_array_field(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    field: &str,
+    normalize: impl Fn(&str) -> String,
+) {
+    let Some(array) = object.get(field).and_then(serde_json::Value::as_array) else {
+        return;
+    };
+    let mut seen = BTreeSet::new();
+    let normalized = array
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .map(normalize)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .filter(|value| seen.insert(value.clone()))
+        .map(serde_json::Value::String)
+        .collect::<Vec<_>>();
+    if normalized.is_empty() {
+        object.remove(field);
+    } else {
+        object.insert(field.to_string(), serde_json::Value::Array(normalized));
+    }
 }
 
 impl<'a> AdminAppState<'a> {

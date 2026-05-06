@@ -337,6 +337,7 @@
                       <div
                         class="flex items-center gap-1.5 px-2 py-1.5 rounded-md border-l-4 border-primary/60 bg-muted/30"
                         :class="[
+                          !rule.enabled ? 'opacity-60 border-primary/25 bg-muted/20' : '',
                           isHeaderRuleDragging(endpoint.id, index) ? 'opacity-60 border-primary bg-primary/5' : '',
                           isHeaderRuleDragOver(endpoint.id, index) ? 'ring-1 ring-primary/40 bg-primary/10' : ''
                         ]"
@@ -358,6 +359,12 @@
                           class="text-[10px] font-semibold text-primary shrink-0"
                           title="请求头"
                         >H</span>
+                        <Switch
+                          :model-value="rule.enabled"
+                          class="shrink-0 scale-75 origin-center"
+                          :title="rule.enabled ? '已启用，点击禁用这条请求头规则' : '已禁用，点击启用这条请求头规则'"
+                          @update:model-value="(v: boolean) => updateEndpointRuleEnabled(endpoint.id, index, v)"
+                        />
                         <Select
                           :model-value="rule.action"
                           :open="ruleSelectOpen[`${endpoint.id}-${index}`]"
@@ -459,6 +466,7 @@
                       <div
                         class="flex items-center gap-1.5 px-2 py-1.5 rounded-md border-l-4 border-sky-500/60 bg-muted/30"
                         :class="[
+                          !rule.enabled ? 'opacity-60 border-sky-500/25 bg-muted/20' : '',
                           isResponseRuleDragging(endpoint.id, index) ? 'opacity-60 border-sky-500 bg-sky-500/5' : '',
                           isResponseRuleDragOver(endpoint.id, index) ? 'ring-1 ring-sky-500/40 bg-sky-500/10' : ''
                         ]"
@@ -480,6 +488,12 @@
                           class="text-[10px] font-semibold text-sky-600 dark:text-sky-400 shrink-0"
                           title="响应头"
                         >R</span>
+                        <Switch
+                          :model-value="rule.enabled"
+                          class="shrink-0 scale-75 origin-center"
+                          :title="rule.enabled ? '已启用，点击禁用这条响应头规则' : '已禁用，点击启用这条响应头规则'"
+                          @update:model-value="(v: boolean) => updateEndpointResponseRuleEnabled(endpoint.id, index, v)"
+                        />
                         <Select
                           :model-value="rule.action"
                           :open="responseRuleSelectOpen[`${endpoint.id}-${index}`]"
@@ -657,6 +671,7 @@
                       <div
                         class="flex items-center gap-1.5 px-2 py-1.5 rounded-md border-l-4 border-muted-foreground/40 bg-muted/30"
                         :class="[
+                          !rule.enabled ? 'opacity-60 border-muted-foreground/25 bg-muted/20' : '',
                           isBodyRuleDragging(endpoint.id, index) ? 'opacity-60 border-muted-foreground/70 bg-muted/50' : '',
                           isBodyRuleDragOver(endpoint.id, index) ? 'ring-1 ring-muted-foreground/40 bg-muted/40' : ''
                         ]"
@@ -678,6 +693,12 @@
                           class="text-[10px] font-semibold text-muted-foreground shrink-0"
                           title="请求体"
                         >B</span>
+                        <Switch
+                          :model-value="rule.enabled"
+                          class="shrink-0 scale-75 origin-center"
+                          :title="rule.enabled ? '已启用，点击禁用这条请求体规则' : '已禁用，点击启用这条请求体规则'"
+                          @update:model-value="(v: boolean) => updateEndpointBodyRuleEnabled(endpoint.id, index, v)"
+                        />
                         <Select
                           :model-value="rule.action"
                           :open="bodyRuleSelectOpen[`${endpoint.id}-${index}`]"
@@ -995,6 +1016,7 @@ import {
   SelectValue,
   SelectContent,
   SelectItem,
+  Switch,
   Collapsible,
   CollapsibleTrigger,
   CollapsibleContent,
@@ -1036,6 +1058,7 @@ import {
 // 编辑用的规则类型（统一的可编辑结构）
 interface EditableRule {
   action: 'set' | 'drop' | 'rename'
+  enabled: boolean
   key: string      // set/drop 用
   value: string    // set 用
   from: string     // rename 用
@@ -1048,6 +1071,7 @@ type BodyRuleAction = 'set' | 'drop' | 'rename' | 'append' | 'insert' | 'regex_r
 
 interface EditableBodyRule {
   action: BodyRuleAction
+  enabled: boolean
   path: string     // set/drop/append/insert/regex_replace 用
   value: string    // set/append/insert 用（JSON 格式）
   from: string     // rename 用
@@ -1496,6 +1520,9 @@ function requireJsonString(rule: Record<string, unknown>, key: string, label: st
 
 function validateHeaderRuleJson(rule: unknown, label: string, index: number): string | null {
   if (!isJsonObject(rule)) return `${label}第 ${index + 1} 条必须是对象`
+  if (rule.enabled !== undefined && typeof rule.enabled !== 'boolean') {
+    return `${label}第 ${index + 1} 条：enabled 必须是布尔值`
+  }
   const action = rule.action
   if (action !== 'set' && action !== 'drop' && action !== 'rename') {
     return `${label}第 ${index + 1} 条：action 必须是 set/drop/rename`
@@ -1516,6 +1543,9 @@ function validateHeaderRuleJson(rule: unknown, label: string, index: number): st
 
 function validateBodyRuleJson(rule: unknown, label: string, index: number): string | null {
   if (!isJsonObject(rule)) return `${label}第 ${index + 1} 条必须是对象`
+  if (rule.enabled !== undefined && typeof rule.enabled !== 'boolean') {
+    return `${label}第 ${index + 1} 条：enabled 必须是布尔值`
+  }
   const action = typeof rule.action === 'string' ? rule.action : ''
   if (!BODY_RULE_JSON_ACTIONS.has(action)) {
     return `${label}第 ${index + 1} 条：action 无效`
@@ -1940,7 +1970,7 @@ async function clearEndpointProxy(endpoint: ProviderEndpoint) {
 }
 
 function emptyHeaderRule(): EditableRule {
-  return { action: 'set', key: '', value: '', from: '', to: '', condition: null }
+  return { action: 'set', enabled: true, key: '', value: '', from: '', to: '', condition: null }
 }
 
 function editableHeaderRulesFromRules(rules: HeaderRule[] | null | undefined): EditableRule[] {
@@ -1948,11 +1978,11 @@ function editableHeaderRulesFromRules(rules: HeaderRule[] | null | undefined): E
   const editableRules: EditableRule[] = []
   for (const rule of rules) {
     if (rule.action === 'set') {
-      editableRules.push({ ...emptyHeaderRule(), action: 'set', key: rule.key, value: rule.value || '', condition: conditionToEditable(rule.condition) })
+      editableRules.push({ ...emptyHeaderRule(), action: 'set', enabled: rule.enabled !== false, key: rule.key, value: rule.value || '', condition: conditionToEditable(rule.condition) })
     } else if (rule.action === 'drop') {
-      editableRules.push({ ...emptyHeaderRule(), action: 'drop', key: rule.key, condition: conditionToEditable(rule.condition) })
+      editableRules.push({ ...emptyHeaderRule(), action: 'drop', enabled: rule.enabled !== false, key: rule.key, condition: conditionToEditable(rule.condition) })
     } else if (rule.action === 'rename') {
-      editableRules.push({ ...emptyHeaderRule(), action: 'rename', from: rule.from, to: rule.to, condition: conditionToEditable(rule.condition) })
+      editableRules.push({ ...emptyHeaderRule(), action: 'rename', enabled: rule.enabled !== false, from: rule.from, to: rule.to, condition: conditionToEditable(rule.condition) })
     }
   }
   return editableRules
@@ -1961,6 +1991,7 @@ function editableHeaderRulesFromRules(rules: HeaderRule[] | null | undefined): E
 function emptyBodyRule(action: BodyRuleAction = 'set'): EditableBodyRule {
   return {
     action,
+    enabled: true,
     path: '',
     value: '',
     from: '',
@@ -1981,20 +2012,21 @@ function editableBodyRulesFromRules(rules: BodyRule[] | null | undefined): Edita
   for (const rule of rules) {
     if (rule.action === 'set') {
       const { value } = initBodyRuleSetValueForEditor(rule.value)
-      bodyRules.push({ ...emptyBodyRule('set'), path: rule.path, value, condition: conditionToEditable(rule.condition) })
+      bodyRules.push({ ...emptyBodyRule('set'), enabled: rule.enabled !== false, path: rule.path, value, condition: conditionToEditable(rule.condition) })
     } else if (rule.action === 'drop') {
-      bodyRules.push({ ...emptyBodyRule('drop'), path: rule.path, condition: conditionToEditable(rule.condition) })
+      bodyRules.push({ ...emptyBodyRule('drop'), enabled: rule.enabled !== false, path: rule.path, condition: conditionToEditable(rule.condition) })
     } else if (rule.action === 'rename') {
-      bodyRules.push({ ...emptyBodyRule('rename'), from: rule.from, to: rule.to, condition: conditionToEditable(rule.condition) })
+      bodyRules.push({ ...emptyBodyRule('rename'), enabled: rule.enabled !== false, from: rule.from, to: rule.to, condition: conditionToEditable(rule.condition) })
     } else if (rule.action === 'append') {
       const { value } = initBodyRuleSetValueForEditor(rule.value)
-      bodyRules.push({ ...emptyBodyRule('append'), path: rule.path || '', value, condition: conditionToEditable(rule.condition) })
+      bodyRules.push({ ...emptyBodyRule('append'), enabled: rule.enabled !== false, path: rule.path || '', value, condition: conditionToEditable(rule.condition) })
     } else if (rule.action === 'insert') {
       const { value } = initBodyRuleSetValueForEditor(rule.value)
-      bodyRules.push({ ...emptyBodyRule('insert'), path: rule.path || '', value, index: String(rule.index ?? ''), condition: conditionToEditable(rule.condition) })
+      bodyRules.push({ ...emptyBodyRule('insert'), enabled: rule.enabled !== false, path: rule.path || '', value, index: String(rule.index ?? ''), condition: conditionToEditable(rule.condition) })
     } else if (rule.action === 'regex_replace') {
       bodyRules.push({
         ...emptyBodyRule('regex_replace'),
+        enabled: rule.enabled !== false,
         path: rule.path || '',
         pattern: rule.pattern || '',
         replacement: rule.replacement || '',
@@ -2190,7 +2222,8 @@ function updateEndpointRuleAction(endpointId: string, index: number, action: 'se
   const rules = getEndpointEditRules(endpointId)
   if (rules[index]) {
     const currentCondition = rules[index].condition
-    rules[index] = { ...emptyHeaderRule(), action, condition: currentCondition }
+    const currentEnabled = rules[index].enabled
+    rules[index] = { ...emptyHeaderRule(), action, enabled: currentEnabled, condition: currentCondition }
   }
 }
 
@@ -2198,7 +2231,22 @@ function updateEndpointResponseRuleAction(endpointId: string, index: number, act
   const rules = getEndpointEditResponseRules(endpointId)
   if (rules[index]) {
     const currentCondition = rules[index].condition
-    rules[index] = { ...emptyHeaderRule(), action, condition: currentCondition }
+    const currentEnabled = rules[index].enabled
+    rules[index] = { ...emptyHeaderRule(), action, enabled: currentEnabled, condition: currentCondition }
+  }
+}
+
+function updateEndpointRuleEnabled(endpointId: string, index: number, enabled: boolean) {
+  const rules = getEndpointEditRules(endpointId)
+  if (rules[index]) {
+    rules[index].enabled = enabled
+  }
+}
+
+function updateEndpointResponseRuleEnabled(endpointId: string, index: number, enabled: boolean) {
+  const rules = getEndpointEditResponseRules(endpointId)
+  if (rules[index]) {
+    rules[index].enabled = enabled
   }
 }
 
@@ -2269,8 +2317,10 @@ function validateRuleKeyForEndpoint(endpointId: string, key: string, index: numb
   }
 
   const rules = getEndpointEditRules(endpointId)
+  const currentRule = rules[index]
+  if (currentRule && !currentRule.enabled) return null
   const duplicate = rules.findIndex(
-    (r, i) => i !== index && (
+    (r, i) => i !== index && r.enabled && (
       ((r.action === 'set' || r.action === 'drop') && r.key.trim().toLowerCase() === trimmedKey) ||
       (r.action === 'rename' && r.to.trim().toLowerCase() === trimmedKey)
     )
@@ -2288,8 +2338,10 @@ function validateRenameFromForEndpoint(endpointId: string, from: string, index: 
   if (!trimmedFrom) return null
 
   const rules = getEndpointEditRules(endpointId)
+  const currentRule = rules[index]
+  if (currentRule && !currentRule.enabled) return null
   const duplicate = rules.findIndex(
-    (r, i) => i !== index &&
+    (r, i) => i !== index && r.enabled &&
       ((r.action === 'set' && r.key.trim().toLowerCase() === trimmedFrom) ||
        (r.action === 'drop' && r.key.trim().toLowerCase() === trimmedFrom) ||
        (r.action === 'rename' && r.from.trim().toLowerCase() === trimmedFrom))
@@ -2311,8 +2363,10 @@ function validateRenameToForEndpoint(endpointId: string, to: string, index: numb
   }
 
   const rules = getEndpointEditRules(endpointId)
+  const currentRule = rules[index]
+  if (currentRule && !currentRule.enabled) return null
   const duplicate = rules.findIndex(
-    (r, i) => i !== index &&
+    (r, i) => i !== index && r.enabled &&
       ((r.action === 'set' && r.key.trim().toLowerCase() === trimmedTo) ||
        (r.action === 'rename' && r.to.trim().toLowerCase() === trimmedTo))
   )
@@ -2396,7 +2450,15 @@ function updateEndpointBodyRuleAction(endpointId: string, index: number, action:
   const rules = getEndpointEditBodyRules(endpointId)
   if (rules[index]) {
     const currentCondition = rules[index].condition
-    rules[index] = { ...emptyBodyRule(action), condition: currentCondition }
+    const currentEnabled = rules[index].enabled
+    rules[index] = { ...emptyBodyRule(action), enabled: currentEnabled, condition: currentCondition }
+  }
+}
+
+function updateEndpointBodyRuleEnabled(endpointId: string, index: number, enabled: boolean) {
+  const rules = getEndpointEditBodyRules(endpointId)
+  if (rules[index]) {
+    rules[index].enabled = enabled
   }
 }
 
@@ -2451,9 +2513,10 @@ function validateBodyRulePathForEndpoint(endpointId: string, path: string, index
 
   const rules = getEndpointEditBodyRules(endpointId)
   const currentRule = rules[index]
+  if (currentRule && !currentRule.enabled) return null
   // 任意一方启用了条件，则不视为冲突（条件可能互斥，真正冲突在运行时处理）
   const duplicate = rules.findIndex(
-    (r, i) => i !== index && !currentRule.condition && !r.condition && (
+    (r, i) => i !== index && r.enabled && !currentRule.condition && !r.condition && (
       ((r.action === 'set' || r.action === 'drop') && r.path.trim().toLowerCase() === normalizedPath) ||
       (r.action === 'rename' && r.to.trim().toLowerCase() === normalizedPath)
     )
@@ -2484,8 +2547,9 @@ function validateBodyRenameFromForEndpoint(endpointId: string, from: string, ind
 
   const rules = getEndpointEditBodyRules(endpointId)
   const currentRule = rules[index]
+  if (currentRule && !currentRule.enabled) return null
   const duplicate = rules.findIndex(
-    (r, i) => i !== index && !currentRule.condition && !r.condition &&
+    (r, i) => i !== index && r.enabled && !currentRule.condition && !r.condition &&
       ((r.action === 'set' && r.path.trim().toLowerCase() === normalizedFrom) ||
        (r.action === 'drop' && r.path.trim().toLowerCase() === normalizedFrom) ||
        (r.action === 'rename' && r.from.trim().toLowerCase() === normalizedFrom))
@@ -2516,8 +2580,9 @@ function validateBodyRenameToForEndpoint(endpointId: string, to: string, index: 
 
   const rules = getEndpointEditBodyRules(endpointId)
   const currentRule = rules[index]
+  if (currentRule && !currentRule.enabled) return null
   const duplicate = rules.findIndex(
-    (r, i) => i !== index && !currentRule.condition && !r.condition &&
+    (r, i) => i !== index && r.enabled && !currentRule.condition && !r.condition &&
       ((r.action === 'set' && r.path.trim().toLowerCase() === normalizedTo) ||
        (r.action === 'rename' && r.to.trim().toLowerCase() === normalizedTo))
   )
@@ -2712,6 +2777,7 @@ function hasBodyRulesChanges(endpoint: ProviderEndpoint): boolean {
     const original = originalRules[i]
     if (!original) return true
     if (edited.action !== original.action) return true
+    if (edited.enabled !== (original.enabled !== false)) return true
     if (edited.action === 'set' && original.action === 'set') {
       const baseline = initBodyRuleSetValueForEditor(original.value)
       if (edited.path !== original.path) return true
@@ -2747,24 +2813,25 @@ function rulesToBodyRules(rules: EditableBodyRule[]): BodyRule[] | null {
 
   for (const rule of rules) {
     const condition = editableConditionToApi(rule.condition)
+    const common = { ...(rule.enabled ? {} : { enabled: false }), ...(condition ? { condition } : {}) }
     if (rule.action === 'set' && rule.path.trim()) {
       let value: unknown = rule.value
       try { value = restoreOriginalPlaceholder(JSON.parse(prepareValueForJsonParse(rule.value.trim()))) } catch { value = rule.value }
-      result.push({ action: 'set', path: rule.path.trim(), value, ...(condition ? { condition } : {}) })
+      result.push({ action: 'set', path: rule.path.trim(), value, ...common })
     } else if (rule.action === 'drop' && rule.path.trim()) {
-      result.push({ action: 'drop', path: rule.path.trim(), ...(condition ? { condition } : {}) })
+      result.push({ action: 'drop', path: rule.path.trim(), ...common })
     } else if (rule.action === 'rename' && rule.from.trim() && rule.to.trim()) {
-      result.push({ action: 'rename', from: rule.from.trim(), to: rule.to.trim(), ...(condition ? { condition } : {}) })
+      result.push({ action: 'rename', from: rule.from.trim(), to: rule.to.trim(), ...common })
     } else if (rule.action === 'append' && rule.path.trim()) {
       let value: unknown = rule.value
       try { value = restoreOriginalPlaceholder(JSON.parse(prepareValueForJsonParse(rule.value.trim()))) } catch { value = rule.value }
-      result.push({ action: 'append', path: rule.path.trim(), value, ...(condition ? { condition } : {}) })
+      result.push({ action: 'append', path: rule.path.trim(), value, ...common })
     } else if (rule.action === 'insert' && rule.path.trim()) {
       let value: unknown = rule.value
       try { value = restoreOriginalPlaceholder(JSON.parse(prepareValueForJsonParse(rule.value.trim()))) } catch { value = rule.value }
       if (!isStrictIntegerString(rule.index)) continue
       const idx = parseInt(rule.index.trim(), 10)
-      result.push({ action: 'insert', path: rule.path.trim(), index: idx, value, ...(condition ? { condition } : {}) })
+      result.push({ action: 'insert', path: rule.path.trim(), index: idx, value, ...common })
     } else if (rule.action === 'regex_replace' && rule.path.trim() && rule.pattern.trim()) {
       const entry: BodyRuleRegexReplace = {
         action: 'regex_replace',
@@ -2774,7 +2841,7 @@ function rulesToBodyRules(rules: EditableBodyRule[]): BodyRule[] | null {
         ...(rule.flags.trim() ? { flags: rule.flags.trim() } : {}),
         ...(isStrictNonNegativeIntegerString(rule.count) ? { count: parseInt(rule.count.trim(), 10) } : {}),
       }
-      result.push({ ...entry, ...(condition ? { condition } : {}) })
+      result.push({ ...entry, ...common })
     }
   }
 
@@ -2785,6 +2852,7 @@ function getBodyValidationErrorForEndpoint(endpointId: string): string | null {
   const rules = getEndpointEditBodyRules(endpointId)
   for (let i = 0; i < rules.length; i++) {
     const rule = rules[i]
+    if (!rule.enabled) continue
     const prefix = `第 ${i + 1} 条请求体规则：`
 
     if (rule.action === 'set' || rule.action === 'drop') {
@@ -2868,6 +2936,7 @@ function editableHeaderRulesChanged(edited: EditableRule[], originalRules: Heade
     const original = originalRules[i]
     if (!original) return true
     if (edited.action !== original.action) return true
+    if (edited.enabled !== (original.enabled !== false)) return true
     if (edited.action === 'set' && original.action === 'set') {
       if (edited.key !== original.key || edited.value !== (original.value || '')) return true
     } else if (edited.action === 'drop' && original.action === 'drop') {
@@ -2956,12 +3025,13 @@ function rulesToHeaderRules(rules: EditableRule[]): HeaderRule[] | null {
 
   for (const rule of rules) {
     const condition = editableConditionToApi(rule.condition)
+    const common = { ...(rule.enabled ? {} : { enabled: false }), ...(condition ? { condition } : {}) }
     if (rule.action === 'set' && rule.key.trim()) {
-      result.push({ action: 'set', key: rule.key.trim(), value: rule.value, ...(condition ? { condition } : {}) })
+      result.push({ action: 'set', key: rule.key.trim(), value: rule.value, ...common })
     } else if (rule.action === 'drop' && rule.key.trim()) {
-      result.push({ action: 'drop', key: rule.key.trim(), ...(condition ? { condition } : {}) })
+      result.push({ action: 'drop', key: rule.key.trim(), ...common })
     } else if (rule.action === 'rename' && rule.from.trim() && rule.to.trim()) {
-      result.push({ action: 'rename', from: rule.from.trim(), to: rule.to.trim(), ...(condition ? { condition } : {}) })
+      result.push({ action: 'rename', from: rule.from.trim(), to: rule.to.trim(), ...common })
     }
   }
 
@@ -2982,6 +3052,7 @@ function getHeaderValidationErrorForEndpoint(endpointId: string): string | null 
   const rules = getEndpointEditRules(endpointId)
   for (let i = 0; i < rules.length; i++) {
     const rule = rules[i]
+    if (!rule.enabled) continue
     const prefix = `第 ${i + 1} 条请求头规则：`
     if (rule.action === 'set' || rule.action === 'drop') {
       const err = validateRuleKeyForEndpoint(endpointId, rule.key, i)
@@ -3007,8 +3078,10 @@ function validateResponseHeaderNameForEndpoint(endpointId: string, name: string,
   }
 
   const rules = getEndpointEditResponseRules(endpointId)
+  const currentRule = rules[index]
+  if (currentRule && !currentRule.enabled) return null
   const duplicate = rules.findIndex(
-    (r, i) => i !== index && (
+    (r, i) => i !== index && r.enabled && (
       ((r.action === 'set' || r.action === 'drop') && r.key.trim().toLowerCase() === trimmedName) ||
       (r.action === 'rename' && (field === 'from'
         ? r.from.trim().toLowerCase() === trimmedName
@@ -3026,6 +3099,7 @@ function getResponseHeaderValidationErrorForEndpoint(endpointId: string): string
   const rules = getEndpointEditResponseRules(endpointId)
   for (let i = 0; i < rules.length; i++) {
     const rule = rules[i]
+    if (!rule.enabled) continue
     const prefix = `第 ${i + 1} 条响应头规则：`
     if (rule.action === 'set' || rule.action === 'drop') {
       const err = validateResponseHeaderNameForEndpoint(endpointId, rule.key, i, 'key')

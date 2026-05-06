@@ -100,6 +100,7 @@ pub(super) fn sample_local_openai_candidate_row() -> StoredMinimalCandidateSelec
             name: "gpt-5-upstream".to_string(),
             priority: 1,
             api_formats: Some(vec!["openai:chat".to_string()]),
+            endpoint_ids: None,
         }]),
         model_supports_streaming: Some(true),
         model_is_active: true,

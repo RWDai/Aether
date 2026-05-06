@@ -694,6 +694,15 @@ fn requested_model_selection_sql() -> String {
               WHERE LOWER(BTRIM(fmt.value)) = ANY($3::text[])
             )
           )
+          AND (
+            mapping.value -> 'endpoint_ids' IS NULL
+            OR jsonb_typeof(mapping.value -> 'endpoint_ids') <> 'array'
+            OR EXISTS (
+              SELECT 1
+              FROM jsonb_array_elements_text(mapping.value -> 'endpoint_ids') AS endpoint(value)
+              WHERE endpoint.value = pe.id
+            )
+          )
       )
     )
   )"#,
@@ -933,6 +942,7 @@ fn parse_embedded_provider_model_mappings(
         name: raw.to_string(),
         priority: 1,
         api_formats: None,
+        endpoint_ids: None,
     }]))
 }
 
@@ -954,6 +964,7 @@ fn parse_provider_model_mappings_array(
                         name: raw.to_string(),
                         priority: 1,
                         api_formats: None,
+                        endpoint_ids: None,
                     });
                 }
             }
@@ -1006,6 +1017,10 @@ fn parse_provider_model_mapping_object_lenient(
             .map(|value| aether_ai_formats::normalize_api_format_alias(&value))
             .collect()
     });
+    let endpoint_ids = parse_string_list(
+        object.get("endpoint_ids").cloned(),
+        "models.provider_model_mappings.endpoint_ids",
+    )?;
 
     Ok(Some(StoredProviderModelMapping {
         name: name.to_string(),
@@ -1015,6 +1030,7 @@ fn parse_provider_model_mapping_object_lenient(
             ))
         })?,
         api_formats,
+        endpoint_ids,
     }))
 }
 
@@ -1119,6 +1135,7 @@ mod tests {
                 name: "gpt-5.2".to_string(),
                 priority: 2,
                 api_formats: Some(vec!["openai:chat".to_string()]),
+                endpoint_ids: None,
             }])
         );
     }
@@ -1134,6 +1151,7 @@ mod tests {
                 name: "gpt-5.2".to_string(),
                 priority: 1,
                 api_formats: None,
+                endpoint_ids: None,
             }])
         );
     }
@@ -1156,11 +1174,13 @@ mod tests {
                     name: "gpt-5.2".to_string(),
                     priority: 1,
                     api_formats: None,
+                    endpoint_ids: None,
                 },
                 StoredProviderModelMapping {
                     name: "gpt-5.2-mini".to_string(),
                     priority: 1,
                     api_formats: None,
+                    endpoint_ids: None,
                 }
             ])
         );

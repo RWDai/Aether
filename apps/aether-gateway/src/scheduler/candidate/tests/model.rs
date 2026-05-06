@@ -37,6 +37,32 @@ fn candidate_model_names_keep_base_and_scoped_mappings() {
 }
 
 #[test]
+fn provider_model_mapping_respects_endpoint_scope() {
+    let mut row = sample_row();
+    row.endpoint_id = "endpoint-selected".to_string();
+    row.model_provider_model_mappings = Some(vec![StoredProviderModelMapping {
+        name: "gpt-4.1-endpoint".to_string(),
+        priority: 1,
+        api_formats: Some(vec!["openai:chat".to_string()]),
+        endpoint_ids: Some(vec!["endpoint-selected".to_string()]),
+    }]);
+
+    assert_eq!(
+        select_provider_model_name(&row, "openai:chat"),
+        "gpt-4.1-endpoint"
+    );
+    assert!(candidate_model_names(&row, "openai:chat").contains("gpt-4.1-endpoint"));
+
+    row.endpoint_id = "endpoint-other".to_string();
+
+    assert_eq!(
+        select_provider_model_name(&row, "openai:chat"),
+        "gpt-4.1-upstream"
+    );
+    assert!(!candidate_model_names(&row, "openai:chat").contains("gpt-4.1-endpoint"));
+}
+
+#[test]
 fn resolves_mapping_matched_model_from_key_allowed_models() {
     let mut row = sample_row();
     row.key_allowed_models = Some(vec!["gpt-4.1-upstream".to_string()]);
@@ -74,6 +100,7 @@ fn resolves_requested_global_model_from_provider_model_alias() {
         name: "gpt-5.2".to_string(),
         priority: 1,
         api_formats: Some(vec!["openai:chat".to_string()]),
+        endpoint_ids: None,
     }]);
 
     let resolved = resolve_requested_global_model_name(&[row], "gpt-5.2", "openai:chat");
@@ -127,6 +154,7 @@ async fn enumerate_minimal_candidate_selection_resolves_provider_model_alias() {
         name: "gpt-5.2".to_string(),
         priority: 1,
         api_formats: Some(vec!["openai:chat".to_string()]),
+        endpoint_ids: None,
     }]);
 
     let candidates = Arc::new(InMemoryMinimalCandidateSelectionReadRepository::seed(vec![
@@ -150,6 +178,47 @@ async fn enumerate_minimal_candidate_selection_resolves_provider_model_alias() {
     assert_eq!(selection.len(), 1);
     assert_eq!(selection[0].global_model_name, "gpt-5");
     assert_eq!(selection[0].selected_provider_model_name, "gpt-5.2");
+}
+
+#[tokio::test]
+async fn enumerate_minimal_candidate_selection_filters_endpoint_scoped_alias_rows() {
+    let mut selected = sample_row();
+    selected.endpoint_id = "endpoint-selected".to_string();
+    selected.key_id = "key-selected".to_string();
+    selected.global_model_name = "gpt-5".to_string();
+    selected.model_provider_model_name = "gpt-5-upstream".to_string();
+    selected.model_provider_model_mappings = Some(vec![StoredProviderModelMapping {
+        name: "gpt-5-alias".to_string(),
+        priority: 1,
+        api_formats: Some(vec!["openai:chat".to_string()]),
+        endpoint_ids: Some(vec!["endpoint-selected".to_string()]),
+    }]);
+
+    let mut other = selected.clone();
+    other.endpoint_id = "endpoint-other".to_string();
+    other.key_id = "key-other".to_string();
+
+    let candidates = Arc::new(InMemoryMinimalCandidateSelectionReadRepository::seed(vec![
+        selected, other,
+    ]));
+    let quotas = Arc::new(InMemoryProviderQuotaRepository::seed(vec![]));
+    let state = GatewayDataState::with_candidate_selection_and_quota_for_tests(candidates, quotas);
+
+    let selection = enumerate_minimal_candidate_selection_with_required_capabilities(
+        &state,
+        "openai:chat",
+        "gpt-5-alias",
+        false,
+        None,
+        None,
+        false,
+    )
+    .await
+    .expect("selection should succeed");
+
+    assert_eq!(selection.len(), 1);
+    assert_eq!(selection[0].endpoint_id, "endpoint-selected");
+    assert_eq!(selection[0].selected_provider_model_name, "gpt-5-alias");
 }
 
 #[tokio::test]
@@ -177,6 +246,7 @@ async fn enumerate_minimal_candidate_selection_keeps_only_resolved_global_model_
         name: "claude-sonnet-upstream".to_string(),
         priority: 1,
         api_formats: Some(vec!["openai:chat".to_string()]),
+        endpoint_ids: None,
     }]);
 
     let candidates = Arc::new(InMemoryMinimalCandidateSelectionReadRepository::seed(vec![
@@ -215,6 +285,7 @@ async fn enumerate_minimal_candidate_selection_allows_resolved_global_model_in_a
         name: "gpt-5-upstream".to_string(),
         priority: 1,
         api_formats: Some(vec!["openai:chat".to_string()]),
+        endpoint_ids: None,
     }]);
 
     let candidates = Arc::new(InMemoryMinimalCandidateSelectionReadRepository::seed(vec![

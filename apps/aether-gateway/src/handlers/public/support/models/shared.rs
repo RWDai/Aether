@@ -114,14 +114,23 @@ fn auth_snapshot_allows_model_for_models(
 
 fn mapping_scope_matches_for_models(
     mapping: &StoredProviderModelMapping,
+    row: &StoredMinimalCandidateSelectionRow,
     api_format: &str,
 ) -> bool {
-    let Some(api_formats) = mapping.api_formats.as_ref() else {
-        return true;
-    };
-    api_formats
-        .iter()
-        .any(|value| value.trim().eq_ignore_ascii_case(api_format))
+    let api_format_matches = mapping.api_formats.as_ref().is_none_or(|api_formats| {
+        api_formats
+            .iter()
+            .any(|value| value.trim().eq_ignore_ascii_case(api_format))
+    });
+    if !api_format_matches {
+        return false;
+    }
+
+    mapping.endpoint_ids.as_ref().is_none_or(|endpoint_ids| {
+        endpoint_ids
+            .iter()
+            .any(|endpoint_id| endpoint_id == &row.endpoint_id)
+    })
 }
 
 fn candidate_model_names_for_models(
@@ -131,7 +140,7 @@ fn candidate_model_names_for_models(
     let mut names = std::collections::BTreeSet::from([row.model_provider_model_name.clone()]);
     if let Some(mappings) = row.model_provider_model_mappings.as_ref() {
         for mapping in mappings {
-            if mapping_scope_matches_for_models(mapping, api_format) {
+            if mapping_scope_matches_for_models(mapping, row, api_format) {
                 names.insert(mapping.name.clone());
             }
         }

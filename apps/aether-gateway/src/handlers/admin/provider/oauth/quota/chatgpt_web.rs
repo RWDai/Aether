@@ -99,7 +99,9 @@ fn build_chatgpt_web_quota_headers(
     headers
 }
 
-fn chatgpt_web_auth_config(transport: &AdminGatewayProviderTransportSnapshot) -> Option<serde_json::Value> {
+fn chatgpt_web_auth_config(
+    transport: &AdminGatewayProviderTransportSnapshot,
+) -> Option<serde_json::Value> {
     transport
         .key
         .decrypted_auth_config
@@ -205,17 +207,15 @@ fn normalize_chatgpt_web_image_quota_limit(
     };
 
     let remaining = chatgpt_web_json_number(object.get("image_quota_remaining"));
-    let explicit_limit = chatgpt_web_json_number(object.get("image_quota_total"))
-        .filter(|value| *value > 0.0);
+    let explicit_limit =
+        chatgpt_web_json_number(object.get("image_quota_total")).filter(|value| *value > 0.0);
     let plan_type = chatgpt_web_json_string(object.get("plan_type"));
-    let is_free_plan = plan_type
-        .is_some_and(|value| value.trim().eq_ignore_ascii_case("free"));
+    let is_free_plan = plan_type.is_some_and(|value| value.trim().eq_ignore_ascii_case("free"));
     let limit = if is_free_plan {
         Some(CHATGPT_WEB_FREE_IMAGE_QUOTA_LIMIT)
     } else {
-        explicit_limit.or_else(|| {
-            infer_chatgpt_web_image_quota_limit(plan_type, remaining, existing_limit)
-        })
+        explicit_limit
+            .or_else(|| infer_chatgpt_web_image_quota_limit(plan_type, remaining, existing_limit))
     };
 
     if let Some(limit) = limit {
@@ -397,8 +397,10 @@ pub(crate) async fn refresh_chatgpt_web_provider_quota_locally(
             .map(|duration| duration.as_secs())
             .unwrap_or(0);
         let mut metadata_update = None::<serde_json::Value>;
-        let (mut oauth_invalid_at_unix_secs, mut oauth_invalid_reason) =
-            (key.oauth_invalid_at_unix_secs, key.oauth_invalid_reason.clone());
+        let (mut oauth_invalid_at_unix_secs, mut oauth_invalid_reason) = (
+            key.oauth_invalid_at_unix_secs,
+            key.oauth_invalid_reason.clone(),
+        );
         let mut status = "error".to_string();
         let mut message = None::<String>;
 

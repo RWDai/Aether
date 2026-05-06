@@ -672,18 +672,22 @@ fn chatgpt_web_is_image_quota_feature(value: &str) -> bool {
     )
 }
 
-fn chatgpt_web_feature_number(
-    feature: &serde_json::Value,
-    fields: &[&str],
-) -> Option<f64> {
+fn chatgpt_web_feature_number(feature: &serde_json::Value, fields: &[&str]) -> Option<f64> {
     fields
         .iter()
         .find_map(|field| feature.get(*field).and_then(coerce_json_f64))
 }
 
-fn parse_chatgpt_web_reset_timestamp(value: Option<&serde_json::Value>, observed_at: u64) -> Option<u64> {
+fn parse_chatgpt_web_reset_timestamp(
+    value: Option<&serde_json::Value>,
+    observed_at: u64,
+) -> Option<u64> {
     let value = value?;
-    if let Some(text) = value.as_str().map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(text) = value
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(text) {
             return u64::try_from(parsed.timestamp()).ok();
         }
@@ -769,10 +773,16 @@ pub fn parse_chatgpt_web_conversation_init_response(
             .or_else(|| root.get("planType"))
             .or_else(|| root.get("subscription_plan")),
     ) {
-        result.insert("plan_type".to_string(), json!(plan_type.to_ascii_lowercase()));
+        result.insert(
+            "plan_type".to_string(),
+            json!(plan_type.to_ascii_lowercase()),
+        );
     }
     result.insert("blocked_features".to_string(), json!(blocked_features));
-    result.insert("limits_progress".to_string(), serde_json::Value::Array(limits_progress));
+    result.insert(
+        "limits_progress".to_string(),
+        serde_json::Value::Array(limits_progress),
+    );
 
     if image_blocked {
         result.insert("image_quota_blocked".to_string(), json!(true));
@@ -817,7 +827,11 @@ pub fn parse_chatgpt_web_conversation_init_response(
                 "currentUsage",
             ],
         )
-        .or_else(|| total.zip(remaining).map(|(total, remaining)| (total - remaining).max(0.0)));
+        .or_else(|| {
+            total
+                .zip(remaining)
+                .map(|(total, remaining)| (total - remaining).max(0.0))
+        });
         let reset_source = image_limit
             .get("reset_at")
             .or_else(|| image_limit.get("resetAt"))

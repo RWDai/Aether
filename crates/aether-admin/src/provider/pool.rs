@@ -251,9 +251,9 @@ pub fn admin_pool_key_account_quota_exhausted(
             if admin_pool_json_bool(bucket.get("image_quota_blocked")) == Some(true) {
                 return true;
             }
-            if admin_pool_json_f64(bucket.get("image_quota_remaining")).is_some_and(|value| {
-                value <= 0.0
-            }) {
+            if admin_pool_json_f64(bucket.get("image_quota_remaining"))
+                .is_some_and(|value| value <= 0.0)
+            {
                 return true;
             }
             match (

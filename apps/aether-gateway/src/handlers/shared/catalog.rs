@@ -851,9 +851,12 @@ fn build_chatgpt_web_quota_status_snapshot(
     let used = metadata
         .get("image_quota_used")
         .and_then(admin_provider_quota_pure::coerce_json_f64)
-        .or_else(|| limit.zip(remaining).map(|(limit, remaining)| (limit - remaining).max(0.0)));
-    let reset_at =
-        provider_quota_timestamp_unix_secs(metadata.get("image_quota_reset_at"));
+        .or_else(|| {
+            limit
+                .zip(remaining)
+                .map(|(limit, remaining)| (limit - remaining).max(0.0))
+        });
+    let reset_at = provider_quota_timestamp_unix_secs(metadata.get("image_quota_reset_at"));
     let reset_seconds = quota_window_reset_seconds(observed_at_unix_secs, reset_at);
     let plan_type = metadata
         .get("plan_type")
@@ -865,9 +868,9 @@ fn build_chatgpt_web_quota_status_snapshot(
         .get("image_quota_blocked")
         .and_then(admin_provider_quota_pure::coerce_json_bool)
         == Some(true);
-    let usage_ratio = used.zip(limit).and_then(|(used, limit)| {
-        (limit > 0.0).then_some((used / limit).clamp(0.0, 1.0))
-    });
+    let usage_ratio = used
+        .zip(limit)
+        .and_then(|(used, limit)| (limit > 0.0).then_some((used / limit).clamp(0.0, 1.0)));
     let remaining_ratio = remaining.zip(limit).and_then(|(remaining, limit)| {
         (limit > 0.0).then_some((remaining / limit).clamp(0.0, 1.0))
     });

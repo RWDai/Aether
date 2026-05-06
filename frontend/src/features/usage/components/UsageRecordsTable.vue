@@ -295,17 +295,17 @@
     </div>
 
     <!-- 桌面端表格视图 -->
-    <Table class="hidden md:table table-fixed w-full">
+    <Table :class="['hidden md:table table-fixed w-full', isAdmin ? 'min-w-[1120px]' : 'min-w-[960px]']">
       <colgroup v-if="isAdmin">
         <col class="w-[8%]">
         <col class="w-[12%]">
-        <col class="w-[20%]">
-        <col class="w-[23%]">
-        <col class="w-[12%]">
-        <col class="w-[5%]">
-        <col class="w-[9%]">
-        <col class="w-[5%]">
+        <col class="w-[16%]">
+        <col class="w-[16%]">
+        <col class="w-[17%]">
         <col class="w-[6%]">
+        <col class="w-[10%]">
+        <col class="w-[6%]">
+        <col class="w-[9%]">
       </colgroup>
       <colgroup v-else>
         <col class="w-[9%]">
@@ -348,7 +348,7 @@
             密钥
           </TableHead>
           <SortableTableHead
-            class="h-12 font-semibold w-[20%]"
+            class="h-12 font-semibold w-[16%]"
             column-key="model"
             :sortable="false"
             :filter-active="filterModel !== '__all__'"
@@ -367,7 +367,7 @@
           </SortableTableHead>
           <SortableTableHead
             v-if="isAdmin"
-            class="h-12 font-semibold w-[23%]"
+            class="h-12 font-semibold w-[16%]"
             column-key="provider"
             :sortable="false"
             :filter-active="filterProvider !== '__all__'"
@@ -385,7 +385,7 @@
             </template>
           </SortableTableHead>
           <SortableTableHead
-            class="h-12 font-semibold w-[12%]"
+            class="h-12 font-semibold w-[17%]"
             column-key="api_format"
             :sortable="false"
             :filter-active="filterApiFormat !== '__all__'"
@@ -403,7 +403,7 @@
             </template>
           </SortableTableHead>
           <SortableTableHead
-            class="h-12 font-semibold w-[5%] text-center"
+            class="h-12 font-semibold w-[6%] text-center"
             column-key="status"
             :sortable="false"
             align="center"
@@ -421,13 +421,13 @@
               />
             </template>
           </SortableTableHead>
-          <TableHead class="h-12 font-semibold w-[9%] text-center">
+          <TableHead class="h-12 font-semibold w-[10%] text-center">
             Tokens
           </TableHead>
-          <TableHead class="h-12 font-semibold w-[5%] text-right">
+          <TableHead class="h-12 font-semibold w-[6%] text-right">
             费用
           </TableHead>
-          <TableHead class="h-12 font-semibold w-[6%] text-right">
+          <TableHead class="h-12 font-semibold w-[9%] text-right">
             <div class="flex flex-col items-end text-xs gap-0.5">
               <span>首字</span>
               <span class="text-muted-foreground font-normal">总耗时</span>
@@ -497,7 +497,7 @@
             </div>
           </TableCell>
           <TableCell
-            class="font-medium py-4 w-[20%]"
+            class="font-medium py-4 w-[16%]"
             :title="getModelTooltip(record)"
           >
             <div
@@ -528,7 +528,7 @@
           </TableCell>
           <TableCell
             v-if="isAdmin"
-            class="py-4 w-[23%]"
+            class="py-4 w-[16%]"
           >
             <div class="flex min-w-0 items-center gap-1">
               <div class="flex min-w-0 flex-col text-xs gap-0.5">
@@ -584,7 +584,7 @@
             </div>
           </TableCell>
           <TableCell
-            class="py-4 w-[12%]"
+            class="py-4 w-[17%]"
             :title="getApiFormatTooltip(record)"
           >
             <!-- 有格式转换或同族格式差异：两行显示 -->
@@ -619,7 +619,7 @@
               class="text-muted-foreground text-xs"
             >-</span>
           </TableCell>
-          <TableCell class="text-center py-4 w-[5%]">
+          <TableCell class="text-center py-4 w-[6%]">
             <!-- 优先显示请求状态 -->
             <Badge
               v-if="getDisplayStatus(record) === 'pending'"
@@ -670,7 +670,7 @@
               {{ getStreamModeLabel(record) }}
             </Badge>
           </TableCell>
-          <TableCell class="py-4 w-[9%]">
+          <TableCell class="py-4 w-[10%]">
             <div class="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] gap-x-1 text-xs leading-tight tabular-nums">
               <span class="justify-self-end whitespace-nowrap text-right">
                 {{ formatTokens(getRecordEffectiveInputTokens(record)) }}
@@ -704,7 +704,7 @@
               </span>
             </div>
           </TableCell>
-          <TableCell class="text-right py-4 w-[5%]">
+          <TableCell class="text-right py-4 w-[6%]">
             <div class="flex flex-col items-end text-xs gap-0.5">
               <span class="text-primary font-medium">{{ formatCurrency(record.cost || 0) }}</span>
               <span
@@ -715,7 +715,7 @@
               </span>
             </div>
           </TableCell>
-          <TableCell class="text-right py-4 w-[6%]">
+          <TableCell class="text-right py-4 w-[9%]">
             <!-- pending 状态：只显示增长的总时间 -->
             <div
               v-if="getDisplayStatus(record) === 'pending'"

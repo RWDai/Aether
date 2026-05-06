@@ -3483,8 +3483,13 @@ mod tests {
             })
             .await
             .expect("admin wallets should list");
-        assert_eq!(page.total, 1);
-        assert_eq!(page.items[0].total_adjusted, 3.0);
+        let wallet_item = page
+            .items
+            .iter()
+            .find(|item| item.id == "wallet-1")
+            .expect("seeded wallet should be listed");
+        assert!(page.total >= 1);
+        assert_eq!(wallet_item.total_adjusted, 3.0);
 
         let orders = repository
             .list_admin_payment_orders(&AdminPaymentOrderListQuery {

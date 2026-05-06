@@ -22,7 +22,17 @@ pub fn openai_image_transport_unsupported_reason(
     transport: &GatewayProviderTransportSnapshot,
     api_format: &str,
 ) -> Option<&'static str> {
-    local_standard_transport_unsupported_reason_with_network(transport, api_format)
+    let reason = local_standard_transport_unsupported_reason_with_network(transport, api_format);
+    if reason == Some("transport_provider_type_unsupported")
+        && transport
+            .provider
+            .provider_type
+            .trim()
+            .eq_ignore_ascii_case("chatgpt_web")
+    {
+        return None;
+    }
+    reason
 }
 
 pub fn resolve_openai_image_auth(
@@ -68,7 +78,7 @@ mod tests {
 
     use super::{
         build_openai_image_headers, build_openai_image_upstream_url,
-        ProviderOpenAiImageHeadersInput,
+        openai_image_transport_unsupported_reason, ProviderOpenAiImageHeadersInput,
     };
     use crate::snapshot::{
         GatewayProviderTransportEndpoint, GatewayProviderTransportKey,
@@ -135,6 +145,17 @@ mod tests {
         let url = build_openai_image_upstream_url(&sample_transport(), Some("trace=1"));
 
         assert_eq!(url, "https://api.openai.com/v1/responses?trace=1");
+    }
+
+    #[test]
+    fn chatgpt_web_is_supported_by_dedicated_openai_image_transport_policy() {
+        let mut transport = sample_transport();
+        transport.provider.provider_type = "chatgpt_web".to_string();
+
+        assert_eq!(
+            openai_image_transport_unsupported_reason(&transport, "openai:image"),
+            None
+        );
     }
 
     #[test]

@@ -180,7 +180,8 @@ type = "long_text"
 
 [[table.ldap_configs.columns]]
 name = "user_search_filter"
-type = "long_text"
+type = "text"
+length = 512
 default = "(uid={username})"
 
 [[table.ldap_configs.columns]]

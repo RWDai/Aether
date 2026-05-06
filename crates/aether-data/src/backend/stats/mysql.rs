@@ -56,7 +56,7 @@ async fn next_mysql_stats_hourly_bucket(
     }
     let next_bucket: Option<i64> = sqlx::query_scalar(
         r#"
-SELECT MIN(FLOOR(created_at_unix_ms / 3600000) * 3600)
+SELECT CAST(MIN(FLOOR(created_at_unix_ms / 3600000) * 3600) AS SIGNED)
 FROM `usage`
 WHERE created_at_unix_ms >= ?
   AND created_at_unix_ms < ?
@@ -88,7 +88,7 @@ async fn next_mysql_stats_daily_bucket(
     }
     let next_bucket: Option<i64> = sqlx::query_scalar(
         r#"
-SELECT MIN(FLOOR(created_at_unix_ms / 86400000) * 86400)
+SELECT CAST(MIN(FLOOR(created_at_unix_ms / 86400000) * 86400) AS SIGNED)
 FROM `usage`
 WHERE created_at_unix_ms >= ?
   AND created_at_unix_ms < ?
@@ -106,19 +106,19 @@ WHERE created_at_unix_ms >= ?
 
 const MYSQL_STATS_AGGREGATE_SQL: &str = r#"
 SELECT
-  COUNT(*) AS total_requests,
-  COALESCE(SUM(CASE
+  CAST(COUNT(*) AS SIGNED) AS total_requests,
+  CAST(COALESCE(SUM(CASE
     WHEN status = 'failed'
       OR status_code >= 400
       OR (error_category IS NOT NULL AND error_category <> '')
-    THEN 1 ELSE 0 END), 0) AS error_requests,
-  COALESCE(SUM(input_tokens), 0) AS input_tokens,
-  COALESCE(SUM(output_tokens), 0) AS output_tokens,
-  COALESCE(SUM(cache_creation_input_tokens), 0) AS cache_creation_tokens,
-  COALESCE(SUM(cache_read_input_tokens), 0) AS cache_read_tokens,
-  COALESCE(SUM(total_cost_usd), 0.0) AS total_cost,
-  COALESCE(SUM(actual_total_cost_usd), 0.0) AS actual_total_cost,
-  COALESCE(AVG(response_time_ms), 0.0) AS avg_response_time_ms
+    THEN 1 ELSE 0 END), 0) AS SIGNED) AS error_requests,
+  CAST(COALESCE(SUM(input_tokens), 0) AS SIGNED) AS input_tokens,
+  CAST(COALESCE(SUM(output_tokens), 0) AS SIGNED) AS output_tokens,
+  CAST(COALESCE(SUM(cache_creation_input_tokens), 0) AS SIGNED) AS cache_creation_tokens,
+  CAST(COALESCE(SUM(cache_read_input_tokens), 0) AS SIGNED) AS cache_read_tokens,
+  CAST(COALESCE(SUM(total_cost_usd), 0.0) AS DOUBLE) AS total_cost,
+  CAST(COALESCE(SUM(actual_total_cost_usd), 0.0) AS DOUBLE) AS actual_total_cost,
+  CAST(COALESCE(AVG(response_time_ms), 0.0) AS DOUBLE) AS avg_response_time_ms
 FROM `usage`
 WHERE created_at_unix_ms >= ?
   AND created_at_unix_ms < ?

@@ -5,6 +5,8 @@ use serde_json::Value;
 
 pub const EXECUTION_REQUEST_FOLLOW_REDIRECTS_HEADER: &str = "x-aether-execution-follow-redirects";
 pub const EXECUTION_REQUEST_HTTP1_ONLY_HEADER: &str = "x-aether-execution-http1-only";
+pub const EXECUTION_REQUEST_ACCEPT_INVALID_CERTS_HEADER: &str =
+    "x-aether-execution-accept-invalid-certs";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]

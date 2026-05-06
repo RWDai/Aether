@@ -95,12 +95,12 @@ WHERE ledgers.billing_date = $1
 const MYSQL_SELECT_WALLET_DAILY_USAGE_AGGREGATES_SQL: &str = r#"
 SELECT
   usage_settlement_snapshots.wallet_id AS wallet_id,
-  COUNT(*) AS total_requests,
-  COALESCE(SUM(`usage`.total_cost_usd), 0) AS total_cost_usd,
-  COALESCE(SUM(`usage`.input_tokens), 0) AS input_tokens,
-  COALESCE(SUM(`usage`.output_tokens), 0) AS output_tokens,
-  COALESCE(SUM(`usage`.cache_creation_input_tokens), 0) AS cache_creation_tokens,
-  COALESCE(SUM(`usage`.cache_read_input_tokens), 0) AS cache_read_tokens,
+  CAST(COUNT(*) AS SIGNED) AS total_requests,
+  CAST(COALESCE(SUM(`usage`.total_cost_usd), 0) AS DOUBLE) AS total_cost_usd,
+  CAST(COALESCE(SUM(`usage`.input_tokens), 0) AS SIGNED) AS input_tokens,
+  CAST(COALESCE(SUM(`usage`.output_tokens), 0) AS SIGNED) AS output_tokens,
+  CAST(COALESCE(SUM(`usage`.cache_creation_input_tokens), 0) AS SIGNED) AS cache_creation_tokens,
+  CAST(COALESCE(SUM(`usage`.cache_read_input_tokens), 0) AS SIGNED) AS cache_read_tokens,
   MIN(COALESCE(usage_settlement_snapshots.finalized_at, `usage`.finalized_at)) AS first_finalized_at,
   MAX(COALESCE(usage_settlement_snapshots.finalized_at, `usage`.finalized_at)) AS last_finalized_at
 FROM `usage`

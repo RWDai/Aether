@@ -26,7 +26,7 @@ impl ProviderOAuthService {
             .with_adapter(Arc::new(KiroProviderOAuthAdapter::default()))
             .with_adapter(Arc::new(CodexProviderOAuthAdapter::default()))
             .with_adapter(Arc::new(AntigravityProviderOAuthAdapter::default()));
-        for provider_type in ["claude_code", "gemini_cli"] {
+        for provider_type in ["claude_code", "chatgpt_web", "gemini_cli"] {
             if let Some(adapter) = GenericProviderOAuthAdapter::for_provider_type(provider_type) {
                 service = service.with_adapter(Arc::new(adapter));
             }
@@ -121,7 +121,14 @@ mod tests {
     fn builtin_provider_service_registers_supported_provider_types() {
         let service = ProviderOAuthService::with_builtin_adapters();
 
-        for provider_type in ["claude_code", "codex", "gemini_cli", "antigravity", "kiro"] {
+        for provider_type in [
+            "claude_code",
+            "codex",
+            "chatgpt_web",
+            "gemini_cli",
+            "antigravity",
+            "kiro",
+        ] {
             assert!(
                 service.adapter(provider_type).is_ok(),
                 "{provider_type} adapter should be registered"

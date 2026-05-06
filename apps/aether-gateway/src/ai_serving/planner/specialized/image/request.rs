@@ -14,9 +14,9 @@ use crate::ai_serving::transport::{
 };
 use crate::ai_serving::{
     apply_codex_openai_responses_special_body_edits, apply_codex_openai_responses_special_headers,
-    build_openai_image_provider_request_body, default_model_for_openai_image_operation,
-    normalize_openai_image_request, CandidateFailureDiagnostic, GatewayProviderTransportSnapshot,
-    PlannerAppState,
+    build_chatgpt_web_image_request_body, build_openai_image_provider_request_body,
+    default_model_for_openai_image_operation, normalize_openai_image_request,
+    CandidateFailureDiagnostic, GatewayProviderTransportSnapshot, PlannerAppState,
 };
 use crate::AppState;
 
@@ -122,15 +122,33 @@ pub(super) async fn resolve_local_openai_image_candidate_payload_parts(
         return None;
     };
 
-    let upstream_url = build_openai_image_upstream_url(transport, parts.uri.query());
-    let mut provider_request_body = build_openai_image_provider_request_body(&normalized_request);
-    apply_codex_openai_responses_special_body_edits(
-        &mut provider_request_body,
-        transport.provider.provider_type.as_str(),
-        spec_metadata.api_format,
-        transport.endpoint.body_rules.as_ref(),
-        Some(candidate.key_id.as_str()),
-    );
+    let is_chatgpt_web = transport
+        .provider
+        .provider_type
+        .trim()
+        .eq_ignore_ascii_case("chatgpt_web");
+    let upstream_url = if is_chatgpt_web {
+        chatgpt_web_image_internal_url(&transport.endpoint.base_url)
+    } else {
+        build_openai_image_upstream_url(transport, parts.uri.query())
+    };
+    let mut provider_request_body = if is_chatgpt_web {
+        match build_chatgpt_web_image_request_body(parts, body_json, body_base64) {
+            Ok(body) => body,
+            Err(err) => err.to_error_json(),
+        }
+    } else {
+        build_openai_image_provider_request_body(&normalized_request)
+    };
+    if !is_chatgpt_web {
+        apply_codex_openai_responses_special_body_edits(
+            &mut provider_request_body,
+            transport.provider.provider_type.as_str(),
+            spec_metadata.api_format,
+            transport.endpoint.body_rules.as_ref(),
+            Some(candidate.key_id.as_str()),
+        );
+    }
 
     let Some(mut provider_request_headers) =
         build_openai_image_headers(ProviderOpenAiImageHeadersInput {
@@ -159,15 +177,19 @@ pub(super) async fn resolve_local_openai_image_candidate_payload_parts(
         .await;
         return None;
     };
-    apply_codex_openai_responses_special_headers(
-        &mut provider_request_headers,
-        &provider_request_body,
-        &parts.headers,
-        transport.provider.provider_type.as_str(),
-        spec_metadata.api_format,
-        Some(trace_id),
-        transport.key.decrypted_auth_config.as_deref(),
-    );
+    if is_chatgpt_web {
+        provider_request_headers.insert("x-aether-chatgpt-web-image".to_string(), "1".to_string());
+    } else {
+        apply_codex_openai_responses_special_headers(
+            &mut provider_request_headers,
+            &provider_request_body,
+            &parts.headers,
+            transport.provider.provider_type.as_str(),
+            spec_metadata.api_format,
+            Some(trace_id),
+            transport.key.decrypted_auth_config.as_deref(),
+        );
+    }
     let requested_model = normalized_request
         .requested_model
         .clone()
@@ -182,6 +204,12 @@ pub(super) async fn resolve_local_openai_image_candidate_payload_parts(
         .unwrap_or_default()
         .to_string();
 
+    let input_summary = if is_chatgpt_web {
+        provider_request_body.clone()
+    } else {
+        normalized_request.summary_json
+    };
+
     Some(LocalOpenAiImageCandidatePayloadParts {
         transport: Arc::clone(transport),
         auth_header,
@@ -191,6 +219,16 @@ pub(super) async fn resolve_local_openai_image_candidate_payload_parts(
         provider_request_headers,
         provider_request_body,
         upstream_url,
-        input_summary: normalized_request.summary_json,
+        input_summary,
     })
+}
+
+fn chatgpt_web_image_internal_url(base_url: &str) -> String {
+    let base_url = base_url.trim().trim_end_matches('/');
+    let base_url = if base_url.is_empty() {
+        "https://chatgpt.com"
+    } else {
+        base_url
+    };
+    format!("{base_url}/__aether/chatgpt-web-image")
 }

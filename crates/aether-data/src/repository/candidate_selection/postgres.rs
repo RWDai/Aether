@@ -81,6 +81,11 @@ WHERE p.is_active = TRUE
       AND LOWER($3) IN ('openai:responses', 'openai:responses:compact', 'openai:image')
     )
     OR (
+      LOWER(BTRIM(p.provider_type)) = 'chatgpt_web'
+      AND LOWER(BTRIM(pak.auth_type)) IN ('oauth', 'bearer')
+      AND LOWER($3) = 'openai:image'
+    )
+    OR (
       LOWER(BTRIM(p.provider_type)) = 'claude_code'
       AND LOWER(BTRIM(pak.auth_type)) = 'oauth'
       AND LOWER($3) = 'claude:messages'
@@ -117,6 +122,7 @@ WHERE p.is_active = TRUE
     )
     OR (
       LOWER(BTRIM(p.provider_type)) NOT IN (
+        'chatgpt_web',
         'claude_code',
         'codex',
         'gemini_cli',
@@ -258,6 +264,11 @@ WHERE p.is_active = TRUE
       AND LOWER($4) IN ('openai:responses', 'openai:responses:compact', 'openai:image')
     )
     OR (
+      LOWER(BTRIM(p.provider_type)) = 'chatgpt_web'
+      AND LOWER(BTRIM(pak.auth_type)) IN ('oauth', 'bearer')
+      AND LOWER($4) = 'openai:image'
+    )
+    OR (
       LOWER(BTRIM(p.provider_type)) = 'claude_code'
       AND LOWER(BTRIM(pak.auth_type)) = 'oauth'
       AND LOWER($4) = 'claude:messages'
@@ -294,6 +305,7 @@ WHERE p.is_active = TRUE
     )
     OR (
       LOWER(BTRIM(p.provider_type)) NOT IN (
+        'chatgpt_web',
         'claude_code',
         'codex',
         'gemini_cli',
@@ -434,6 +446,11 @@ WHERE p.is_active = TRUE
       AND LOWER($6) IN ('openai:responses', 'openai:responses:compact', 'openai:image')
     )
     OR (
+      LOWER(BTRIM(p.provider_type)) = 'chatgpt_web'
+      AND LOWER(BTRIM(pak.auth_type)) IN ('oauth', 'bearer')
+      AND LOWER($6) = 'openai:image'
+    )
+    OR (
       LOWER(BTRIM(p.provider_type)) = 'claude_code'
       AND LOWER(BTRIM(pak.auth_type)) = 'oauth'
       AND LOWER($6) = 'claude:messages'
@@ -470,6 +487,7 @@ WHERE p.is_active = TRUE
     )
     OR (
       LOWER(BTRIM(p.provider_type)) NOT IN (
+        'chatgpt_web',
         'claude_code',
         'codex',
         'gemini_cli',
@@ -1007,6 +1025,8 @@ mod tests {
     use super::{
         parse_provider_model_mappings, parse_string_list, requested_model_selection_page_sql,
         requested_model_selection_sql, SqlxMinimalCandidateSelectionReadRepository,
+        LIST_FOR_EXACT_API_FORMAT_AND_GLOBAL_MODEL_SQL, LIST_FOR_EXACT_API_FORMAT_SQL,
+        LIST_POOL_KEYS_FOR_GROUP_SQL,
     };
     use crate::driver::postgres::{PostgresPoolConfig, PostgresPoolFactory};
     use crate::repository::candidate_selection::StoredProviderModelMapping;
@@ -1040,6 +1060,21 @@ mod tests {
         assert!(!sql.contains("json_array_elements_text(gm.config -> 'model_mappings')"));
         assert!(sql.contains("ORDER BY\n  global_model_name ASC,"));
         assert!(!sql.contains("AND gm.name = $2\n  AND"));
+    }
+
+    #[test]
+    fn candidate_selection_sql_allows_chatgpt_web_image_auth() {
+        let requested_model_sql = requested_model_selection_sql();
+        for sql in [
+            LIST_FOR_EXACT_API_FORMAT_SQL,
+            LIST_FOR_EXACT_API_FORMAT_AND_GLOBAL_MODEL_SQL,
+            LIST_POOL_KEYS_FOR_GROUP_SQL,
+            requested_model_sql.as_str(),
+        ] {
+            assert!(sql.contains("LOWER(BTRIM(p.provider_type)) = 'chatgpt_web'"));
+            assert!(sql.contains("LOWER(BTRIM(pak.auth_type)) IN ('oauth', 'bearer')"));
+            assert!(sql.contains("'chatgpt_web',"));
+        }
     }
 
     #[test]

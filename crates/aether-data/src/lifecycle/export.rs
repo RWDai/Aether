@@ -1826,6 +1826,7 @@ fn mysql_value_to_json(row: &sqlx::mysql::MySqlRow, index: usize) -> Result<Valu
     }
 
     match raw.type_info().name().to_ascii_uppercase().as_str() {
+        "BOOL" | "BOOLEAN" => Ok(Value::Bool(row.try_get::<bool, _>(index).map_sql_err()?)),
         "TINYINT" | "TINY" | "SMALLINT" | "SHORT" | "MEDIUMINT" | "INT24" | "INT" | "INTEGER"
         | "LONG" | "BIGINT" | "LONGLONG" | "YEAR" => {
             Ok(Value::from(row.try_get::<i64, _>(index).map_sql_err()?))
@@ -1869,8 +1870,8 @@ mod tests {
         export_postgres_core_jsonl, export_sqlite_core_jsonl, import_mysql_jsonl,
         import_postgres_jsonl, import_sqlite_jsonl, mysql_core_export_domains,
         normalize_postgres_import_payload, postgres_core_export_domains,
-        sqlite_core_export_domains, DataExportManifest, DataExportRecord, ExportDomain, ExportRow,
-        PostgresImportColumn,
+        sqlite_core_export_domains, DataExportManifest, DataExportRecord, DataImportPlan,
+        ExportDomain, ExportRow, PostgresImportColumn,
     };
     use crate::driver::postgres::{PostgresPoolConfig, PostgresPoolFactory};
     use crate::lifecycle::migrate::{
@@ -2266,7 +2267,10 @@ VALUES ('request-1', 'request-1', 'user-1', 'Provider One', 'gpt-test', 'complet
         let endpoint_id = format!("export-endpoint-{suffix}");
         let global_model_id = format!("export-global-model-{suffix}");
         let model_id = format!("export-model-{suffix}");
+        let billing_rule_id = format!("export-billing-rule-{suffix}");
+        let collector_id = format!("export-collector-{suffix}");
         let config_id = format!("export-config-{suffix}");
+        let config_key = format!("export.config.{suffix}");
         let wallet_id = format!("export-wallet-{suffix}");
         let request_id = format!("export-request-{suffix}");
 
@@ -2332,22 +2336,24 @@ VALUES ('request-1', 'request-1', 'user-1', 'Provider One', 'gpt-test', 'complet
         sqlx::query(
             "INSERT INTO billing_rules (id, global_model_id, name, task_type, expression, variables, dimension_mappings, is_enabled, created_at, updated_at) VALUES ($1, $2, 'Rule One', 'chat', 'input_tokens * 0.01', '{}', '{\"input\":\"input_tokens\"}', TRUE, to_timestamp(1), to_timestamp(2))",
         )
-        .bind("billing-rule-1")
+        .bind(&billing_rule_id)
         .bind(&global_model_id)
         .execute(&pool)
         .await
         .expect("billing rule should seed");
         sqlx::query(
-            "INSERT INTO dimension_collectors (id, api_format, task_type, dimension_name, source_type, value_type, transform_expression, priority, is_enabled, created_at, updated_at) VALUES ($1, 'openai', 'chat', 'input_tokens', 'computed', 'float', 'usage.input_tokens', 10, TRUE, to_timestamp(1), to_timestamp(2))",
+            "INSERT INTO dimension_collectors (id, api_format, task_type, dimension_name, source_type, value_type, transform_expression, priority, is_enabled, created_at, updated_at) VALUES ($1, 'openai', 'chat', $2, 'computed', 'float', 'usage.input_tokens', 10, TRUE, to_timestamp(1), to_timestamp(2))",
         )
-        .bind("collector-1")
+        .bind(&collector_id)
+        .bind(format!("input_tokens_{suffix}"))
         .execute(&pool)
         .await
         .expect("dimension collector should seed");
         sqlx::query(
-            "INSERT INTO system_configs (id, key, value, created_at, updated_at) VALUES ($1, 'billing.enabled', 'true', to_timestamp(1), to_timestamp(2))",
+            "INSERT INTO system_configs (id, key, value, created_at, updated_at) VALUES ($1, $2, 'true', to_timestamp(1), to_timestamp(2))",
         )
         .bind(&config_id)
+        .bind(&config_key)
         .execute(&pool)
         .await
         .expect("system config should seed");
@@ -2417,7 +2423,7 @@ VALUES ('request-1', 'request-1', 'user-1', 'Provider One', 'gpt-test', 'complet
         let imported = import_sqlite_jsonl(&target_pool, &encoded)
             .await
             .expect("sqlite import should load postgres exported rows");
-        assert_eq!(imported, 12);
+        assert_eq!(imported, import_plan_row_count(&import_plan));
 
         let imported_api_key =
             sqlx::query_as::<_, (String,)>("SELECT key_encrypted FROM api_keys WHERE id = $1")
@@ -2602,10 +2608,21 @@ VALUES ('request-1', 'request-1', 'user-1', 'Provider One', 'gpt-test', 'complet
     }
 
     fn unique_suffix() -> String {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_nanos();
-        format!("{:013x}", nanos & 0x1fff_ffff_fffff)
+            .as_nanos() as u64;
+        let counter = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        format!("{:016x}", nanos ^ counter.rotate_left(17))
+    }
+
+    fn import_plan_row_count(plan: &DataImportPlan) -> usize {
+        plan.manifest
+            .domains
+            .iter()
+            .map(|domain| plan.rows(*domain).len())
+            .sum()
     }
 }

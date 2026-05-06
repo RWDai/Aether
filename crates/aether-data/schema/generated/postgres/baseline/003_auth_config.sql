@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS public.ldap_configs (
     bind_dn text NOT NULL,
     bind_password_encrypted text,
     base_dn text NOT NULL,
-    user_search_filter text DEFAULT '(uid={username})' NOT NULL,
+    user_search_filter character varying(512) DEFAULT '(uid={username})' NOT NULL,
     username_attr character varying(50) DEFAULT 'uid' NOT NULL,
     email_attr character varying(50) DEFAULT 'mail' NOT NULL,
     display_name_attr character varying(50) DEFAULT 'cn' NOT NULL,

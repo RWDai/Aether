@@ -304,8 +304,8 @@ SET total_requests = 0,
 SELECT
   api_key_id,
   COUNT(*) AS total_requests,
-  COALESCE(SUM(total_tokens), 0) AS total_tokens,
-  COALESCE(SUM(total_cost_usd), 0) AS total_cost_usd,
+  CAST(COALESCE(SUM(total_tokens), 0) AS SIGNED) AS total_tokens,
+  CAST(COALESCE(SUM(total_cost_usd), 0) AS DOUBLE) AS total_cost_usd,
   MAX(updated_at_unix_secs) AS last_used_at
 FROM `usage`
 WHERE api_key_id IS NOT NULL AND api_key_id <> ''

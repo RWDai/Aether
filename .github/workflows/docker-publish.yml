@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 env:
@@ -135,7 +135,8 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=pre,enable=${{ contains(github.ref, '-') }}
+            type=raw,value=rc,enable=${{ contains(github.ref, '-rc') }}
+            type=raw,value=pre,enable=${{ contains(github.ref, '-') && !contains(github.ref, '-rc') }}
             type=raw,value=fix,enable=${{ contains(github.ref, '-fix') }}
             type=sha,prefix=
           flavor: |
@@ -150,3 +151,78 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           platforms: linux/amd64,linux/arm64
+
+  package:
+    name: Release tarballs
+    needs: [frontend, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: artifacts
+
+      - name: Build release packages
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME}"
+          else
+            VERSION="snapshot-${GITHUB_SHA::7}"
+          fi
+
+          mkdir -p package release-assets
+          for arch in amd64 arm64; do
+            bundle="aether-${VERSION}-linux-${arch}"
+            root="package/${bundle}"
+            mkdir -p \
+              "${root}/bin" \
+              "${root}/frontend"
+
+            install -m 0755 "artifacts/aether-gateway-${arch}/aether-gateway" "${root}/bin/aether-gateway"
+            cp -R artifacts/frontend-dist/. "${root}/frontend/"
+            sed "s/^VERSION=\"\${AETHER_VERSION:-}\"/VERSION=\"\${AETHER_VERSION:-${VERSION}}\"/" install.sh > "${root}/install.sh"
+            chmod 0755 "${root}/install.sh"
+            install -m 0644 docker-compose.yml "${root}/docker-compose.yml"
+            install -m 0644 .env.example "${root}/.env.example"
+            install -m 0755 generate_keys.sh "${root}/generate_keys.sh"
+            install -m 0644 README.md "${root}/README.md"
+            install -m 0644 LICENSE "${root}/LICENSE"
+
+            tar -C package -czf "release-assets/${bundle}.tar.gz" "${bundle}"
+          done
+
+          sed "s/^VERSION=\"\${AETHER_VERSION:-}\"/VERSION=\"\${AETHER_VERSION:-${VERSION}}\"/" install.sh > release-assets/install.sh
+          chmod +x release-assets/install.sh
+          (cd release-assets && sha256sum *.tar.gz > SHA256SUMS)
+
+      - name: Upload release package artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: release-assets
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 7
+
+  github-release:
+    name: GitHub Release assets
+    needs: [docker, package]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release package artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: release-assets
+          path: release-assets
+
+      - name: Publish GitHub Release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            release-assets/*.tar.gz
+            release-assets/SHA256SUMS
+            release-assets/install.sh

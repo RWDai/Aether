@@ -11,12 +11,15 @@ pub(super) struct AdminProviderOAuthDeviceAuthorizePayload {
     pub(super) start_url: String,
     #[serde(default = "default_kiro_device_region")]
     pub(super) region: String,
+    pub(super) auth_type: Option<String>,
+    pub(super) redirect_uri: Option<String>,
     pub(super) proxy_node_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub(super) struct AdminProviderOAuthDevicePollPayload {
     pub(super) session_id: String,
+    pub(super) callback_url: Option<String>,
 }
 
 pub(super) fn attach_admin_provider_oauth_device_poll_terminal_response(

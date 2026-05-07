@@ -53,6 +53,7 @@ fn normalize_admin_provider_oauth_kiro_import_item(item: &Value) -> Option<Value
                 for key in [
                     "provider_type",
                     "providerType",
+                    "provider",
                     "auth_method",
                     "authMethod",
                     "auth_type",

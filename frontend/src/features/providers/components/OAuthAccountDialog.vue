@@ -92,247 +92,297 @@
         >
           <!-- Kiro: 设备授权模式 -->
           <template v-if="isKiroProvider">
-            <!-- 初始状态：选择授权类型 + 开始 -->
-            <div
-              v-if="!device.session_id && !device.starting"
-              class="space-y-3"
-            >
-              <!-- Builder ID / Identity Center 切换 -->
+            <div class="space-y-3">
+              <!-- 授权类型切换 -->
               <div class="grid grid-cols-2 gap-1.5">
                 <button
                   v-for="opt in ([
+                    { key: 'google', label: 'Google' },
+                    { key: 'github', label: 'GitHub' },
                     { key: 'builder_id', label: 'Builder ID' },
                     { key: 'identity_center', label: 'Identity Center' },
                   ] as const)"
                   :key="opt.key"
-                  class="h-8 text-xs font-medium rounded-md border transition-colors"
+                  class="h-8 text-xs font-medium rounded-md border transition-colors disabled:opacity-60"
                   :class="device.auth_type === opt.key
                     ? 'border-primary bg-primary/5 text-foreground'
                     : 'border-border text-muted-foreground hover:text-foreground hover:border-foreground/20'"
-                  @click="device.auth_type = opt.key"
+                  :disabled="isKiroDeviceAuthOptionDisabled(opt.key)"
+                  @click="selectDeviceAuthType(opt.key)"
                 >
                   {{ opt.label }}
                 </button>
               </div>
 
-              <!-- grid 叠放保持高度稳定 -->
-              <div class="grid [&>*]:col-start-1 [&>*]:row-start-1">
-                <!-- Builder ID: 说明文字 -->
+              <div class="h-[265px]">
+                <!-- 错误/过期 -->
                 <div
-                  class="flex items-center justify-center transition-opacity duration-150"
-                  :class="device.auth_type === 'builder_id' ? 'opacity-100' : 'opacity-0 pointer-events-none'"
+                  v-if="device.status === 'error' || device.status === 'expired'"
+                  class="rounded-xl border border-destructive/20 bg-destructive/5 p-5"
                 >
-                  <p class="text-xs text-muted-foreground">
-                    使用个人 AWS Builder ID 进行设备授权，无需额外配置。
-                  </p>
-                </div>
-
-                <!-- Identity Center: Start URL + Region -->
-                <div
-                  class="space-y-3 transition-opacity duration-150"
-                  :class="device.auth_type === 'identity_center' ? 'opacity-100' : 'opacity-0 pointer-events-none'"
-                >
-                  <div class="space-y-1.5">
-                    <label class="text-xs font-medium">Start URL</label>
-                    <input
-                      v-model="device.start_url"
-                      type="text"
-                      placeholder="https://your-org.awsapps.com/start"
-                      class="w-full h-8 px-2 text-xs rounded-md border border-border bg-background font-mono focus:outline-none focus:ring-1 focus:ring-ring focus:relative focus:z-10"
-                      spellcheck="false"
-                    >
-                  </div>
-                  <div class="space-y-1.5">
-                    <label class="text-xs font-medium">Region</label>
-                    <ComboboxRoot
-                      :model-value="device.region"
-                      :open="regionComboboxOpen"
-                      @update:model-value="(v: string) => { if (v) device.region = v }"
-                      @update:open="(v: boolean) => { regionComboboxOpen = v; if (v) ensureAwsRegions() }"
-                    >
-                      <ComboboxAnchor class="relative w-full">
-                        <ComboboxInput
-                          :display-value="() => device.region"
-                          placeholder="输入或选择 Region"
-                          class="w-full h-8 px-2 pr-7 text-xs rounded-md border border-border bg-background font-mono focus:outline-none focus:ring-1 focus:ring-ring focus:relative focus:z-10"
-                          spellcheck="false"
-                          @input="(e: Event) => regionSearch = (e.target as HTMLInputElement).value"
-                          @keydown.enter.prevent="onRegionEnter"
-                        />
-                        <ComboboxTrigger class="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
-                          <ChevronsUpDown class="w-3.5 h-3.5" />
-                        </ComboboxTrigger>
-                      </ComboboxAnchor>
-                      <ComboboxContent
-                        position="popper"
-                        class="z-[99] mt-1 max-h-[200px] w-[--radix-combobox-trigger-width] overflow-y-auto rounded-md border border-border bg-popover shadow-md"
-                      >
-                        <ComboboxViewport>
-                          <ComboboxEmpty class="px-2 py-1.5 text-xs text-muted-foreground">
-                            {{ awsRegionsLoaded ? '无匹配结果，回车使用自定义值' : '加载中...' }}
-                          </ComboboxEmpty>
-                          <ComboboxItem
-                            v-for="r in filteredRegions"
-                            :key="r"
-                            :value="r"
-                            class="flex items-center gap-1.5 px-2 py-1.5 text-xs font-mono cursor-pointer rounded-sm outline-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground"
-                          >
-                            <Check
-                              class="w-3 h-3 shrink-0"
-                              :class="device.region === r ? 'opacity-100' : 'opacity-0'"
-                            />
-                            {{ r }}
-                          </ComboboxItem>
-                        </ComboboxViewport>
-                      </ComboboxContent>
-                    </ComboboxRoot>
-                  </div>
-                  <div class="space-y-1.5">
-                    <label class="text-xs font-medium text-muted-foreground">TOTP Secret (可选, 2FA认证)</label>
-                    <input
-                      v-model="device.totp_secret"
-                      type="text"
-                      placeholder="Base32 secret, 如 JBSWY3DPEHPK3PXP"
-                      class="w-full h-8 px-2 text-xs rounded-md border border-border bg-background font-mono focus:outline-none focus:ring-1 focus:ring-ring focus:relative focus:z-10"
-                      spellcheck="false"
-                    >
-                  </div>
-                </div>
-              </div>
-
-              <Button
-                class="w-full"
-                :disabled="device.auth_type === 'identity_center' && !device.start_url.trim()"
-                @click="startDeviceAuth"
-              >
-                开始授权
-              </Button>
-            </div>
-
-            <!-- 发起中 -->
-            <div
-              v-else-if="device.starting"
-              class="flex items-center justify-center py-12"
-            >
-              <div class="text-center">
-                <div class="animate-spin rounded-full h-6 w-6 border-b-2 border-primary mx-auto mb-3" />
-                <p class="text-xs text-muted-foreground">
-                  正在注册设备...
-                </p>
-              </div>
-            </div>
-
-            <!-- 等待用户授权 -->
-            <template v-else-if="device.session_id && device.status === 'pending'">
-              <div class="rounded-xl border border-border bg-muted/20 p-5">
-                <div class="flex flex-col items-center text-center space-y-4">
-                  <!-- 脉冲动画图标 -->
-                  <div class="relative">
-                    <div class="absolute inset-0 rounded-full bg-primary/20 animate-ping" />
-                    <div class="relative w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
-                      <ExternalLink class="w-5 h-5 text-primary" />
+                  <div class="flex flex-col items-center text-center space-y-3">
+                    <div class="w-10 h-10 rounded-full bg-destructive/10 flex items-center justify-center">
+                      <AlertCircle class="w-5 h-5 text-destructive" />
                     </div>
-                  </div>
-
-                  <!-- 提示文字 -->
-                  <div class="space-y-1">
-                    <p class="text-sm font-medium">
-                      在浏览器中完成授权
-                    </p>
-                    <p class="text-xs text-muted-foreground">
-                      授权完成后此页面将自动更新
-                    </p>
-                  </div>
-
-                  <!-- 倒计时 -->
-                  <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
-                    <div class="animate-spin rounded-full h-3 w-3 border-[1.5px] border-primary/30 border-t-primary" />
-                    <span>剩余 {{ deviceCountdownFormatted }}</span>
-                  </div>
-
-                  <!-- TOTP 验证码 -->
-                  <div
-                    v-if="totp.code.value"
-                    class="w-full rounded-lg border border-border bg-background p-3"
-                  >
-                    <div class="flex items-center justify-between">
-                      <div class="flex items-center gap-2">
-                        <ShieldCheck class="w-3.5 h-3.5 text-primary" />
-                        <span class="text-[10px] text-muted-foreground">MFA 验证码</span>
-                      </div>
-                      <div class="flex items-center gap-1.5">
-                        <span
-                          class="text-lg font-mono font-bold tracking-[0.25em]"
-                        >{{ totp.code.value }}</span>
-                        <button
-                          class="p-1 rounded hover:bg-muted transition-colors"
-                          title="复制验证码"
-                          @click="copyToClipboard(totp.code.value)"
-                        >
-                          <Copy class="w-3 h-3 text-muted-foreground" />
-                        </button>
-                      </div>
+                    <div class="space-y-1">
+                      <p class="text-sm font-medium text-destructive">
+                        {{ device.status === 'expired' ? '授权已过期' : '授权失败' }}
+                      </p>
+                      <p class="text-xs text-muted-foreground">
+                        {{ device.error || '请重试' }}
+                      </p>
                     </div>
-                    <div class="mt-2 flex items-center gap-2">
-                      <div class="flex-1 h-1 rounded-full bg-muted overflow-hidden">
-                        <div
-                          class="h-full rounded-full transition-all duration-1000 ease-linear"
-                          :class="totp.remaining.value <= 5 ? 'bg-red-500' : 'bg-primary'"
-                          :style="{ width: `${(totp.remaining.value / 30) * 100}%` }"
-                        />
-                      </div>
-                      <span
-                        class="text-[10px] font-mono tabular-nums shrink-0"
-                        :class="totp.remaining.value <= 5 ? 'text-red-500' : 'text-muted-foreground'"
-                      >{{ totp.remaining.value }}s</span>
-                    </div>
-                  </div>
-
-                  <!-- 操作按钮 -->
-                  <div class="flex gap-2 w-full">
-                    <Button
-                      class="flex-1"
-                      size="sm"
-                      @click="openDeviceVerificationUrl"
-                    >
-                      <ExternalLink class="w-3.5 h-3.5 mr-1.5" />
-                      打开授权页面
-                    </Button>
                     <Button
                       size="sm"
                       variant="outline"
-                      @click="copyToClipboard(device.verification_uri_complete)"
+                      @click="resetDevice"
                     >
-                      <Copy class="w-3.5 h-3.5" />
+                      重新开始
                     </Button>
                   </div>
                 </div>
-              </div>
-            </template>
 
-            <!-- 错误/过期 -->
-            <div
-              v-else-if="device.status === 'error' || device.status === 'expired'"
-            >
-              <div class="rounded-xl border border-destructive/20 bg-destructive/5 p-5">
-                <div class="flex flex-col items-center text-center space-y-3">
-                  <div class="w-10 h-10 rounded-full bg-destructive/10 flex items-center justify-center">
-                    <AlertCircle class="w-5 h-5 text-destructive" />
-                  </div>
-                  <div class="space-y-1">
-                    <p class="text-sm font-medium text-destructive">
-                      {{ device.status === 'expired' ? '授权已过期' : '授权失败' }}
-                    </p>
+                <!-- Builder ID / Identity Center: 发起中 -->
+                <div
+                  v-else-if="device.starting && !isSocialDeviceAuth"
+                  class="flex items-center justify-center py-12"
+                >
+                  <div class="text-center">
+                    <div class="animate-spin rounded-full h-6 w-6 border-b-2 border-primary mx-auto mb-3" />
                     <p class="text-xs text-muted-foreground">
-                      {{ device.error || '请重试' }}
+                      正在注册设备...
                     </p>
                   </div>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    @click="resetDevice"
+                </div>
+
+                <!-- Google / GitHub: 粘贴回调 URL -->
+                <div
+                  v-else-if="isSocialDeviceAuth"
+                  class="flex h-full flex-col gap-5 pt-1"
+                >
+                  <div class="space-y-2 shrink-0">
+                    <div class="flex items-center gap-2">
+                      <span class="flex items-center justify-center w-4 h-4 rounded-full bg-primary/10 text-primary text-[10px] font-semibold shrink-0">1</span>
+                      <span class="text-xs font-medium">前往授权</span>
+                    </div>
+                    <div class="flex gap-2 pl-6">
+                      <Button
+                        size="sm"
+                        :disabled="device.starting || device.completing || !device.verification_uri_complete"
+                        @click="openDeviceVerificationUrl"
+                      >
+                        <ExternalLink class="w-3 h-3 mr-1" />
+                        打开
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        :disabled="device.starting || device.completing || !device.verification_uri_complete"
+                        @click="copyToClipboard(device.verification_uri_complete)"
+                      >
+                        <Copy class="w-3 h-3 mr-1" />
+                        复制
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div class="flex min-h-0 flex-1 flex-col gap-2">
+                    <div class="flex items-center gap-2">
+                      <span class="flex items-center justify-center w-4 h-4 rounded-full bg-primary/10 text-primary text-[10px] font-semibold shrink-0">2</span>
+                      <span class="text-xs font-medium">粘贴回调 URL</span>
+                    </div>
+                    <div class="min-h-0 flex-1 pl-6">
+                      <Textarea
+                        v-model="device.callback_url"
+                        :disabled="device.completing"
+                        :placeholder="kiroSocialCallbackPlaceholder"
+                        class="h-full min-h-0 overflow-y-auto text-xs font-mono break-all !rounded-xl"
+                        spellcheck="false"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Builder ID / Identity Center: 等待用户授权 -->
+                <div
+                  v-else-if="device.session_id && device.status === 'pending'"
+                  class="rounded-xl border border-border bg-muted/20 p-5"
+                >
+                  <div class="flex flex-col items-center text-center space-y-4">
+                    <div class="relative">
+                      <div class="absolute inset-0 rounded-full bg-primary/20 animate-ping" />
+                      <div class="relative w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
+                        <ExternalLink class="w-5 h-5 text-primary" />
+                      </div>
+                    </div>
+
+                    <div class="space-y-1">
+                      <p class="text-sm font-medium">
+                        在浏览器中完成授权
+                      </p>
+                      <p class="text-xs text-muted-foreground">
+                        授权完成后此页面将自动更新
+                      </p>
+                    </div>
+
+                    <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <div class="animate-spin rounded-full h-3 w-3 border-[1.5px] border-primary/30 border-t-primary" />
+                      <span>剩余 {{ deviceCountdownFormatted }}</span>
+                    </div>
+
+                    <div
+                      v-if="totp.code.value"
+                      class="w-full rounded-lg border border-border bg-background p-3"
+                    >
+                      <div class="flex items-center justify-between">
+                        <div class="flex items-center gap-2">
+                          <ShieldCheck class="w-3.5 h-3.5 text-primary" />
+                          <span class="text-[10px] text-muted-foreground">MFA 验证码</span>
+                        </div>
+                        <div class="flex items-center gap-1.5">
+                          <span
+                            class="text-lg font-mono font-bold tracking-[0.25em]"
+                          >{{ totp.code.value }}</span>
+                          <button
+                            class="p-1 rounded hover:bg-muted transition-colors"
+                            title="复制验证码"
+                            @click="copyToClipboard(totp.code.value)"
+                          >
+                            <Copy class="w-3 h-3 text-muted-foreground" />
+                          </button>
+                        </div>
+                      </div>
+                      <div class="mt-2 flex items-center gap-2">
+                        <div class="flex-1 h-1 rounded-full bg-muted overflow-hidden">
+                          <div
+                            class="h-full rounded-full transition-all duration-1000 ease-linear"
+                            :class="totp.remaining.value <= 5 ? 'bg-red-500' : 'bg-primary'"
+                            :style="{ width: `${(totp.remaining.value / 30) * 100}%` }"
+                          />
+                        </div>
+                        <span
+                          class="text-[10px] font-mono tabular-nums shrink-0"
+                          :class="totp.remaining.value <= 5 ? 'text-red-500' : 'text-muted-foreground'"
+                        >{{ totp.remaining.value }}s</span>
+                      </div>
+                    </div>
+
+                    <div class="flex gap-2 w-full">
+                      <Button
+                        class="flex-1"
+                        size="sm"
+                        @click="openDeviceVerificationUrl"
+                      >
+                        <ExternalLink class="w-3.5 h-3.5 mr-1.5" />
+                        打开授权页面
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        @click="copyToClipboard(device.verification_uri_complete)"
+                      >
+                        <Copy class="w-3.5 h-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- 初始状态：当前类型配置 -->
+                <div
+                  v-else
+                  :class="device.auth_type === 'builder_id' ? 'flex h-full flex-col justify-center gap-4' : 'space-y-3'"
+                >
+                  <p
+                    v-if="isSocialDeviceAuth"
+                    class="text-xs text-muted-foreground text-center"
                   >
-                    重新开始
+                    授权后复制浏览器地址栏的 localhost 回调 URL。
+                  </p>
+
+                  <p
+                    v-else-if="device.auth_type === 'builder_id'"
+                    class="text-xs text-muted-foreground text-center"
+                  >
+                    使用个人 AWS Builder ID 进行设备授权，无需额外配置。
+                  </p>
+
+                  <div
+                    v-else
+                    class="space-y-3"
+                  >
+                    <div class="space-y-1.5">
+                      <label class="text-xs font-medium">Start URL</label>
+                      <input
+                        v-model="device.start_url"
+                        type="text"
+                        placeholder="https://your-org.awsapps.com/start"
+                        class="w-full h-8 px-2 text-xs rounded-md border border-border bg-background font-mono focus:outline-none focus:ring-1 focus:ring-ring focus:relative focus:z-10"
+                        spellcheck="false"
+                      >
+                    </div>
+                    <div class="space-y-1.5">
+                      <label class="text-xs font-medium">Region</label>
+                      <ComboboxRoot
+                        :model-value="device.region"
+                        :open="regionComboboxOpen"
+                        @update:model-value="(v: string) => { if (v) device.region = v }"
+                        @update:open="(v: boolean) => { regionComboboxOpen = v; if (v) ensureAwsRegions() }"
+                      >
+                        <ComboboxAnchor class="relative w-full">
+                          <ComboboxInput
+                            :display-value="() => device.region"
+                            placeholder="输入或选择 Region"
+                            class="w-full h-8 px-2 pr-7 text-xs rounded-md border border-border bg-background font-mono focus:outline-none focus:ring-1 focus:ring-ring focus:relative focus:z-10"
+                            spellcheck="false"
+                            @input="(e: Event) => regionSearch = (e.target as HTMLInputElement).value"
+                            @keydown.enter.prevent="onRegionEnter"
+                          />
+                          <ComboboxTrigger class="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                            <ChevronsUpDown class="w-3.5 h-3.5" />
+                          </ComboboxTrigger>
+                        </ComboboxAnchor>
+                        <ComboboxContent
+                          position="popper"
+                          class="z-[99] mt-1 max-h-[200px] w-[--radix-combobox-trigger-width] overflow-y-auto rounded-md border border-border bg-popover shadow-md"
+                        >
+                          <ComboboxViewport>
+                            <ComboboxEmpty class="px-2 py-1.5 text-xs text-muted-foreground">
+                              {{ awsRegionsLoaded ? '无匹配结果，回车使用自定义值' : '加载中...' }}
+                            </ComboboxEmpty>
+                            <ComboboxItem
+                              v-for="r in filteredRegions"
+                              :key="r"
+                              :value="r"
+                              class="flex items-center gap-1.5 px-2 py-1.5 text-xs font-mono cursor-pointer rounded-sm outline-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground"
+                            >
+                              <Check
+                                class="w-3 h-3 shrink-0"
+                                :class="device.region === r ? 'opacity-100' : 'opacity-0'"
+                              />
+                              {{ r }}
+                            </ComboboxItem>
+                          </ComboboxViewport>
+                        </ComboboxContent>
+                      </ComboboxRoot>
+                    </div>
+                    <div class="space-y-1.5">
+                      <label class="text-xs font-medium text-muted-foreground">TOTP Secret (可选, 2FA认证)</label>
+                      <input
+                        v-model="device.totp_secret"
+                        type="text"
+                        placeholder="Base32 secret, 如 JBSWY3DPEHPK3PXP"
+                        class="w-full h-8 px-2 text-xs rounded-md border border-border bg-background font-mono focus:outline-none focus:ring-1 focus:ring-ring focus:relative focus:z-10"
+                        spellcheck="false"
+                      >
+                    </div>
+                  </div>
+
+                  <Button
+                    class="w-full"
+                    :disabled="device.starting || (device.auth_type === 'identity_center' && !device.start_url.trim())"
+                    @click="startDeviceAuth"
+                  >
+                    {{ device.starting ? '正在准备授权...' : '开始授权' }}
                   </Button>
                 </div>
               </div>
@@ -480,6 +530,13 @@
         {{ oauth.completing ? '验证中...' : '验证' }}
       </Button>
       <Button
+        v-if="mode === 'oauth' && isKiroSocialManualCallbackMode"
+        :disabled="!canCompleteKiroSocialDeviceAuth"
+        @click="completeDeviceAuth"
+      >
+        {{ device.completing ? '验证中...' : '验证' }}
+      </Button>
+      <Button
         v-if="mode === 'import'"
         :disabled="!canImport"
         @click="handleImport"
@@ -617,14 +674,17 @@ let oauthInitRequestId = 0
 let oauthCompleteRequestId = 0
 
 // 设备授权状态
-type DeviceAuthType = 'builder_id' | 'identity_center'
+type DeviceAuthType = 'google' | 'github' | 'builder_id' | 'identity_center'
 
 interface DeviceAuthState {
   auth_type: DeviceAuthType
   start_url: string
   region: string
   totp_secret: string
+  callback_url: string
+  callback_required: boolean
   starting: boolean
+  completing: boolean
   session_id: string
   user_code: string
   verification_uri: string
@@ -640,11 +700,14 @@ const BUILDER_ID_REGION = 'us-east-1'
 
 function createInitialDeviceState(): DeviceAuthState {
   return {
-    auth_type: 'builder_id',
+    auth_type: 'google',
     start_url: '',
     region: 'eu-north-1',
     totp_secret: '',
+    callback_url: '',
+    callback_required: false,
     starting: false,
+    completing: false,
     session_id: '',
     user_code: '',
     verification_uri: '',
@@ -657,6 +720,7 @@ function createInitialDeviceState(): DeviceAuthState {
 }
 
 const device = ref<DeviceAuthState>(createInitialDeviceState())
+let deviceAuthRequestId = 0
 let devicePollTimer: ReturnType<typeof setTimeout> | null = null
 const deviceCountdown = ref(0)
 let countdownTimer: ReturnType<typeof setInterval> | null = null
@@ -673,6 +737,24 @@ const isOpen = computed(() => props.open)
 
 const isKiroProvider = computed(() => (props.providerType || '').toLowerCase() === 'kiro')
 
+const isSocialDeviceAuth = computed(() =>
+  device.value.auth_type === 'google' || device.value.auth_type === 'github'
+)
+
+const isKiroSocialManualCallbackMode = computed(() =>
+  isKiroProvider.value && isSocialDeviceAuth.value
+)
+
+const isKiroSocialManualCallbackPending = computed(() =>
+  isKiroSocialManualCallbackMode.value
+  && device.value.session_id.length > 0
+  && device.value.status === 'pending'
+)
+
+const kiroSocialCallbackPlaceholder = computed(() =>
+  `http://localhost:49153/oauth/callback?login_option=${device.value.auth_type}&code=...&state=...`
+)
+
 const deviceCountdownFormatted = computed(() => {
   const s = deviceCountdown.value
   const min = Math.floor(s / 60)
@@ -688,6 +770,12 @@ const canCompleteOAuth = computed(() => {
   if (!oauth.value.authorization_url) return false
   if (!oauth.value.callback_url.trim()) return false
   return !oauthBusy.value
+})
+
+const canCompleteKiroSocialDeviceAuth = computed(() => {
+  if (!isKiroSocialManualCallbackPending.value) return false
+  if (!device.value.callback_url.trim()) return false
+  return !device.value.starting && !device.value.completing
 })
 
 const canImport = computed(() => {
@@ -818,7 +906,48 @@ function stopDevicePolling() {
   }
 }
 
+function resetDeviceRuntimeState() {
+  stopDevicePolling()
+  totp.stop()
+  device.value.callback_url = ''
+  device.value.callback_required = false
+  device.value.starting = false
+  device.value.completing = false
+  device.value.session_id = ''
+  device.value.user_code = ''
+  device.value.verification_uri = ''
+  device.value.verification_uri_complete = ''
+  device.value.expires_at = 0
+  device.value.interval = 5
+  device.value.status = 'idle'
+  device.value.error = ''
+}
+
+function isKiroDeviceAuthOptionDisabled(authType: DeviceAuthType): boolean {
+  if (device.value.starting) {
+    return !isSocialDeviceAuth.value
+  }
+  if (!device.value.session_id) return false
+  if (isSocialDeviceAuth.value && device.value.status === 'pending') {
+    return false
+  }
+  return true
+}
+
+function selectDeviceAuthType(authType: DeviceAuthType) {
+  if (device.value.auth_type === authType) return
+  if (isKiroDeviceAuthOptionDisabled(authType)) return
+
+  deviceAuthRequestId += 1
+  resetDeviceRuntimeState()
+  device.value.auth_type = authType
+  if (authType === 'google' || authType === 'github') {
+    void ensureKiroSocialDeviceAuth()
+  }
+}
+
 function resetDevice() {
+  deviceAuthRequestId += 1
   stopDevicePolling()
   totp.stop()
   const { auth_type, start_url, region, totp_secret } = device.value
@@ -827,11 +956,15 @@ function resetDevice() {
   device.value.start_url = start_url
   device.value.region = region
   device.value.totp_secret = totp_secret
+  if (device.value.auth_type === 'google' || device.value.auth_type === 'github') {
+    void ensureKiroSocialDeviceAuth()
+  }
 }
 
 function resetForm() {
   oauthInitRequestId += 1
   oauthCompleteRequestId += 1
+  deviceAuthRequestId += 1
   oauth.value = createInitialOAuthState()
   stopImportPolling()
   stopDevicePolling()
@@ -850,8 +983,12 @@ function switchMode(newMode: DialogMode) {
   if (mode.value === newMode) return
 
   mode.value = newMode
-  if (newMode === 'oauth' && !isKiroProvider.value && !oauth.value.authorization_url && !oauth.value.starting) {
-    initOAuth()
+  if (newMode === 'oauth') {
+    if (isKiroProvider.value) {
+      void ensureKiroSocialDeviceAuth()
+    } else if (!oauth.value.authorization_url && !oauth.value.starting) {
+      initOAuth()
+    }
   }
 }
 
@@ -1136,36 +1273,62 @@ function startCountdown() {
 
 async function startDeviceAuth() {
   if (!props.providerId) return
+  if (device.value.starting) return
+  const requestId = ++deviceAuthRequestId
+  const requestedAuthType = device.value.auth_type
+  device.value.callback_url = ''
+  device.value.callback_required = false
+  device.value.session_id = ''
+  device.value.user_code = ''
+  device.value.verification_uri = ''
+  device.value.verification_uri_complete = ''
+  device.value.status = 'idle'
   device.value.starting = true
   device.value.error = ''
   try {
-    const isBuilderID = device.value.auth_type === 'builder_id'
+    const isBuilderID = requestedAuthType === 'builder_id'
+    const isSocial = requestedAuthType === 'google' || requestedAuthType === 'github'
     const resp = await startDeviceAuthorize(props.providerId, {
-      start_url: isBuilderID ? BUILDER_ID_START_URL : (device.value.start_url.trim() || undefined),
-      region: isBuilderID ? BUILDER_ID_REGION : (device.value.region.trim() || undefined),
+      auth_type: requestedAuthType,
+      start_url: isBuilderID ? BUILDER_ID_START_URL : (isSocial ? undefined : (device.value.start_url.trim() || undefined)),
+      region: isBuilderID || isSocial ? BUILDER_ID_REGION : (device.value.region.trim() || undefined),
       proxy_node_id: selectedProxyNodeId.value || undefined,
     })
+    if (requestId !== deviceAuthRequestId || device.value.auth_type !== requestedAuthType) return
     device.value.session_id = resp.session_id
     device.value.user_code = resp.user_code
     device.value.verification_uri = resp.verification_uri
     device.value.verification_uri_complete = resp.verification_uri_complete
     device.value.expires_at = Date.now() + resp.expires_in * 1000
     device.value.interval = resp.interval || 5
+    device.value.callback_required = resp.callback_required === true || isSocial
     device.value.status = 'pending'
     startCountdown()
-    scheduleDevicePoll()
+    if (!device.value.callback_required) {
+      scheduleDevicePoll()
+    }
     // 如果配置了 TOTP secret，启动验证码生成
-    if (device.value.totp_secret.trim()) {
+    if (!device.value.callback_required && device.value.totp_secret.trim()) {
       totp.start(device.value.totp_secret.trim())
     }
   } catch (err: unknown) {
+    if (requestId !== deviceAuthRequestId || device.value.auth_type !== requestedAuthType) return
     const errorMessage = parseApiError(err, '发起设备授权失败')
     showError(errorMessage, '错误')
     device.value.status = 'error'
     device.value.error = errorMessage
   } finally {
-    device.value.starting = false
+    if (requestId === deviceAuthRequestId && device.value.auth_type === requestedAuthType) {
+      device.value.starting = false
+    }
   }
+}
+
+async function ensureKiroSocialDeviceAuth() {
+  if (!props.open || !props.providerId || !isKiroProvider.value || !isSocialDeviceAuth.value) return
+  if (device.value.starting) return
+  if (device.value.session_id && device.value.status === 'pending') return
+  await startDeviceAuth()
 }
 
 function scheduleDevicePoll() {
@@ -1173,12 +1336,23 @@ function scheduleDevicePoll() {
   devicePollTimer = setTimeout(() => pollDevice(), device.value.interval * 1000)
 }
 
-async function pollDevice() {
+async function completeDeviceAuth() {
+  if (device.value.completing || !canCompleteKiroSocialDeviceAuth.value) return
+  device.value.completing = true
+  try {
+    await pollDevice(true)
+  } finally {
+    device.value.completing = false
+  }
+}
+
+async function pollDevice(withCallback = false) {
   if (!props.providerId || !device.value.session_id || device.value.status !== 'pending') return
 
   try {
     const result = await pollDeviceAuthorize(props.providerId, {
       session_id: device.value.session_id,
+      callback_url: withCallback ? device.value.callback_url.trim() : undefined,
     })
 
     switch (result.status) {
@@ -1191,7 +1365,9 @@ async function pollDevice() {
         handleClose()
         return
       case 'pending':
-        scheduleDevicePoll()
+        if (!device.value.callback_required) {
+          scheduleDevicePoll()
+        }
         return
       case 'slow_down':
         device.value.interval = Math.min(device.value.interval + 5, 30)
@@ -1208,9 +1384,15 @@ async function pollDevice() {
         device.value.error = result.error || '授权失败'
         return
     }
-  } catch {
+  } catch (err: unknown) {
+    if (withCallback) {
+      const errorMessage = parseApiError(err, '完成授权失败')
+      showError(errorMessage, '错误')
+    }
     // 网络错误等，继续轮询
-    scheduleDevicePoll()
+    if (!withCallback && !device.value.callback_required) {
+      scheduleDevicePoll()
+    }
   }
 }
 
@@ -1222,11 +1404,22 @@ onBeforeUnmount(() => {
 watch(() => props.open, (newOpen) => {
   if (newOpen) {
     proxyNodesStore.ensureLoaded()
-    if (!isKiroProvider.value) {
+    if (isKiroProvider.value) {
+      void ensureKiroSocialDeviceAuth()
+    } else {
       initOAuth()
     }
   } else {
     resetForm()
   }
 })
+
+watch(
+  () => [props.open, props.providerId, props.providerType] as const,
+  () => {
+    if (props.open && isKiroProvider.value && mode.value === 'oauth') {
+      void ensureKiroSocialDeviceAuth()
+    }
+  },
+)
 </script>

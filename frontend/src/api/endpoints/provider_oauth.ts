@@ -144,6 +144,8 @@ export async function getBatchImportOAuthTaskStatus(
 export interface DeviceAuthorizeRequest {
   start_url?: string
   region?: string
+  auth_type?: 'builder_id' | 'identity_center' | 'google' | 'github'
+  redirect_uri?: string
   proxy_node_id?: string
 }
 
@@ -154,10 +156,14 @@ export interface DeviceAuthorizeResponse {
   verification_uri_complete: string
   expires_in: number
   interval: number
+  auth_type?: string
+  redirect_uri?: string
+  callback_required?: boolean
 }
 
 export interface DevicePollRequest {
   session_id: string
+  callback_url?: string
 }
 
 export interface DevicePollResponse {

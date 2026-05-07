@@ -170,6 +170,7 @@ pub(crate) async fn find_duplicate_provider_oauth_key(
     let new_email = normalize_provider_oauth_identity_value(auth_config.get("email"));
     let new_user_id = normalize_provider_oauth_identity_value(auth_config.get("user_id"));
     let new_auth_method = normalize_provider_oauth_identity_value(auth_config.get("auth_method"));
+    let new_kiro_provider = normalize_provider_oauth_identity_value(auth_config.get("provider"));
 
     if new_email.is_none() && new_user_id.is_none() {
         return Ok(None);
@@ -198,6 +199,8 @@ pub(crate) async fn find_duplicate_provider_oauth_key(
             normalize_provider_oauth_identity_value(existing_auth_config.get("user_id"));
         let existing_auth_method =
             normalize_provider_oauth_identity_value(existing_auth_config.get("auth_method"));
+        let existing_kiro_provider =
+            normalize_provider_oauth_identity_value(existing_auth_config.get("provider"));
 
         let mut is_duplicate = false;
         let codex_identity_match =
@@ -237,6 +240,10 @@ pub(crate) async fn find_duplicate_provider_oauth_key(
                         .as_deref()
                         .zip(existing_auth_method.as_deref())
                         .is_some_and(|(left, right)| left.eq_ignore_ascii_case(right))
+                    && new_kiro_provider
+                        .as_deref()
+                        .zip(existing_kiro_provider.as_deref())
+                        .is_none_or(|(left, right)| left.eq_ignore_ascii_case(right))
                 {
                     is_duplicate = true;
                 }

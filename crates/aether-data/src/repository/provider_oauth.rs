@@ -13,6 +13,16 @@ pub struct StoredAdminProviderOAuthDeviceSession {
     pub client_id: String,
     pub client_secret: String,
     pub device_code: String,
+    #[serde(default)]
+    pub auth_type: Option<String>,
+    #[serde(default)]
+    pub social_provider: Option<String>,
+    #[serde(default)]
+    pub code_verifier: Option<String>,
+    #[serde(default)]
+    pub redirect_uri: Option<String>,
+    #[serde(default)]
+    pub machine_id: Option<String>,
     pub interval: u64,
     pub expires_at_unix_secs: u64,
     pub status: String,

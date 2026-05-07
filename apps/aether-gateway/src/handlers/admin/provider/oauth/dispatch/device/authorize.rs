@@ -4,7 +4,7 @@ use crate::handlers::admin::provider::oauth::runtime::provider_oauth_runtime_end
 use crate::handlers::admin::provider::oauth::state::{
     build_admin_provider_oauth_backend_unavailable_response, current_unix_secs,
     default_kiro_device_start_url, generate_provider_oauth_nonce, json_non_empty_string,
-    json_u64_value, normalize_kiro_device_region,
+    json_u64_value, normalize_kiro_device_region, provider_oauth_pkce_s256,
 };
 use crate::handlers::admin::provider::shared::paths::admin_provider_oauth_device_authorize_provider_id;
 use crate::handlers::admin::request::{AdminAppState, AdminRequestContext};
@@ -19,6 +19,105 @@ use axum::{
     Json,
 };
 use serde_json::json;
+use url::{form_urlencoded, Url};
+
+const KIRO_SOCIAL_PORTAL_SIGNIN_URL: &str = "https://app.kiro.dev/signin";
+const KIRO_SOCIAL_AUTH_EXPIRES_IN_SECS: u64 = 600;
+const KIRO_SOCIAL_AUTH_POLL_INTERVAL_SECS: u64 = 5;
+const KIRO_SOCIAL_MANUAL_CALLBACK_PORT: u16 = 49153;
+const KIRO_SOCIAL_ALLOWED_CALLBACK_PORTS: &[u16] = &[
+    3128, 4649, 6588, 8008, 9091, 49153, 50153, 51153, 52153, 53153,
+];
+
+fn normalize_kiro_device_auth_type(raw: Option<&str>) -> String {
+    match raw
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("identity_center")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "google" => "google".to_string(),
+        "github" | "git_hub" | "git-hub" => "github".to_string(),
+        "builderid" | "builder_id" | "builder-id" | "builder" => "builder_id".to_string(),
+        "identitycenter" | "identity_center" | "identity-center" | "idc" | "enterprise" => {
+            "identity_center".to_string()
+        }
+        _ => "identity_center".to_string(),
+    }
+}
+
+fn kiro_social_provider_id(auth_type: &str) -> Option<&'static str> {
+    match auth_type {
+        "google" => Some("Google"),
+        "github" => Some("Github"),
+        _ => None,
+    }
+}
+
+fn default_kiro_social_redirect_uri() -> String {
+    format!("http://localhost:{KIRO_SOCIAL_MANUAL_CALLBACK_PORT}")
+}
+
+fn normalize_kiro_social_redirect_uri(raw: Option<&str>) -> Result<String, &'static str> {
+    let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(default_kiro_social_redirect_uri());
+    };
+
+    let url = Url::parse(raw).map_err(|_| "Kiro social redirect_uri 必须是合法 URL")?;
+    if url.scheme() != "http" {
+        return Err("Kiro social redirect_uri 必须使用 http://localhost");
+    }
+    if !url
+        .host_str()
+        .is_some_and(|host| host.eq_ignore_ascii_case("localhost"))
+    {
+        return Err("Kiro social redirect_uri 必须使用 localhost");
+    }
+    let Some(port) = url.port() else {
+        return Err("Kiro social redirect_uri 必须包含端口");
+    };
+    if !KIRO_SOCIAL_ALLOWED_CALLBACK_PORTS.contains(&port) {
+        return Err("Kiro social redirect_uri 端口不是 Kiro 允许的回调端口");
+    }
+    if !matches!(url.path(), "" | "/") || url.query().is_some() || url.fragment().is_some() {
+        return Err("Kiro social redirect_uri 只能是 http://localhost:{port}");
+    }
+
+    Ok(format!("http://localhost:{port}"))
+}
+
+fn build_kiro_social_authorization_url(
+    portal_url: &str,
+    auth_type: &str,
+    redirect_uri: &str,
+    code_challenge: &str,
+    state: &str,
+) -> String {
+    if let Ok(mut url) = Url::parse(portal_url) {
+        url.query_pairs_mut()
+            .append_pair("state", state)
+            .append_pair("code_challenge", code_challenge)
+            .append_pair("code_challenge_method", "S256")
+            .append_pair("redirect_uri", redirect_uri)
+            .append_pair("redirect_from", "KiroIDE")
+            .append_pair("login_option", auth_type);
+        return url.to_string();
+    }
+
+    let mut serializer = form_urlencoded::Serializer::new(String::new());
+    serializer.append_pair("state", state);
+    serializer.append_pair("code_challenge", code_challenge);
+    serializer.append_pair("code_challenge_method", "S256");
+    serializer.append_pair("redirect_uri", redirect_uri);
+    serializer.append_pair("redirect_from", "KiroIDE");
+    serializer.append_pair("login_option", auth_type);
+    format!(
+        "{}?{}",
+        portal_url.trim_end_matches('?'),
+        serializer.finish()
+    )
+}
 
 pub(super) async fn handle_admin_provider_oauth_device_authorize(
     state: &AdminAppState<'_>,
@@ -85,6 +184,83 @@ pub(super) async fn handle_admin_provider_oauth_device_authorize(
             ],
         )
         .await;
+
+    let auth_type = normalize_kiro_device_auth_type(payload.auth_type.as_deref());
+    if let Some(social_provider) = kiro_social_provider_id(&auth_type) {
+        let redirect_uri = match normalize_kiro_social_redirect_uri(payload.redirect_uri.as_deref())
+        {
+            Ok(redirect_uri) => redirect_uri,
+            Err(message) => {
+                return Ok(build_internal_control_error_response(
+                    http::StatusCode::BAD_REQUEST,
+                    message,
+                ));
+            }
+        };
+        let code_verifier = generate_provider_oauth_nonce();
+        let code_challenge = provider_oauth_pkce_s256(&code_verifier);
+        let session_id = generate_provider_oauth_nonce();
+        let portal_url =
+            state.provider_oauth_token_url("kiro_social_portal", KIRO_SOCIAL_PORTAL_SIGNIN_URL);
+        let authorization_url = build_kiro_social_authorization_url(
+            &portal_url,
+            &auth_type,
+            &redirect_uri,
+            &code_challenge,
+            &session_id,
+        );
+        let now_unix_secs = current_unix_secs();
+        let session = StoredAdminProviderOAuthDeviceSession {
+            provider_id: provider_id.clone(),
+            region: "us-east-1".to_string(),
+            client_id: String::new(),
+            client_secret: String::new(),
+            device_code: String::new(),
+            auth_type: Some("social".to_string()),
+            social_provider: Some(social_provider.to_string()),
+            code_verifier: Some(code_verifier),
+            redirect_uri: Some(redirect_uri.clone()),
+            machine_id: Some(uuid::Uuid::new_v4().to_string().to_ascii_lowercase()),
+            interval: KIRO_SOCIAL_AUTH_POLL_INTERVAL_SECS,
+            expires_at_unix_secs: now_unix_secs.saturating_add(KIRO_SOCIAL_AUTH_EXPIRES_IN_SECS),
+            status: "pending".to_string(),
+            proxy_node_id: payload
+                .proxy_node_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned),
+            created_at_unix_ms: now_unix_secs,
+            key_id: None,
+            email: None,
+            replaced: false,
+            error_msg: None,
+        };
+        if let Err(response) = state
+            .save_provider_oauth_device_session(
+                &session_id,
+                &session,
+                KIRO_SOCIAL_AUTH_EXPIRES_IN_SECS
+                    .saturating_add(KIRO_DEVICE_AUTH_SESSION_TTL_BUFFER_SECS),
+            )
+            .await
+        {
+            return Ok(response);
+        }
+
+        return Ok(Json(json!({
+            "session_id": session_id,
+            "user_code": "",
+            "verification_uri": portal_url,
+            "verification_uri_complete": authorization_url,
+            "expires_in": KIRO_SOCIAL_AUTH_EXPIRES_IN_SECS,
+            "interval": KIRO_SOCIAL_AUTH_POLL_INTERVAL_SECS,
+            "auth_type": auth_type,
+            "redirect_uri": redirect_uri,
+            "callback_required": true,
+        }))
+        .into_response());
+    }
 
     let region = normalize_kiro_device_region(Some(payload.region.as_str())).ok_or_else(|| {
         build_internal_control_error_response(http::StatusCode::BAD_REQUEST, "region 格式无效")
@@ -178,6 +354,11 @@ pub(super) async fn handle_admin_provider_oauth_device_authorize(
         client_id,
         client_secret,
         device_code,
+        auth_type: Some("idc".to_string()),
+        social_provider: None,
+        code_verifier: None,
+        redirect_uri: None,
+        machine_id: None,
         interval,
         expires_at_unix_secs: now_unix_secs.saturating_add(expires_in),
         status: "pending".to_string(),

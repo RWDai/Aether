@@ -172,6 +172,9 @@ pub(super) async fn execute_admin_provider_oauth_kiro_batch_import(
             .cloned()
             .unwrap_or_default();
         auth_config.insert("provider_type".to_string(), json!("kiro"));
+        if let Some(provider) = coerce_admin_provider_oauth_import_str(entry.get("provider")) {
+            auth_config.insert("provider".to_string(), json!(provider));
+        }
         let email = decode_jwt_claims(
             refreshed_auth_config
                 .access_token

@@ -69,10 +69,13 @@ export interface UserAffinity {
   global_model_id: string | null  // 原始的 global_model_id（用于删除）
   model_name: string | null  // 模型名称（如 claude-haiku-4-5-20250514）
   model_display_name: string | null  // 模型显示名称（如 Claude Haiku 4.5）
+  client_family: string | null  // 客户端类型（如 codex/opencode）
+  session_hash: string | null  // 会话维度 hash，用于区分同一客户端的不同会话
   api_format: string | null  // API 格式 (claude/openai)
   created_at: number
   expire_at: number
   request_count: number
+  request_count_known?: boolean
 }
 
 export interface AffinityListResponse {
@@ -128,8 +131,20 @@ export const cacheApi = {
    * @param modelId GlobalModel ID
    * @param apiFormat API 格式 (claude/openai)
    */
-  async clearSingleAffinity(affinityKey: string, endpointId: string, modelId: string, apiFormat: string): Promise<void> {
-    await api.delete(`/api/admin/monitoring/cache/affinity/${affinityKey}/${endpointId}/${modelId}/${apiFormat}`)
+  async clearSingleAffinity(
+    affinityKey: string,
+    endpointId: string,
+    modelId: string,
+    apiFormat: string,
+    clientFamily?: string | null,
+    sessionHash?: string | null
+  ): Promise<void> {
+    await api.delete(`/api/admin/monitoring/cache/affinity/${affinityKey}/${endpointId}/${modelId}/${apiFormat}`, {
+      params: {
+        ...(clientFamily ? { client_family: clientFamily } : {}),
+        ...(sessionHash ? { session_hash: sessionHash } : {})
+      }
+    })
   },
 
   /**

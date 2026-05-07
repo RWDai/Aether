@@ -4,12 +4,15 @@ pub(super) struct AdminMonitoringCacheAffinityRecord {
     pub(super) affinity_key: String,
     pub(super) api_format: String,
     pub(super) model_name: String,
+    pub(super) client_family: Option<String>,
+    pub(super) session_hash: Option<String>,
     pub(super) provider_id: Option<String>,
     pub(super) endpoint_id: Option<String>,
     pub(super) key_id: Option<String>,
     pub(super) created_at: Option<serde_json::Value>,
     pub(super) expire_at: Option<serde_json::Value>,
     pub(super) request_count: u64,
+    pub(super) request_count_known: bool,
 }
 
 pub(super) struct AdminMonitoringCacheSnapshot {

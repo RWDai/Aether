@@ -28,7 +28,6 @@ GENERATED_ENV=""
 ADMIN_PASSWORD_SOURCE=""
 UI_LANG="${AETHER_LANG:-${AETHER_LANGUAGE:-auto}}"
 RELEASE_ARCHIVE_URL="${AETHER_RELEASE_ARCHIVE_URL:-${AETHER_DOWNLOAD_URL:-}}"
-RELEASE_CHECKSUM_URL="${AETHER_RELEASE_CHECKSUM_URL:-}"
 
 usage() {
     cat <<'EOF'
@@ -49,7 +48,6 @@ Options:
   --source-ref REF     Source branch/tag used for compose templates (default: aether-rust-pioneer)
   --archive PATH       Install from a local release tarball instead of downloading
   --download-url URL   Download the release archive from this URL instead of GitHub
-  --checksum-url URL   Download SHA256SUMS from this URL instead of GitHub
   --env-file PATH      Use an existing aether-gateway.env file
   --install-root PATH  Install root (default: /opt/aether)
   --compose-dir PATH   Docker Compose deployment directory (default: /opt/aether/compose)
@@ -61,7 +59,7 @@ Options:
 Environment overrides:
   AETHER_REPO, AETHER_SOURCE_REF, AETHER_INSTALL_MODE, AETHER_CHANNEL, AETHER_VERSION
   AETHER_LANG or AETHER_LANGUAGE
-  AETHER_RELEASE_ARCHIVE_URL or AETHER_DOWNLOAD_URL, AETHER_RELEASE_CHECKSUM_URL
+  AETHER_RELEASE_ARCHIVE_URL or AETHER_DOWNLOAD_URL
   AETHER_IMAGE_REPO, AETHER_APP_IMAGE
   INSTALL_ROOT, AETHER_COMPOSE_DIR, CONFIG_DIR, SERVICE_USER, SERVICE_GROUP
   ADMIN_PASSWORD (required for non-interactive first install when generating a new env)
@@ -202,11 +200,6 @@ parse_args() {
             --download-url|--archive-url|--release-url)
                 [[ $# -ge 2 ]] || die "--download-url requires a value"
                 RELEASE_ARCHIVE_URL="$2"
-                shift 2
-                ;;
-            --checksum-url|--sums-url)
-                [[ $# -ge 2 ]] || die "--checksum-url requires a value"
-                RELEASE_CHECKSUM_URL="$2"
                 shift 2
                 ;;
             --env-file)
@@ -522,7 +515,6 @@ download_stdout() {
 
 select_release_download_urls() {
     local original_archive_url="$1"
-    local original_sums_url="$2"
 
     if [[ -z "${RELEASE_ARCHIVE_URL}" && interactive_tty_available ]]; then
         if ui_is_zh; then
@@ -576,25 +568,6 @@ EOF
                         die "replacement archive download URL cannot be empty"
                     fi
                 }
-
-                if ui_is_zh; then
-                    cat >/dev/tty <<EOF
-
-原始校验文件 URL:
-  ${original_sums_url}
-
-如校验文件也需要加速，请输入新的校验文件下载 URL；直接回车使用原始 URL:
-EOF
-                else
-                    cat >/dev/tty <<EOF
-
-Original checksum URL:
-  ${original_sums_url}
-
-Enter replacement checksum download URL, or press Enter to use the original URL:
-EOF
-                fi
-                IFS= read -r RELEASE_CHECKSUM_URL </dev/tty || RELEASE_CHECKSUM_URL=""
                 ;;
             *)
                 if ui_is_zh; then
@@ -615,18 +588,6 @@ EOF
         else
             info "using custom archive download URL"
             info "original archive URL: ${original_archive_url}"
-        fi
-    fi
-
-    if [[ -z "${RELEASE_CHECKSUM_URL}" ]]; then
-        RELEASE_CHECKSUM_URL="${original_sums_url}"
-    elif [[ "${RELEASE_CHECKSUM_URL}" != "${original_sums_url}" ]]; then
-        if ui_is_zh; then
-            info "使用自定义校验文件下载 URL"
-            info "原始校验文件 URL: ${original_sums_url}"
-        else
-            info "using custom checksum download URL"
-            info "original checksum URL: ${original_sums_url}"
         fi
     fi
 }
@@ -679,21 +640,6 @@ resolve_version() {
     echo "${tag}"
 }
 
-verify_checksum() {
-    local sums_file="$1"
-    local archive_file="$2"
-    local archive_name
-    archive_name="$(basename "${archive_file}")"
-
-    if command -v sha256sum >/dev/null 2>&1; then
-        (cd "$(dirname "${archive_file}")" && grep "  ${archive_name}\$" "${sums_file}" | sha256sum -c -)
-    elif command -v shasum >/dev/null 2>&1; then
-        (cd "$(dirname "${archive_file}")" && grep "  ${archive_name}\$" "${sums_file}" | shasum -a 256 -c -)
-    else
-        warn "sha256sum/shasum not found; skipping release checksum verification"
-    fi
-}
-
 current_script_dir() {
     local source="${BASH_SOURCE[0]}"
     if [[ -n "${source}" && -f "${source}" ]]; then
@@ -724,18 +670,16 @@ download_or_unpack_bundle() {
         local arch
         arch="$(detect_arch)"
 
-        local tag asset base_url archive_url sums_url archive_file sums_file
+        local tag asset base_url archive_url archive_file
         tag="$(resolve_version)"
         [[ -n "${tag}" ]] || die "could not resolve ${CHANNEL} release tag for ${REPO}"
         VERSION="${tag}"
         asset="aether-${tag}-linux-${arch}.tar.gz"
         base_url="https://github.com/${REPO}/releases/download/${tag}"
         archive_url="${base_url}/${asset}"
-        sums_url="${base_url}/SHA256SUMS"
         archive_file="${TMP_ROOT}/${asset}"
-        sums_file="${TMP_ROOT}/SHA256SUMS"
 
-        select_release_download_urls "${archive_url}" "${sums_url}"
+        select_release_download_urls "${archive_url}"
         if [[ "${RELEASE_ARCHIVE_URL}" == "${archive_url}" ]]; then
             info "downloading ${asset} from ${REPO}"
         elif ui_is_zh; then
@@ -744,8 +688,6 @@ download_or_unpack_bundle() {
             info "downloading ${asset} from custom URL"
         fi
         download_to "${RELEASE_ARCHIVE_URL}" "${archive_file}" progress
-        download_to "${RELEASE_CHECKSUM_URL}" "${sums_file}"
-        verify_checksum "${sums_file}" "${archive_file}"
         tar -xzf "${archive_file}" -C "${TMP_ROOT}"
     fi
 

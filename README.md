@@ -86,7 +86,7 @@ curl -fsSL https://raw.githubusercontent.com/fawney19/Aether/aether-rust-pioneer
 ```
 
 运行后按提示输入语言、版本和部署方式。固定安装某个 tag 时，版本选择选 `2`，再输入类似 `v0.7.0-rc23` 的 tag。默认会安装最新预发布版本；Docker Compose 模式默认使用 `pre` 镜像通道。
-systemd 二进制安装在下载 Release 压缩包前会询问是否使用下载加速源；选择使用时会先打印原始 GitHub URL，再要求输入新的压缩包下载 URL。非交互式安装可用 `AETHER_RELEASE_ARCHIVE_URL` 指定压缩包 URL，用 `AETHER_RELEASE_CHECKSUM_URL` 指定 `SHA256SUMS` URL。
+systemd 二进制安装在下载 Release 压缩包前会询问是否使用下载加速源；选择使用时会先打印原始 GitHub URL，再要求输入新的压缩包下载 URL。非交互式安装可用 `AETHER_RELEASE_ARCHIVE_URL` 指定压缩包 URL。
 如果安装目录里已经有配置，脚本会优先复用：Docker Compose 保留已有 `.env`，systemd 保留已有 `/etc/aether/aether-gateway.env`。只有首次生成新配置时才会提示输入管理员密码。
 
 ```text

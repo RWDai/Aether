@@ -45,6 +45,59 @@ export interface UpdateUserRequest {
   rate_limit?: number | null
 }
 
+export interface UserBatchSelectionFilters {
+  search?: string
+  role?: 'admin' | 'user'
+  is_active?: boolean
+}
+
+export interface UserBatchSelection {
+  user_ids?: string[]
+  filters?: UserBatchSelectionFilters | null
+}
+
+export interface UserBatchSelectionItem {
+  user_id: string
+  username: string
+  email?: string | null
+  role: 'admin' | 'user'
+  is_active: boolean
+}
+
+export interface ResolveUserBatchSelectionResponse {
+  total: number
+  items: UserBatchSelectionItem[]
+}
+
+export interface UserBatchAccessControlPayload {
+  allowed_providers?: string[] | null
+  allowed_api_formats?: string[] | null
+  allowed_models?: string[] | null
+  rate_limit?: number | null
+}
+
+export type UserBatchAction = 'enable' | 'disable' | 'update_access_control'
+
+export interface UserBatchActionRequest {
+  selection: UserBatchSelection
+  action: UserBatchAction
+  payload?: UserBatchAccessControlPayload | null
+}
+
+export interface UserBatchActionFailure {
+  user_id: string
+  reason: string
+}
+
+export interface UserBatchActionResponse {
+  total: number
+  success: number
+  failed: number
+  failures: UserBatchActionFailure[]
+  action?: string
+  modified_fields?: string[]
+}
+
 export interface ApiKey {
   id: string // UUID
   key?: string  // 完整的 key，只在创建时返回
@@ -98,6 +151,24 @@ export const usersApi = {
     return response.data
   },
 
+  async resolveBatchSelection(
+    selection: UserBatchSelection
+  ): Promise<ResolveUserBatchSelectionResponse> {
+    const response = await apiClient.post<ResolveUserBatchSelectionResponse>(
+      '/api/admin/users/resolve-selection',
+      selection
+    )
+    return response.data
+  },
+
+  async batchAction(request: UserBatchActionRequest): Promise<UserBatchActionResponse> {
+    const response = await apiClient.post<UserBatchActionResponse>(
+      '/api/admin/users/batch-action',
+      request
+    )
+    return response.data
+  },
+
   async deleteUser(userId: string): Promise<void> {
     await apiClient.delete(`/api/admin/users/${userId}`)
   },
@@ -113,12 +184,12 @@ export const usersApi = {
   },
 
   async revokeUserSession(userId: string, sessionId: string): Promise<{ message: string }> {
-    const response = await apiClient.delete(`/api/admin/users/${userId}/sessions/${sessionId}`)
+    const response = await apiClient.delete<{ message: string }>(`/api/admin/users/${userId}/sessions/${sessionId}`)
     return response.data
   },
 
   async revokeAllUserSessions(userId: string): Promise<{ message: string; revoked_count: number }> {
-    const response = await apiClient.delete(`/api/admin/users/${userId}/sessions`)
+    const response = await apiClient.delete<{ message: string; revoked_count: number }>(`/api/admin/users/${userId}/sessions`)
     return response.data
   },
 
@@ -157,7 +228,7 @@ export const usersApi = {
   },
   // 管理员统计
   async getUsageStats(): Promise<Record<string, unknown>> {
-    const response = await apiClient.get('/api/admin/usage/stats')
+    const response = await apiClient.get<Record<string, unknown>>('/api/admin/usage/stats')
     return response.data
   }
 }

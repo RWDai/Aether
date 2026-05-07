@@ -8,6 +8,10 @@ import {
   type ApiKey,
   type UpsertUserApiKeyRequest,
   type UserSession,
+  type UserBatchSelection,
+  type ResolveUserBatchSelectionResponse,
+  type UserBatchActionRequest,
+  type UserBatchActionResponse,
 } from '@/api/users'
 import { parseApiError } from '@/utils/errorParser'
 
@@ -77,6 +81,30 @@ export const useUsersStore = defineStore('users', () => {
       users.value = users.value.filter(u => u.id !== userId)
     } catch (err: unknown) {
       error.value = parseApiError(err, '删除用户失败')
+      throw err
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function resolveBatchSelection(
+    selection: UserBatchSelection
+  ): Promise<ResolveUserBatchSelectionResponse> {
+    try {
+      return await usersApi.resolveBatchSelection(selection)
+    } catch (err: unknown) {
+      error.value = parseApiError(err, '解析用户选择失败')
+      throw err
+    }
+  }
+
+  async function batchAction(request: UserBatchActionRequest): Promise<UserBatchActionResponse> {
+    loading.value = true
+    error.value = null
+    try {
+      return await usersApi.batchAction(request)
+    } catch (err: unknown) {
+      error.value = parseApiError(err, '批量操作用户失败')
       throw err
     } finally {
       loading.value = false
@@ -169,6 +197,8 @@ export const useUsersStore = defineStore('users', () => {
     createUser,
     updateUser,
     deleteUser,
+    resolveBatchSelection,
+    batchAction,
     getUserApiKeys,
     createApiKey,
     updateApiKey,

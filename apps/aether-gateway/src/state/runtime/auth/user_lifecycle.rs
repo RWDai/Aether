@@ -371,6 +371,7 @@ impl AppState {
         allowed_api_formats: Option<Vec<String>>,
         allowed_models_present: bool,
         allowed_models: Option<Vec<String>>,
+        rate_limit_present: bool,
         rate_limit: Option<i32>,
         is_active: Option<bool>,
     ) -> Result<Option<aether_data::repository::users::StoredUserAuthRecord>, GatewayError> {
@@ -395,7 +396,7 @@ impl AppState {
             if let Some(is_active) = is_active {
                 user.is_active = is_active;
             }
-            let _ = rate_limit;
+            let _ = (rate_limit_present, rate_limit);
             return Ok(Some(user.clone()));
         }
 
@@ -409,6 +410,7 @@ impl AppState {
                 allowed_api_formats,
                 allowed_models_present,
                 allowed_models,
+                rate_limit_present,
                 rate_limit,
                 is_active,
             )

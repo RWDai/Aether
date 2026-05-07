@@ -1847,6 +1847,7 @@ impl<'a> AdminAppState<'a> {
                                 allowed_api_formats.clone(),
                                 user.contains_key("allowed_models"),
                                 allowed_models.clone(),
+                                user.contains_key("rate_limit"),
                                 rate_limit,
                                 Some(is_active),
                             )

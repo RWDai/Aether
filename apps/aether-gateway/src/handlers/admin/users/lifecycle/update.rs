@@ -184,7 +184,7 @@ pub(in super::super) async fn build_admin_update_user_response(
         || field_presence.contains("allowed_providers")
         || field_presence.contains("allowed_api_formats")
         || field_presence.contains("allowed_models")
-        || payload.rate_limit.is_some()
+        || field_presence.contains("rate_limit")
         || payload.is_active.is_some();
     if needs_auth_user_write && !state.has_auth_user_write_capability() {
         return Ok(build_admin_users_read_only_response(
@@ -247,7 +247,7 @@ pub(in super::super) async fn build_admin_update_user_response(
         || field_presence.contains("allowed_providers")
         || field_presence.contains("allowed_api_formats")
         || field_presence.contains("allowed_models")
-        || payload.rate_limit.is_some()
+        || field_presence.contains("rate_limit")
         || payload.is_active.is_some()
     {
         if state
@@ -260,6 +260,7 @@ pub(in super::super) async fn build_admin_update_user_response(
                 allowed_api_formats,
                 field_presence.contains("allowed_models"),
                 allowed_models,
+                field_presence.contains("rate_limit"),
                 payload.rate_limit,
                 payload.is_active,
             )

@@ -23,27 +23,14 @@
 
       <div class="contents md:hidden">
         <!-- 用户筛选（仅管理员可见） -->
-        <Select
-          v-if="isAdmin && availableUsers.length > 0"
+        <ServerUserSelector
+          v-if="isAdmin"
+          class="flex-1 min-w-0 sm:flex-none sm:w-40"
           :model-value="filterUser"
+          :initial-users="availableUsers"
+          dropdown
           @update:model-value="$emit('update:filterUser', $event)"
-        >
-          <SelectTrigger class="flex-1 min-w-0 sm:flex-none sm:w-36 h-8 text-xs border-border/60">
-            <SelectValue placeholder="用户" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="__all__">
-              全部用户
-            </SelectItem>
-            <SelectItem
-              v-for="user in availableUsers"
-              :key="user.id"
-              :value="user.id"
-            >
-              {{ user.username || user.email }}
-            </SelectItem>
-          </SelectContent>
-        </Select>
+        />
 
         <!-- 模型筛选 -->
         <Select
@@ -340,13 +327,13 @@
             :sortable="false"
             :filter-active="filterUser !== '__all__'"
             filter-title="筛选用户"
-            filter-content-class="w-48 p-1 rounded-2xl border-border bg-card text-foreground shadow-2xl backdrop-blur-xl"
+            filter-content-class="w-64 p-1 rounded-2xl border-border bg-card text-foreground shadow-2xl backdrop-blur-xl"
           >
             用户
             <template #filter="{ close }">
-              <TableFilterMenu
+              <ServerUserSelector
                 :model-value="filterUser"
-                :options="userFilterOptions"
+                :initial-users="availableUsers"
                 @update:model-value="$emit('update:filterUser', $event)"
                 @select="close"
               />
@@ -823,6 +810,7 @@ import { formatApiFormat } from '@/api/endpoints/types/api-format'
 import type { DateRangeParams, UsageRecord } from '../types'
 import { TimeRangePicker } from '@/components/common'
 import ElapsedTimeText from './ElapsedTimeText.vue'
+import ServerUserSelector from './ServerUserSelector.vue'
 
 export interface UserOption {
   id: string
@@ -892,14 +880,6 @@ const AVAILABLE_API_FORMATS = [
 
 // 使用模块级常量
 const availableApiFormats = AVAILABLE_API_FORMATS
-
-const userFilterOptions = computed<FilterOption[]>(() => [
-  { value: '__all__', label: '全部用户' },
-  ...props.availableUsers.map((user) => ({
-    value: user.id,
-    label: user.username || user.email,
-  })),
-])
 
 const modelFilterOptions = computed<FilterOption[]>(() => [
   { value: '__all__', label: '全部模型' },

@@ -149,13 +149,38 @@ export interface UpsertUserApiKeyRequest {
 
 export type UserSession = SessionRecord
 
+export interface GetAllUsersOptions {
+  search?: string
+  skip?: number
+  limit?: number
+  cacheTtlMs?: number
+}
+
 export const usersApi = {
-  async getAllUsers(options: { cacheTtlMs?: number } = {}): Promise<User[]> {
+  async getAllUsers(options: GetAllUsersOptions = {}): Promise<User[]> {
     const cacheTtlMs = options.cacheTtlMs ?? 0
+    const params: Record<string, string | number> = {}
+    const search = options.search?.trim()
+
+    if (search) params.search = search
+    if (options.skip !== undefined) params.skip = options.skip
+    if (options.limit !== undefined) params.limit = options.limit
+
+    const cacheKey = Object.keys(params).length === 0
+      ? 'admin:users:list'
+      : [
+          'admin:users:list',
+          search ?? '',
+          options.skip ?? '',
+          options.limit ?? '',
+        ].join(':')
+
     return cachedRequest(
-      'admin:users:list',
+      cacheKey,
       async () => {
-        const response = await apiClient.get<User[]>('/api/admin/users')
+        const response = await apiClient.get<User[]>('/api/admin/users', {
+          params: Object.keys(params).length > 0 ? params : undefined,
+        })
         return response.data
       },
       cacheTtlMs,

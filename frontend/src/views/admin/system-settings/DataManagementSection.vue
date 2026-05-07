@@ -106,11 +106,11 @@ const purgeItems: PurgeItem[] = [
   },
   {
     key: 'stats',
-    title: '清空聚合数据',
-    description: '清空仪表盘统计和聚合数据，保留原始使用记录',
-    buttonText: '清空聚合数据',
+    title: '清空统计聚合',
+    description: '删除统计聚合数据，保留原始使用记录；统计可从原始使用记录重新构建',
+    buttonText: '清空统计聚合',
     icon: markRaw(PieChart),
-    confirmMessage: '确定要清空全部聚合统计数据吗？仪表盘数据将被清除，用户和 Key 的累计统计也会归零，操作不可逆。',
+    confirmMessage: '确定要清空全部统计聚合数据吗？原始使用记录会保留，仪表盘和累计统计可从原始记录重新构建。',
     action: () => adminApi.purgeStats(),
   },
 ]
@@ -122,9 +122,9 @@ async function handlePurge(item: PurgeItem) {
   loadingKey.value = item.key
   try {
     const result = await item.action()
-    success(result.message)
+    success(result.message || '操作成功')
   } catch (e) {
-    error(parseApiError(e))
+    error(parseApiError(e, '清空失败'))
   } finally {
     loadingKey.value = null
   }

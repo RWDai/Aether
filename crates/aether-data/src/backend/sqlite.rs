@@ -227,6 +227,7 @@ impl SqliteBackend {
 mod tests {
     use super::SqliteBackend;
     use crate::lifecycle::migrate::run_sqlite_migrations;
+    use crate::repository::system::AdminSystemPurgeTarget;
     use crate::{
         DatabaseDriver, SqlDatabaseConfig, SqlPoolConfig, StatsDailyAggregationInput,
         StatsHourlyAggregationInput, WalletDailyUsageAggregationInput,
@@ -311,6 +312,123 @@ mod tests {
 
         assert_eq!(summary.attempted, 3);
         assert_eq!(summary.succeeded, 3);
+    }
+
+    #[tokio::test]
+    async fn admin_system_config_purge_deletes_config_scope_and_preserves_users() {
+        let config = SqlDatabaseConfig {
+            driver: DatabaseDriver::Sqlite,
+            url: "sqlite::memory:".to_string(),
+            pool: SqlPoolConfig {
+                max_connections: 1,
+                ..SqlPoolConfig::default()
+            },
+        };
+        let backend = SqliteBackend::from_config(config).expect("backend should build");
+        run_sqlite_migrations(backend.pool())
+            .await
+            .expect("sqlite migrations should run");
+
+        sqlx::query(
+            "INSERT INTO users (id, email, username, role, created_at, updated_at) VALUES ('admin-1', 'admin@example.com', 'admin', 'admin', 1, 1)",
+        )
+        .execute(backend.pool())
+        .await
+        .expect("user should insert");
+        sqlx::query(
+            "INSERT INTO providers (id, name, provider_type, created_at, updated_at) VALUES ('provider-1', 'OpenAI', 'openai', 1, 1)",
+        )
+        .execute(backend.pool())
+        .await
+        .expect("provider should insert");
+        sqlx::query(
+            "INSERT INTO system_configs (id, key, value, created_at, updated_at) VALUES ('config-1', 'site_name', '\"Aether\"', 1, 1)",
+        )
+        .execute(backend.pool())
+        .await
+        .expect("system config should insert");
+
+        let summary = backend
+            .purge_admin_system_data(AdminSystemPurgeTarget::Config)
+            .await
+            .expect("config purge should run");
+        assert!(summary.total() >= 2);
+        assert_eq!(sqlite_count(backend.pool(), "system_configs").await, 0);
+        assert_eq!(sqlite_count(backend.pool(), "providers").await, 0);
+        assert_eq!(sqlite_count(backend.pool(), "users").await, 1);
+    }
+
+    #[tokio::test]
+    async fn admin_system_users_purge_deletes_only_non_admin_users_and_keys() {
+        let config = SqlDatabaseConfig {
+            driver: DatabaseDriver::Sqlite,
+            url: "sqlite::memory:".to_string(),
+            pool: SqlPoolConfig {
+                max_connections: 1,
+                ..SqlPoolConfig::default()
+            },
+        };
+        let backend = SqliteBackend::from_config(config).expect("backend should build");
+        run_sqlite_migrations(backend.pool())
+            .await
+            .expect("sqlite migrations should run");
+
+        sqlx::query(
+            r#"
+INSERT INTO users (id, email, username, role, created_at, updated_at)
+VALUES
+  ('admin-1', 'admin@example.com', 'admin', 'admin', 1, 1),
+  ('user-1', 'user@example.com', 'alice', 'user', 1, 1)
+"#,
+        )
+        .execute(backend.pool())
+        .await
+        .expect("users should insert");
+        sqlx::query(
+            r#"
+INSERT INTO api_keys (id, user_id, key_hash, name, created_at, updated_at, total_requests, total_tokens, total_cost_usd)
+VALUES
+  ('admin-key-1', 'admin-1', 'hash-admin', 'admin-key', 1, 1, 5, 50, 0.5),
+  ('user-key-1', 'user-1', 'hash-user', 'user-key', 1, 1, 7, 70, 0.7)
+"#,
+        )
+        .execute(backend.pool())
+        .await
+        .expect("api keys should insert");
+        sqlx::query(
+            r#"
+INSERT INTO stats_daily_api_key (id, api_key_id, "date", total_requests, created_at, updated_at)
+VALUES
+  ('admin-key-stats-1', 'admin-key-1', 1, 5, 1, 1),
+  ('user-key-stats-1', 'user-key-1', 1, 7, 1, 1)
+"#,
+        )
+        .execute(backend.pool())
+        .await
+        .expect("api key stats should insert");
+
+        let summary = backend
+            .purge_admin_system_data(AdminSystemPurgeTarget::Users)
+            .await
+            .expect("users purge should run");
+        assert!(summary.total() >= 2);
+        assert_eq!(sqlite_count(backend.pool(), "users").await, 1);
+        assert_eq!(sqlite_count(backend.pool(), "api_keys").await, 1);
+        assert_eq!(sqlite_count(backend.pool(), "stats_daily_api_key").await, 1);
+        let admin_exists: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE id = 'admin-1'")
+                .fetch_one(backend.pool())
+                .await
+                .expect("admin count should load");
+        assert_eq!(admin_exists, 1);
+    }
+
+    async fn sqlite_count(pool: &sqlx::SqlitePool, table: &str) -> i64 {
+        let sql = format!("SELECT COUNT(*) FROM \"{table}\"");
+        sqlx::query_scalar::<_, i64>(&sql)
+            .fetch_one(pool)
+            .await
+            .expect("count should load")
     }
 
     #[tokio::test]

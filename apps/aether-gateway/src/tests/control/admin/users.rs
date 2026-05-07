@@ -313,6 +313,74 @@ async fn gateway_handles_admin_users_root_locally_with_trusted_admin_principal()
     assert_eq!(items[0]["is_active"], true);
     assert_eq!(items[0]["request_count"], 2);
     assert_eq!(items[0]["total_tokens"], 100);
+
+    let search_response = reqwest::Client::new()
+        .get(format!(
+            "{gateway_url}/api/admin/users?skip=0&limit=20&search=carol"
+        ))
+        .header(crate::constants::GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .send()
+        .await
+        .expect("search request should succeed");
+
+    assert_eq!(search_response.status(), StatusCode::OK);
+    let search_payload: serde_json::Value = search_response
+        .json()
+        .await
+        .expect("search json body should parse");
+    let search_items = search_payload
+        .as_array()
+        .expect("search list payload should be array");
+    assert_eq!(search_items.len(), 1);
+    assert_eq!(search_items[0]["id"], "user-3");
+    assert_eq!(search_items[0]["email"], "carol@example.com");
+
+    let id_search_response = reqwest::Client::new()
+        .get(format!(
+            "{gateway_url}/api/admin/users?skip=0&limit=20&search=user-3"
+        ))
+        .header(crate::constants::GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .send()
+        .await
+        .expect("id search request should succeed");
+    assert_eq!(id_search_response.status(), StatusCode::OK);
+    let id_search_payload: serde_json::Value = id_search_response
+        .json()
+        .await
+        .expect("id search json body should parse");
+    let id_search_items = id_search_payload
+        .as_array()
+        .expect("id search list payload should be array");
+    assert_eq!(id_search_items.len(), 1);
+    assert_eq!(id_search_items[0]["id"], "user-3");
+
+    let limited_search_response = reqwest::Client::new()
+        .get(format!(
+            "{gateway_url}/api/admin/users?skip=0&limit=2&search=example.com"
+        ))
+        .header(crate::constants::GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .send()
+        .await
+        .expect("limited search request should succeed");
+    assert_eq!(limited_search_response.status(), StatusCode::OK);
+    let limited_search_payload: serde_json::Value = limited_search_response
+        .json()
+        .await
+        .expect("limited search json body should parse");
+    let limited_search_items = limited_search_payload
+        .as_array()
+        .expect("limited search list payload should be array");
+    assert_eq!(limited_search_items.len(), 2);
+
     assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
 
     gateway_handle.abort();

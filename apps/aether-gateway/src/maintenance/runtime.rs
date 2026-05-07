@@ -12,6 +12,8 @@ mod audit_cleanup;
 mod config;
 #[path = "runtime/db_maintenance.rs"]
 mod db_maintenance;
+#[path = "runtime/oauth_token_refresh.rs"]
+mod oauth_token_refresh;
 #[path = "runtime/pending_cleanup.rs"]
 mod pending_cleanup;
 #[path = "runtime/pool_quota_probe.rs"]
@@ -47,6 +49,9 @@ pub(crate) use aether_data_contracts::repository::usage::{
 use audit_cleanup::*;
 use config::*;
 use db_maintenance::*;
+pub(crate) use oauth_token_refresh::{
+    perform_oauth_token_refresh_once, OAuthTokenRefreshRunSummary,
+};
 use pending_cleanup::*;
 pub(crate) use pool_quota_probe::{
     perform_pool_quota_probe_once, perform_pool_quota_probe_once_with_config,
@@ -89,6 +94,7 @@ const PROXY_UPGRADE_ROLLOUT_INTERVAL: Duration = Duration::from_secs(15);
 const PROXY_NODE_STALE_MIN_GRACE_SECS: u64 = 15;
 const PROXY_NODE_STALE_MISSED_HEARTBEATS: u64 = 3;
 const POOL_MONITOR_INTERVAL: Duration = Duration::from_secs(5 * 60);
+const OAUTH_TOKEN_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 const PROVIDER_CHECKIN_CONCURRENCY: usize = 3;
 const PROVIDER_CHECKIN_DEFAULT_TIME: &str = "01:05";
 const REQUEST_CANDIDATE_CLEANUP_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
@@ -105,6 +111,7 @@ const DB_MAINTENANCE_HOUR: u32 = 5;
 const DB_MAINTENANCE_MINUTE: u32 = 0;
 const MAINTENANCE_DEFAULT_TIMEZONE: &str = "Asia/Shanghai";
 const DB_MAINTENANCE_TABLES: &[&str] = &["usage", "request_candidates", "audit_logs"];
+const MAX_ADMIN_STATS_REBUILD_BUCKETS: usize = 100_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct UsageCleanupSettings {
@@ -114,6 +121,76 @@ struct UsageCleanupSettings {
     log_retention_days: u64,
     batch_size: usize,
     auto_delete_expired_keys: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize)]
+pub(crate) struct AdminSystemCleanupSummary {
+    pub(crate) audit_logs_deleted: usize,
+    pub(crate) request_candidates_deleted: usize,
+    pub(crate) pending_failed: usize,
+    pub(crate) pending_recovered: usize,
+    pub(crate) usage: UsageCleanupSummary,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize)]
+pub(crate) struct AdminStatsRebuildSummary {
+    pub(crate) hourly_buckets: usize,
+    pub(crate) daily_buckets: usize,
+    pub(crate) capped: bool,
+}
+
+pub(crate) async fn run_admin_system_cleanup_once(
+    data: &GatewayDataState,
+) -> Result<AdminSystemCleanupSummary, aether_data::DataLayerError> {
+    let audit_logs_deleted = cleanup_audit_logs_once(data).await?;
+    let request_candidates_deleted = cleanup_request_candidates_once(data).await?;
+    let pending = cleanup_stale_pending_requests_once(data).await?;
+    let usage = perform_usage_cleanup_once(data).await?;
+
+    Ok(AdminSystemCleanupSummary {
+        audit_logs_deleted,
+        request_candidates_deleted,
+        pending_failed: pending.failed,
+        pending_recovered: pending.recovered,
+        usage,
+    })
+}
+
+pub(crate) async fn rebuild_admin_stats_once(
+    data: &GatewayDataState,
+) -> Result<AdminStatsRebuildSummary, aether_data::DataLayerError> {
+    let now_utc = chrono::Utc::now();
+    let mut summary = AdminStatsRebuildSummary::default();
+
+    if data.has_stats_hourly_aggregation_backend() {
+        let input = aether_data::StatsHourlyAggregationInput {
+            target_hour_utc: stats_hourly_aggregation_target_hour(now_utc),
+            aggregated_at: now_utc,
+        };
+        while data.aggregate_stats_hourly(&input).await?.is_some() {
+            summary.hourly_buckets = summary.hourly_buckets.saturating_add(1);
+            if summary.hourly_buckets >= MAX_ADMIN_STATS_REBUILD_BUCKETS {
+                summary.capped = true;
+                break;
+            }
+        }
+    }
+
+    if data.has_stats_daily_aggregation_backend() {
+        let input = aether_data::StatsDailyAggregationInput {
+            target_day_utc: stats_aggregation_target_day(now_utc),
+            aggregated_at: now_utc,
+        };
+        while data.aggregate_stats_daily(&input).await?.is_some() {
+            summary.daily_buckets = summary.daily_buckets.saturating_add(1);
+            if summary.daily_buckets >= MAX_ADMIN_STATS_REBUILD_BUCKETS {
+                summary.capped = true;
+                break;
+            }
+        }
+    }
+
+    Ok(summary)
 }
 
 pub(crate) async fn cleanup_expired_gemini_file_mappings_once(

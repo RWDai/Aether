@@ -29,6 +29,9 @@ pub(in super::super) async fn build_admin_list_users_response(
         .map(|value| value.trim().to_ascii_lowercase())
         .filter(|value| !value.is_empty());
     let is_active = query_param_optional_bool(request_context.query_string(), "is_active");
+    let search = query_param_value(request_context.query_string(), "search")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
 
     let paged_rows = state
         .list_export_users_page(&aether_data::repository::users::UserExportListQuery {
@@ -36,6 +39,7 @@ pub(in super::super) async fn build_admin_list_users_response(
             limit,
             role: role.clone(),
             is_active,
+            search,
         })
         .await?;
     let user_ids = paged_rows

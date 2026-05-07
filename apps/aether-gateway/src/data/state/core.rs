@@ -423,4 +423,28 @@ impl GatewayDataState {
             None => Ok(super::AdminSystemStats::default()),
         }
     }
+
+    pub(crate) async fn purge_admin_system_data(
+        &self,
+        target: aether_data::repository::system::AdminSystemPurgeTarget,
+    ) -> Result<aether_data::repository::system::AdminSystemPurgeSummary, DataLayerError> {
+        if matches!(
+            target,
+            aether_data::repository::system::AdminSystemPurgeTarget::Config
+        ) {
+            if let Some(values) = &self.system_config_values {
+                let mut values = values.write().expect("system config values lock");
+                let deleted = values.len() as u64;
+                values.clear();
+                let mut summary =
+                    aether_data::repository::system::AdminSystemPurgeSummary::default();
+                summary.add("system_configs", deleted);
+                return Ok(summary);
+            }
+        }
+        match self.backends.as_ref() {
+            Some(backends) => backends.purge_admin_system_data(target).await,
+            None => Ok(aether_data::repository::system::AdminSystemPurgeSummary::default()),
+        }
+    }
 }

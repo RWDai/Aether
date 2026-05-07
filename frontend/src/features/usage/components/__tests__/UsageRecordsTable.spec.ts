@@ -76,6 +76,8 @@ vi.mock('lucide-vue-next', async () => {
   return {
     RefreshCcw: Icon,
     Search: Icon,
+    ChevronDown: Icon,
+    Check: Icon,
   }
 })
 
@@ -84,6 +86,15 @@ vi.mock('../ElapsedTimeText.vue', () => ({
     name: 'ElapsedTimeTextStub',
     setup() {
       return () => h('span', 'elapsed')
+    },
+  }),
+}))
+
+vi.mock('../ServerUserSelector.vue', () => ({
+  default: defineComponent({
+    name: 'ServerUserSelectorStub',
+    setup() {
+      return () => h('div', 'user selector')
     },
   }),
 }))

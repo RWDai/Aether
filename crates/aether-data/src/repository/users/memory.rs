@@ -329,6 +329,24 @@ impl UserReadRepository for InMemoryUserReadRepository {
         if let Some(is_active) = query.is_active {
             rows.retain(|row| row.is_active == is_active);
         }
+        if let Some(search) = query
+            .search
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            let search = search.to_ascii_lowercase();
+            rows.retain(|row| {
+                row.id.to_ascii_lowercase().contains(&search)
+                    || row.username.to_ascii_lowercase().contains(&search)
+                    || row
+                        .email
+                        .as_deref()
+                        .unwrap_or_default()
+                        .to_ascii_lowercase()
+                        .contains(&search)
+            });
+        }
         Ok(rows
             .into_iter()
             .skip(query.skip)
@@ -2054,6 +2072,7 @@ mod tests {
                 limit: 10,
                 role: Some("user".to_string()),
                 is_active: Some(true),
+                search: None,
             })
             .await
             .expect("paged export should succeed");

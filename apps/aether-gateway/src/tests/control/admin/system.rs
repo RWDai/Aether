@@ -791,9 +791,11 @@ async fn gateway_handles_admin_system_unavailable_write_routes_locally_with_trus
     let (gateway_url, gateway_handle) = start_server(gateway).await;
 
     let client = reqwest::Client::new();
-    let paths = [
+    let unavailable_paths = [
         "/api/admin/system/config/import",
         "/api/admin/system/users/import",
+    ];
+    let local_paths = [
         "/api/admin/system/cleanup",
         "/api/admin/system/purge/config",
         "/api/admin/system/purge/users",
@@ -803,7 +805,7 @@ async fn gateway_handles_admin_system_unavailable_write_routes_locally_with_trus
         "/api/admin/system/purge/stats",
     ];
 
-    for path in paths {
+    for path in unavailable_paths {
         let response = client
             .post(format!("{gateway_url}{path}"))
             .header(crate::constants::GATEWAY_HEADER, "rust-phase3b")
@@ -818,6 +820,28 @@ async fn gateway_handles_admin_system_unavailable_write_routes_locally_with_trus
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         let payload: serde_json::Value = response.json().await.expect("json body should parse");
         assert_eq!(payload["detail"], DETAIL, "path={path}");
+    }
+
+    for path in local_paths {
+        let response = client
+            .post(format!("{gateway_url}{path}"))
+            .header(crate::constants::GATEWAY_HEADER, "rust-phase3b")
+            .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+            .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+            .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+            .json(&json!({}))
+            .send()
+            .await
+            .expect("request should succeed");
+
+        assert_eq!(response.status(), StatusCode::OK, "path={path}");
+        let payload: serde_json::Value = response.json().await.expect("json body should parse");
+        assert!(
+            payload["message"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty()),
+            "path={path}"
+        );
     }
 
     assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);

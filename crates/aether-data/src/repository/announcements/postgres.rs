@@ -163,6 +163,10 @@ const DELETE_ANNOUNCEMENT_SQL: &str = r#"
 DELETE FROM announcements
 WHERE id = $1
 "#;
+const DELETE_ANNOUNCEMENT_READS_SQL: &str = r#"
+DELETE FROM announcement_reads
+WHERE announcement_id = $1
+"#;
 
 const MARK_ANNOUNCEMENT_AS_READ_SQL: &str = r#"
 INSERT INTO announcement_reads (
@@ -295,11 +299,18 @@ impl AnnouncementWriteRepository for SqlxAnnouncementReadRepository {
     }
 
     async fn delete_announcement(&self, announcement_id: &str) -> Result<bool, DataLayerError> {
-        let result = sqlx::query(DELETE_ANNOUNCEMENT_SQL)
+        let mut tx = self.pool.begin().await.map_postgres_err()?;
+        sqlx::query(DELETE_ANNOUNCEMENT_READS_SQL)
             .bind(announcement_id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_postgres_err()?;
+        let result = sqlx::query(DELETE_ANNOUNCEMENT_SQL)
+            .bind(announcement_id)
+            .execute(&mut *tx)
+            .await
+            .map_postgres_err()?;
+        tx.commit().await.map_postgres_err()?;
         Ok(result.rows_affected() > 0)
     }
 

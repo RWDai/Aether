@@ -41,6 +41,7 @@ use super::super::{provider_transport, usage};
 use crate::maintenance::spawn_audit_cleanup_worker;
 use crate::maintenance::spawn_db_maintenance_worker;
 use crate::maintenance::spawn_gemini_file_mapping_cleanup_worker;
+use crate::maintenance::spawn_oauth_token_refresh_worker;
 use crate::maintenance::spawn_pending_cleanup_worker;
 use crate::maintenance::spawn_pool_monitor_worker;
 use crate::maintenance::spawn_pool_quota_probe_worker;
@@ -526,6 +527,44 @@ impl AppState {
             .map_err(|err| GatewayError::Internal(err.to_string()))
     }
 
+    pub(crate) async fn purge_admin_system_data(
+        &self,
+        target: aether_data::repository::system::AdminSystemPurgeTarget,
+    ) -> Result<aether_data::repository::system::AdminSystemPurgeSummary, GatewayError> {
+        let summary = self
+            .data
+            .purge_admin_system_data(target)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))?;
+        if matches!(
+            target,
+            aether_data::repository::system::AdminSystemPurgeTarget::Config
+                | aether_data::repository::system::AdminSystemPurgeTarget::Users
+                | aether_data::repository::system::AdminSystemPurgeTarget::Usage
+                | aether_data::repository::system::AdminSystemPurgeTarget::Stats
+        ) {
+            self.system_config_cache.clear();
+            self.clear_provider_transport_snapshot_cache();
+        }
+        Ok(summary)
+    }
+
+    pub(crate) async fn run_admin_system_cleanup_once(
+        &self,
+    ) -> Result<crate::maintenance::AdminSystemCleanupSummary, GatewayError> {
+        crate::maintenance::run_admin_system_cleanup_once(&self.data)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))
+    }
+
+    pub(crate) async fn rebuild_admin_stats_once(
+        &self,
+    ) -> Result<crate::maintenance::AdminStatsRebuildSummary, GatewayError> {
+        crate::maintenance::rebuild_admin_stats_once(&self.data)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))
+    }
+
     pub(crate) async fn find_proxy_node(
         &self,
         node_id: &str,
@@ -944,6 +983,9 @@ impl AppState {
             tasks.push(handle);
         }
         if let Some(handle) = spawn_provider_checkin_worker(self.clone()) {
+            tasks.push(handle);
+        }
+        if let Some(handle) = spawn_oauth_token_refresh_worker(self.clone()) {
             tasks.push(handle);
         }
         if let Some(handle) = spawn_request_candidate_cleanup_worker(self.data.clone()) {

@@ -3774,7 +3774,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_dimension_collectors_enabled ON public.dime
 
 DO $mig$ BEGIN
   ALTER TABLE ONLY public.announcement_reads
-    ADD CONSTRAINT announcement_reads_announcement_id_fkey FOREIGN KEY (announcement_id) REFERENCES public.announcements(id);
+    ADD CONSTRAINT announcement_reads_announcement_id_fkey FOREIGN KEY (announcement_id) REFERENCES public.announcements(id) ON DELETE CASCADE;
 EXCEPTION
   WHEN duplicate_object THEN NULL;
   WHEN duplicate_table THEN NULL;

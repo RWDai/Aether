@@ -233,12 +233,19 @@ WHERE id = ?
     }
 
     async fn delete_announcement(&self, announcement_id: &str) -> Result<bool, DataLayerError> {
+        let mut tx = self.pool.begin().await.map_sql_err()?;
+        sqlx::query("DELETE FROM announcement_reads WHERE announcement_id = ?")
+            .bind(announcement_id)
+            .execute(&mut *tx)
+            .await
+            .map_sql_err()?;
         let rows_affected = sqlx::query("DELETE FROM announcements WHERE id = ?")
             .bind(announcement_id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_sql_err()?
             .rows_affected();
+        tx.commit().await.map_sql_err()?;
         Ok(rows_affected > 0)
     }
 

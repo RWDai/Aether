@@ -218,7 +218,14 @@ impl AnnouncementWriteRepository for InMemoryAnnouncementReadRepository {
             .expect("announcement repository lock");
         let original_len = announcements.len();
         announcements.retain(|announcement| announcement.id != announcement_id);
-        Ok(announcements.len() != original_len)
+        let deleted = announcements.len() != original_len;
+        if deleted {
+            self.announcement_reads
+                .write()
+                .expect("announcement reads repository lock")
+                .retain(|(_, read_announcement_id)| read_announcement_id != announcement_id);
+        }
+        Ok(deleted)
     }
 
     async fn mark_announcement_as_read(

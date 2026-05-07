@@ -224,6 +224,22 @@ impl UserReadRepository for SqliteUserReadRepository {
         if let Some(is_active) = query.is_active {
             builder.push(" AND is_active = ").push_bind(is_active);
         }
+        if let Some(search) = query
+            .search
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            let pattern = format!("%{}%", search.to_ascii_lowercase());
+            builder
+                .push(" AND (LOWER(id) LIKE ")
+                .push_bind(pattern.clone())
+                .push(" OR LOWER(username) LIKE ")
+                .push_bind(pattern.clone())
+                .push(" OR LOWER(COALESCE(email, '')) LIKE ")
+                .push_bind(pattern)
+                .push(")");
+        }
         builder
             .push(" ORDER BY id ASC LIMIT ")
             .push_bind(i64::try_from(query.limit).map_err(|_| {
@@ -1543,6 +1559,7 @@ INSERT INTO users (
                 limit: 10,
                 role: Some("user".to_string()),
                 is_active: Some(true),
+                search: None,
             })
             .await
             .expect("export page should load");

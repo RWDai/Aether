@@ -7,7 +7,9 @@ use crate::maintenance::{
     StatsDailyAggregationSummary, StatsHourlyAggregationInput, StatsHourlyAggregationSummary,
     WalletDailyUsageAggregationInput, WalletDailyUsageAggregationResult,
 };
-use crate::repository::system::{AdminSystemStats, StoredSystemConfigEntry};
+use crate::repository::system::{
+    AdminSystemPurgeSummary, AdminSystemPurgeTarget, AdminSystemStats, StoredSystemConfigEntry,
+};
 use crate::DataLayerError;
 use sqlx::migrate::MigrateError;
 
@@ -180,6 +182,16 @@ impl DataBackends {
         match self.sql_backend() {
             Some(backend) => backend.read_admin_system_stats().await,
             None => Ok(AdminSystemStats::default()),
+        }
+    }
+
+    pub async fn purge_admin_system_data(
+        &self,
+        target: AdminSystemPurgeTarget,
+    ) -> Result<AdminSystemPurgeSummary, DataLayerError> {
+        match self.sql_backend() {
+            Some(backend) => backend.purge_admin_system_data(target).await,
+            None => Ok(AdminSystemPurgeSummary::default()),
         }
     }
 }
@@ -469,6 +481,17 @@ impl<'a> SqlBackendRef<'a> {
             Self::Postgres(postgres) => postgres.read_admin_system_stats().await,
             Self::Mysql(mysql) => mysql.read_admin_system_stats().await,
             Self::Sqlite(sqlite) => sqlite.read_admin_system_stats().await,
+        }
+    }
+
+    async fn purge_admin_system_data(
+        self,
+        target: AdminSystemPurgeTarget,
+    ) -> Result<AdminSystemPurgeSummary, DataLayerError> {
+        match self {
+            Self::Postgres(postgres) => postgres.purge_admin_system_data(target).await,
+            Self::Mysql(mysql) => mysql.purge_admin_system_data(target).await,
+            Self::Sqlite(sqlite) => sqlite.purge_admin_system_data(target).await,
         }
     }
 }

@@ -428,6 +428,7 @@ pub struct UserExportListQuery {
     pub limit: usize,
     pub role: Option<String>,
     pub is_active: Option<bool>,
+    pub search: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]

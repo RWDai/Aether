@@ -1,4 +1,4 @@
- # Aether 部署配置 - 使用预构建镜像
+# Aether 部署配置 - 使用预构建镜像
 # 使用方法: docker compose up -d
 
 services:
@@ -63,8 +63,6 @@ services:
     env_file:
       - .env
     environment:
-      AETHER_DATABASE_DRIVER: ${AETHER_DATABASE_DRIVER:-}
-      AETHER_DATABASE_URL: ${AETHER_DATABASE_URL:-}
       DATABASE_URL: postgresql://postgres:${DB_PASSWORD}@postgres:5432/aether
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       TZ: Asia/Shanghai

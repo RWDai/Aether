@@ -135,8 +135,7 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=rc,enable=${{ contains(github.ref, '-rc') }}
-            type=raw,value=pre,enable=${{ contains(github.ref, '-') && !contains(github.ref, '-rc') }}
+            type=raw,value=pre,enable=${{ contains(github.ref, '-') }}
             type=raw,value=fix,enable=${{ contains(github.ref, '-fix') }}
             type=sha,prefix=
           flavor: |

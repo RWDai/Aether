@@ -93,6 +93,15 @@ impl ServerTab {
                     required: true,
                     help: "Node name for identification in Aether dashboard",
                 },
+                Field {
+                    label: "Upstream Proxy",
+                    key: "upstream_proxy_url",
+                    value: String::new(),
+                    kind: FieldKind::Text,
+                    required: false,
+                    help:
+                        "Optional provider egress proxy, e.g. http://127.0.0.1:8080 or socks5h://127.0.0.1:1080",
+                },
             ],
         }
     }
@@ -105,6 +114,12 @@ impl ServerTab {
             tab.fields[2].value = name.clone();
         }
         tab
+    }
+
+    fn set_field_value(&mut self, key: &str, value: &str) {
+        if let Some(field) = self.fields.iter_mut().find(|field| field.key == key) {
+            field.value = value.to_string();
+        }
     }
 }
 
@@ -193,15 +208,6 @@ impl App {
                     help:
                         "Prebuffer budget for 307/308 replay, e.g. 5M; set 0 to disable buffering",
                 },
-                Field {
-                    label: "Upstream Proxy",
-                    key: "upstream_proxy_url",
-                    value: String::new(),
-                    kind: FieldKind::Text,
-                    required: false,
-                    help:
-                        "Optional provider egress proxy, e.g. http://127.0.0.1:8080 or socks5h://127.0.0.1:1080",
-                },
             ],
             selected: 0,
             mode: Mode::Normal,
@@ -276,7 +282,6 @@ impl App {
                 "allow_private_targets" => cfg.allow_private_targets.map(|v| v.to_string()),
                 "heartbeat_interval" => cfg.heartbeat_interval.map(|v| v.to_string()),
                 "redirect_replay_budget_bytes" => cfg.redirect_replay_budget_bytes.clone(),
-                "upstream_proxy_url" => cfg.upstream_proxy_url.clone(),
                 _ => None,
             };
             if let Some(v) = val {
@@ -290,6 +295,11 @@ impl App {
             self.server_tabs = vec![ServerTab::new()];
         } else {
             self.server_tabs = servers.iter().map(ServerTab::from_entry).collect();
+        }
+        if let Some(proxy_url) = cfg.upstream_proxy_url.as_deref() {
+            for tab in &mut self.server_tabs {
+                tab.set_field_value("upstream_proxy_url", proxy_url);
+            }
         }
         self.active_tab = 0;
         self.selected = 0;
@@ -310,6 +320,12 @@ impl App {
             .find(|f| f.key == key)
             .map(|f| f.value.clone())
             .filter(|v| !v.is_empty())
+    }
+
+    fn get_shared_server_field(&self, key: &str) -> Option<String> {
+        self.server_tabs
+            .iter()
+            .find_map(|tab| Self::get_tab(tab, key))
     }
 
     fn toggle_enabled(&self, key: &str) -> bool {
@@ -357,7 +373,7 @@ impl App {
     }
 
     fn parse_optional_upstream_proxy_url(&self) -> anyhow::Result<Option<String>> {
-        let Some(raw) = self.get_global("upstream_proxy_url") else {
+        let Some(raw) = self.get_shared_server_field("upstream_proxy_url") else {
             return Ok(None);
         };
         let trimmed = raw.trim();
@@ -597,7 +613,12 @@ impl App {
             }
             // -- Add / remove server --
             KeyCode::Char('+') | KeyCode::Char('a') => {
-                self.server_tabs.push(ServerTab::new());
+                let upstream_proxy_url = self.get_shared_server_field("upstream_proxy_url");
+                let mut tab = ServerTab::new();
+                if let Some(proxy_url) = upstream_proxy_url.as_deref() {
+                    tab.set_field_value("upstream_proxy_url", proxy_url);
+                }
+                self.server_tabs.push(tab);
                 self.active_tab = self.server_tabs.len() - 1;
                 self.selected = 0;
                 self.scroll_offset = 0;
@@ -673,7 +694,14 @@ impl App {
 
     fn commit_edit_buffer(&mut self) -> bool {
         if self.validate_edit() {
-            self.selected_field_mut().value = self.edit_buffer.clone();
+            let key = self.selected_field().key;
+            if key == "upstream_proxy_url" {
+                for tab in &mut self.server_tabs {
+                    tab.set_field_value(key, &self.edit_buffer);
+                }
+            } else {
+                self.selected_field_mut().value = self.edit_buffer.clone();
+            }
             self.modified = true;
             self.mode = Mode::Normal;
             true
@@ -1096,6 +1124,26 @@ mod tests {
     }
 
     #[test]
+    fn new_app_places_upstream_proxy_under_node_name() {
+        let app = sample_app();
+        let keys: Vec<&str> = app.server_tabs[0]
+            .fields
+            .iter()
+            .map(|field| field.key)
+            .collect();
+
+        assert_eq!(
+            keys,
+            vec![
+                "aether_url",
+                "management_token",
+                "node_name",
+                "upstream_proxy_url"
+            ]
+        );
+    }
+
+    #[test]
     fn to_config_enables_pretty_file_logging_with_defaults() {
         let mut app = sample_app();
         set_global_field(&mut app, "save_logs_to_file", "true");
@@ -1124,7 +1172,7 @@ mod tests {
         set_global_field(&mut app, "allow_private_targets", "true");
         set_global_field(&mut app, "heartbeat_interval", "45");
         set_global_field(&mut app, "redirect_replay_budget_bytes", "6m");
-        set_global_field(&mut app, "upstream_proxy_url", "socks5h://127.0.0.1:1080");
+        set_server_field(&mut app, "upstream_proxy_url", "socks5h://127.0.0.1:1080");
 
         let cfg = app.to_config().expect("config should serialize");
         assert_eq!(cfg.allow_private_targets, Some(true));
@@ -1148,7 +1196,7 @@ mod tests {
     #[test]
     fn to_config_rejects_invalid_upstream_proxy_url() {
         let mut app = sample_app();
-        set_global_field(&mut app, "upstream_proxy_url", "ftp://proxy.example");
+        set_server_field(&mut app, "upstream_proxy_url", "ftp://proxy.example");
 
         let error = app
             .to_config()

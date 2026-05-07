@@ -2,7 +2,6 @@ use super::cache_types::AdminMonitoringCacheAffinityRecord;
 use crate::cache::SchedulerAffinityTarget;
 use crate::handlers::admin::request::AdminAppState;
 use crate::GatewayError;
-use aether_ai_formats::FormatId;
 use std::time::Duration;
 
 #[derive(Debug, Clone, Copy)]
@@ -35,7 +34,7 @@ fn split_admin_monitoring_api_format_and_model(
             .map(|segment| segment.trim())
             .collect::<Vec<_>>()
             .join(":");
-        if FormatId::parse(&candidate).is_some() {
+        if is_known_admin_monitoring_api_format(&candidate) {
             let model_name = segments[segment_count..]
                 .iter()
                 .map(|segment| segment.trim())
@@ -96,6 +95,27 @@ fn is_known_admin_monitoring_api_format_family(value: &str) -> bool {
     matches!(
         value.trim().to_ascii_lowercase().as_str(),
         "openai" | "claude" | "gemini" | "jina" | "doubao"
+    )
+}
+
+fn is_known_admin_monitoring_api_format(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "openai:chat"
+            | "openai:responses"
+            | "openai:responses:compact"
+            | "openai:image"
+            | "openai:video"
+            | "openai:embedding"
+            | "openai:rerank"
+            | "claude:messages"
+            | "gemini:generate_content"
+            | "gemini:video"
+            | "gemini:files"
+            | "gemini:embedding"
+            | "jina:embedding"
+            | "jina:rerank"
+            | "doubao:embedding"
     )
 }
 
@@ -381,6 +401,55 @@ pub(super) fn clear_admin_monitoring_scheduler_affinity_entries(
 }
 
 #[cfg(test)]
+pub(super) fn delete_admin_monitoring_cache_affinity_entries_for_tests(
+    state: &AdminAppState<'_>,
+    raw_keys: &[String],
+) -> usize {
+    state
+        .as_ref()
+        .remove_admin_monitoring_cache_affinity_entries_for_tests(raw_keys)
+}
+
+#[cfg(not(test))]
+pub(super) fn delete_admin_monitoring_cache_affinity_entries_for_tests(
+    _state: &AdminAppState<'_>,
+    _raw_keys: &[String],
+) -> usize {
+    0
+}
+
+pub(super) async fn delete_admin_monitoring_cache_affinity_raw_keys(
+    state: &AdminAppState<'_>,
+    raw_keys: &[String],
+) -> Result<usize, GatewayError> {
+    if raw_keys.is_empty() {
+        return Ok(0);
+    }
+
+    if let Some(runner) = state.redis_kv_runner() {
+        let mut connection = runner
+            .client()
+            .get_multiplexed_async_connection()
+            .await
+            .map_err(|err| {
+                GatewayError::Internal(format!("admin monitoring redis connect failed: {err}"))
+            })?;
+        let deleted = redis::cmd("DEL")
+            .arg(raw_keys)
+            .query_async::<i64>(&mut connection)
+            .await
+            .map_err(|err| {
+                GatewayError::Internal(format!("admin monitoring redis delete failed: {err}"))
+            })?;
+        return Ok(usize::try_from(deleted).unwrap_or(0));
+    }
+
+    Ok(delete_admin_monitoring_cache_affinity_entries_for_tests(
+        state, raw_keys,
+    ))
+}
+
+#[cfg(test)]
 mod tests {
     use super::{
         admin_monitoring_scheduler_affinity_record_from_raw,
@@ -507,53 +576,4 @@ mod tests {
         assert_eq!(record.request_count, 0);
         assert!(record.request_count_known);
     }
-}
-
-#[cfg(test)]
-pub(super) fn delete_admin_monitoring_cache_affinity_entries_for_tests(
-    state: &AdminAppState<'_>,
-    raw_keys: &[String],
-) -> usize {
-    state
-        .as_ref()
-        .remove_admin_monitoring_cache_affinity_entries_for_tests(raw_keys)
-}
-
-#[cfg(not(test))]
-pub(super) fn delete_admin_monitoring_cache_affinity_entries_for_tests(
-    _state: &AdminAppState<'_>,
-    _raw_keys: &[String],
-) -> usize {
-    0
-}
-
-pub(super) async fn delete_admin_monitoring_cache_affinity_raw_keys(
-    state: &AdminAppState<'_>,
-    raw_keys: &[String],
-) -> Result<usize, GatewayError> {
-    if raw_keys.is_empty() {
-        return Ok(0);
-    }
-
-    if let Some(runner) = state.redis_kv_runner() {
-        let mut connection = runner
-            .client()
-            .get_multiplexed_async_connection()
-            .await
-            .map_err(|err| {
-                GatewayError::Internal(format!("admin monitoring redis connect failed: {err}"))
-            })?;
-        let deleted = redis::cmd("DEL")
-            .arg(raw_keys)
-            .query_async::<i64>(&mut connection)
-            .await
-            .map_err(|err| {
-                GatewayError::Internal(format!("admin monitoring redis delete failed: {err}"))
-            })?;
-        return Ok(usize::try_from(deleted).unwrap_or(0));
-    }
-
-    Ok(delete_admin_monitoring_cache_affinity_entries_for_tests(
-        state, raw_keys,
-    ))
 }

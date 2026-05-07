@@ -516,6 +516,7 @@ mod tests {
             upstream_pool_idle_timeout_secs: 60,
             upstream_tcp_keepalive_secs: 60,
             upstream_tcp_nodelay: true,
+            upstream_proxy_url: None,
             redirect_replay_budget_bytes: crate::config::DEFAULT_REDIRECT_REPLAY_BUDGET_BYTES,
             log_level: "info".to_string(),
             log_destination: crate::config::ProxyLogDestinationArg::Stdout,

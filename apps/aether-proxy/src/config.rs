@@ -455,6 +455,11 @@ pub struct Config {
     )]
     pub upstream_tcp_nodelay: bool,
 
+    /// Optional egress proxy used only for provider upstream requests.
+    /// Supported schemes: http, socks5, socks5h.
+    #[arg(long, env = "AETHER_PROXY_UPSTREAM_PROXY_URL")]
+    pub upstream_proxy_url: Option<String>,
+
     /// Maximum request body bytes buffered to support 307/308 redirect replay.
     /// Accepts values like 5M / 512K / 1G. Set to 0 to disable request-body replay buffering.
     #[arg(
@@ -675,6 +680,15 @@ impl Config {
         if self.upstream_connect_timeout_secs == 0 {
             anyhow::bail!("upstream_connect_timeout_secs must be > 0");
         }
+        if let Some(proxy_url) = self
+            .upstream_proxy_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            crate::egress_proxy::UpstreamProxyConfig::parse(proxy_url)
+                .map_err(|err| anyhow::anyhow!("upstream_proxy_url invalid: {err}"))?;
+        }
         if matches!(self.max_in_flight_streams, Some(0)) {
             anyhow::bail!("max_in_flight_streams must be > 0");
         }
@@ -857,6 +871,8 @@ pub struct ConfigFile {
     pub upstream_tcp_keepalive_secs: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub upstream_tcp_nodelay: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_proxy_url: Option<String>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -1028,6 +1044,7 @@ impl ConfigFile {
             "AETHER_PROXY_UPSTREAM_TCP_NODELAY",
             self.upstream_tcp_nodelay
         );
+        set!("AETHER_PROXY_UPSTREAM_PROXY_URL", self.upstream_proxy_url);
         set!(
             "AETHER_PROXY_REDIRECT_REPLAY_BUDGET_BYTES",
             self.redirect_replay_budget_bytes
@@ -1204,6 +1221,16 @@ mod tests {
     fn config_file_deserializes_allow_private_targets() {
         let cfg: ConfigFile = toml::from_str("allow_private_targets = true").expect("bool toml");
         assert_eq!(cfg.allow_private_targets, Some(true));
+    }
+
+    #[test]
+    fn config_file_deserializes_upstream_proxy_url() {
+        let cfg: ConfigFile = toml::from_str("upstream_proxy_url = \"http://proxy.example:8080\"")
+            .expect("proxy URL toml");
+        assert_eq!(
+            cfg.upstream_proxy_url.as_deref(),
+            Some("http://proxy.example:8080")
+        );
     }
 
     #[test]

@@ -2,6 +2,7 @@
 
 mod app;
 mod config;
+mod egress_proxy;
 mod hardware;
 mod net;
 mod registration;

@@ -772,6 +772,17 @@ async fn execute_upstream_request(
         .body(request_body)
         .map_err(|error| format!("invalid upstream request: {error}"))?;
     apply_upstream_headers(request.headers_mut(), headers);
+    if current_url.scheme() == "http" {
+        if let Some(value) = upstream_client::http_proxy_authorization_header(
+            state.config.upstream_proxy_url.as_deref(),
+        ) {
+            let value = hyper::header::HeaderValue::from_str(&value)
+                .map_err(|error| format!("invalid upstream proxy auth header: {error}"))?;
+            request
+                .headers_mut()
+                .insert(hyper::header::PROXY_AUTHORIZATION, value);
+        }
+    }
 
     let connection_start = Instant::now();
     let mut captured_connection = upstream_client::capture_connection(&mut request);
@@ -2354,6 +2365,7 @@ mod tests {
             upstream_pool_idle_timeout_secs: 60,
             upstream_tcp_keepalive_secs: 60,
             upstream_tcp_nodelay: true,
+            upstream_proxy_url: None,
             redirect_replay_budget_bytes: crate::config::DEFAULT_REDIRECT_REPLAY_BUDGET_BYTES,
             log_level: "info".to_string(),
             log_destination: crate::config::ProxyLogDestinationArg::Stdout,

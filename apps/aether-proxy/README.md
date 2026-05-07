@@ -110,7 +110,14 @@ sudo aether-proxy uninstall
 | `--upstream-pool-idle-timeout-secs` | `AETHER_PROXY_UPSTREAM_POOL_IDLE_TIMEOUT_SECS` | `300` | 连接池空闲超时（秒） |
 | `--upstream-tcp-keepalive-secs` | `AETHER_PROXY_UPSTREAM_TCP_KEEPALIVE_SECS` | `60` | TCP keepalive（秒，0 关闭） |
 | `--upstream-tcp-nodelay` | `AETHER_PROXY_UPSTREAM_TCP_NODELAY` | `true` | 启用 TCP_NODELAY |
+| `--upstream-proxy-url` | `AETHER_PROXY_UPSTREAM_PROXY_URL` | 空 | 仅 provider 上游请求使用的出口代理，支持 `http://`、`socks5://`、`socks5h://` |
 | `--redirect-replay-budget-bytes` | `AETHER_PROXY_REDIRECT_REPLAY_BUDGET_BYTES` | `5M` | 307/308 请求体重放的预读预算，支持 `K/M/G`，`0` 表示禁用 body replay buffering |
+
+`upstream_proxy_url` 只影响 `aether-proxy` 访问 OpenAI、Claude、Gemini 等 provider 的上游请求，不影响节点回连 Aether 服务器的 WebSocket tunnel。配合 WARP sidecar 时可填写：
+
+```toml
+upstream_proxy_url = "socks5h://microwarp:1080"
+```
 
 #### Aether API 客户端
 

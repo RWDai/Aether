@@ -82,6 +82,19 @@ pub async fn run(mut config: Config, servers: Vec<ServerEntry>) -> anyhow::Resul
         server_count = servers.len(),
         "aether-proxy starting (tunnel mode)"
     );
+    if let Some(proxy_url) = config
+        .upstream_proxy_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if let Ok(proxy) = crate::egress_proxy::UpstreamProxyConfig::parse(proxy_url) {
+            info!(
+                upstream_proxy_url = %proxy.redacted_url(),
+                "provider upstream egress proxy configured"
+            );
+        }
+    }
 
     // Resolve public IP (best-effort for region info)
     let public_ip = match &config.public_ip {
@@ -961,6 +974,7 @@ mod tests {
             upstream_pool_idle_timeout_secs: 60,
             upstream_tcp_keepalive_secs: 60,
             upstream_tcp_nodelay: true,
+            upstream_proxy_url: None,
             redirect_replay_budget_bytes: DEFAULT_REDIRECT_REPLAY_BUDGET_BYTES,
             log_level: "info".to_string(),
             log_destination: ProxyLogDestinationArg::Stdout,

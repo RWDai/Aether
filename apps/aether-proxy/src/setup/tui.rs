@@ -25,6 +25,7 @@ use crate::config::{
     ProxyLogRotationArg, ServerEntry, DEFAULT_HEARTBEAT_INTERVAL_SECS, DEFAULT_LOG_MAX_FILES,
     DEFAULT_LOG_RETENTION_DAYS, DEFAULT_REDIRECT_REPLAY_BUDGET_HUMAN,
 };
+use crate::egress_proxy::UpstreamProxyConfig;
 
 /// Outcome of the setup wizard, returned to the caller.
 pub enum SetupOutcome {
@@ -192,6 +193,15 @@ impl App {
                     help:
                         "Prebuffer budget for 307/308 replay, e.g. 5M; set 0 to disable buffering",
                 },
+                Field {
+                    label: "Upstream Proxy",
+                    key: "upstream_proxy_url",
+                    value: String::new(),
+                    kind: FieldKind::Text,
+                    required: false,
+                    help:
+                        "Optional provider egress proxy, e.g. http://127.0.0.1:8080 or socks5h://127.0.0.1:1080",
+                },
             ],
             selected: 0,
             mode: Mode::Normal,
@@ -266,6 +276,7 @@ impl App {
                 "allow_private_targets" => cfg.allow_private_targets.map(|v| v.to_string()),
                 "heartbeat_interval" => cfg.heartbeat_interval.map(|v| v.to_string()),
                 "redirect_replay_budget_bytes" => cfg.redirect_replay_budget_bytes.clone(),
+                "upstream_proxy_url" => cfg.upstream_proxy_url.clone(),
                 _ => None,
             };
             if let Some(v) = val {
@@ -345,6 +356,19 @@ impl App {
         Ok(Some(format_byte_size_human(bytes)))
     }
 
+    fn parse_optional_upstream_proxy_url(&self) -> anyhow::Result<Option<String>> {
+        let Some(raw) = self.get_global("upstream_proxy_url") else {
+            return Ok(None);
+        };
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Ok(None);
+        }
+        UpstreamProxyConfig::parse(trimmed)
+            .map_err(|err| anyhow::anyhow!("upstream proxy URL invalid: {err}"))?;
+        Ok(Some(trimmed.to_string()))
+    }
+
     fn default_file_log_dir(&self) -> String {
         if self.toggle_enabled("install_service") {
             return "/var/log/aether-proxy".to_string();
@@ -375,6 +399,7 @@ impl App {
             allow_private_targets: Some(self.toggle_enabled("allow_private_targets")),
             heartbeat_interval: self.parse_optional_heartbeat_interval()?,
             redirect_replay_budget_bytes: self.parse_optional_redirect_replay_budget()?,
+            upstream_proxy_url: self.parse_optional_upstream_proxy_url()?,
             log_destination: Some(if save_logs_to_file {
                 ProxyLogDestinationArg::Both
             } else {
@@ -681,6 +706,12 @@ impl App {
                     return true;
                 }
                 parse_byte_size(trimmed).is_ok()
+            }
+            "upstream_proxy_url" => {
+                if trimmed.is_empty() {
+                    return true;
+                }
+                UpstreamProxyConfig::parse(trimmed).is_ok()
             }
             _ => true,
         }
@@ -1093,11 +1124,16 @@ mod tests {
         set_global_field(&mut app, "allow_private_targets", "true");
         set_global_field(&mut app, "heartbeat_interval", "45");
         set_global_field(&mut app, "redirect_replay_budget_bytes", "6m");
+        set_global_field(&mut app, "upstream_proxy_url", "socks5h://127.0.0.1:1080");
 
         let cfg = app.to_config().expect("config should serialize");
         assert_eq!(cfg.allow_private_targets, Some(true));
         assert_eq!(cfg.heartbeat_interval, Some(45));
         assert_eq!(cfg.redirect_replay_budget_bytes.as_deref(), Some("6M"));
+        assert_eq!(
+            cfg.upstream_proxy_url.as_deref(),
+            Some("socks5h://127.0.0.1:1080")
+        );
     }
 
     #[test]
@@ -1107,6 +1143,17 @@ mod tests {
 
         let error = app.to_config().expect_err("heartbeat 0 should be rejected");
         assert!(error.to_string().contains("heartbeat interval"));
+    }
+
+    #[test]
+    fn to_config_rejects_invalid_upstream_proxy_url() {
+        let mut app = sample_app();
+        set_global_field(&mut app, "upstream_proxy_url", "ftp://proxy.example");
+
+        let error = app
+            .to_config()
+            .expect_err("invalid upstream proxy should be rejected");
+        assert!(error.to_string().contains("upstream proxy URL"));
     }
 
     #[test]

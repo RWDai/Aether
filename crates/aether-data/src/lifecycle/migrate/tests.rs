@@ -291,6 +291,7 @@ fn empty_database_snapshot_covers_current_cutoff_versions() {
             20260502000000,
             20260505000000,
             20260505130000,
+            20260507120000,
         ]
     );
 }
@@ -496,7 +497,7 @@ fn mysql_and_sqlite_migrations_do_not_use_postgres_jsonb() {
 }
 
 #[test]
-fn mysql_and_sqlite_migrations_are_baseline_only_until_enabled() {
+fn mysql_and_sqlite_migrations_include_enabled_incrementals() {
     let mysql_versions = super::mysql::MIGRATOR
         .iter()
         .filter(|migration| migration.migration_type.is_up_migration())
@@ -508,8 +509,8 @@ fn mysql_and_sqlite_migrations_are_baseline_only_until_enabled() {
         .map(|migration| migration.version)
         .collect::<Vec<_>>();
 
-    assert_eq!(mysql_versions, vec![20260403000000]);
-    assert_eq!(sqlite_versions, vec![20260403000000]);
+    assert_eq!(mysql_versions, vec![20260403000000, 20260507120000]);
+    assert_eq!(sqlite_versions, vec![20260403000000, 20260507120000]);
 }
 
 #[test]
@@ -1010,6 +1011,7 @@ fn pending_migrations_from_applied_skips_versions_already_applied() {
             20260502000000,
             20260505000000,
             20260505130000,
+            20260507120000,
         ]
     );
 }

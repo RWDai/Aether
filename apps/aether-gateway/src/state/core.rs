@@ -67,6 +67,7 @@ impl AppState {
         };
 
         let cache_key = cache_key.to_string();
+        let namespaced_cache_key = runner.keyspace().key(&cache_key);
         let provider_id = target.provider_id.clone();
         let endpoint_id = target.endpoint_id.clone();
         let key_id = target.key_id.clone();
@@ -75,19 +76,48 @@ impl AppState {
         let expire_at = now_unix_secs.saturating_add(ttl_seconds);
 
         handle.spawn(async move {
-            let payload = serde_json::json!({
-                "provider_id": provider_id,
-                "endpoint_id": endpoint_id,
-                "key_id": key_id,
-                "created_at": now_unix_secs,
-                "expire_at": expire_at,
-                "request_count": 0,
-            });
-            let Ok(serialized) = serde_json::to_string(&payload) else {
+            let Ok(mut connection) = runner.client().get_multiplexed_async_connection().await
+            else {
                 return;
             };
-            let _ = runner
-                .setex(&cache_key, &serialized, Some(ttl_seconds))
+            let script = r#"
+local existing = redis.call('GET', KEYS[1])
+local request_count = 0
+local created_at = tonumber(ARGV[4])
+if existing then
+  local ok, payload = pcall(cjson.decode, existing)
+  if ok and type(payload) == 'table' then
+    if type(payload['request_count']) == 'number' then
+      request_count = payload['request_count']
+    end
+    if type(payload['created_at']) == 'number' then
+      created_at = payload['created_at']
+    end
+  end
+end
+request_count = request_count + 1
+local payload = {
+  provider_id = ARGV[1],
+  endpoint_id = ARGV[2],
+  key_id = ARGV[3],
+  created_at = created_at,
+  expire_at = tonumber(ARGV[5]),
+  request_count = request_count
+}
+redis.call('SETEX', KEYS[1], tonumber(ARGV[6]), cjson.encode(payload))
+return request_count
+"#;
+            let _ = redis::cmd("EVAL")
+                .arg(script)
+                .arg(1)
+                .arg(&namespaced_cache_key)
+                .arg(&provider_id)
+                .arg(&endpoint_id)
+                .arg(&key_id)
+                .arg(now_unix_secs)
+                .arg(expire_at)
+                .arg(ttl_seconds)
+                .query_async::<i64>(&mut connection)
                 .await;
         });
     }

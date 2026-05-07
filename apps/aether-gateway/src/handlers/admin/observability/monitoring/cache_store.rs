@@ -216,6 +216,9 @@ async fn list_admin_monitoring_cache_affinity_records_matching(
                             runner
                                 .keyspace()
                                 .key(&format!("scheduler_affinity:{affinity_key}:*")),
+                            runner
+                                .keyspace()
+                                .key(&format!("scheduler_affinity:v2:{affinity_key}:*")),
                         ]
                     })
                     .collect::<Vec<_>>()

@@ -172,11 +172,62 @@
         </div>
       </div>
 
+      <div class="flex flex-col gap-2 border-b border-border/60 bg-muted/20 px-4 py-2.5 text-xs sm:flex-row sm:items-center sm:justify-between sm:px-6">
+        <div class="flex flex-wrap items-center gap-2 text-muted-foreground">
+          <label class="flex items-center gap-2">
+            <Checkbox
+              :checked="isAllFilteredSelected"
+              :indeterminate="isPartiallyFilteredSelected"
+              :disabled="filteredUsers.length === 0 || usersStore.loading"
+              @update:checked="toggleSelectFiltered"
+            />
+            <span>全选筛选结果</span>
+          </label>
+          <span>匹配 {{ filteredUsers.length }} 个，当前页 {{ paginatedUsers.length }} 个，已选 {{ selectedCount }} 个</span>
+        </div>
+        <div class="flex flex-wrap items-center gap-1.5">
+          <Button
+            variant="ghost"
+            size="sm"
+            class="h-7 px-2 text-[11px]"
+            :disabled="paginatedUsers.length === 0 || selectAllFiltered || usersStore.loading"
+            @click="toggleSelectCurrentPage"
+          >
+            {{ isCurrentPageFullySelected ? '取消本页全选' : '本页全选' }}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            class="h-7 px-2 text-[11px]"
+            :disabled="!canClearSelection || usersStore.loading"
+            @click="clearSelection"
+          >
+            清空选择
+          </Button>
+          <Button
+            size="sm"
+            class="h-7 px-3 text-[11px]"
+            :disabled="selectedCount === 0 || usersStore.loading"
+            @click="openUserBatchDialog"
+          >
+            批量操作
+          </Button>
+        </div>
+      </div>
+
       <!-- 桌面端表格 -->
       <div class="hidden xl:block overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow class="border-b border-border/60 hover:bg-transparent">
+              <TableHead class="w-[44px] h-12">
+                <Checkbox
+                  :checked="isCurrentPageFullySelected || isAllFilteredSelected"
+                  :indeterminate="isPartiallyFilteredSelected && !isCurrentPageFullySelected"
+                  :disabled="paginatedUsers.length === 0 || selectAllFiltered || usersStore.loading"
+                  @update:checked="toggleSelectCurrentPage"
+                />
+              </TableHead>
               <SortableTableHead
                 class="w-[260px] h-12 font-semibold"
                 column-key="role"
@@ -231,6 +282,13 @@
               :key="user.id"
               class="border-b border-border/40 hover:bg-muted/30 transition-colors"
             >
+              <TableCell class="py-4">
+                <Checkbox
+                  :checked="selectAllFiltered || selectedIdSet.has(user.id)"
+                  :disabled="selectAllFiltered || usersStore.loading"
+                  @update:checked="(checked) => toggleOne(user.id, checked === true)"
+                />
+              </TableCell>
               <TableCell class="py-4">
                 <div class="flex items-center gap-3">
                   <Avatar class="h-10 w-10 ring-2 ring-background shadow-md">
@@ -440,6 +498,12 @@
           >
             <div class="space-y-4">
               <div class="flex items-start gap-3">
+                <Checkbox
+                  class="mt-2 shrink-0"
+                  :checked="selectAllFiltered || selectedIdSet.has(user.id)"
+                  :disabled="selectAllFiltered || usersStore.loading"
+                  @update:checked="(checked) => toggleOne(user.id, checked === true)"
+                />
                 <Avatar class="h-10 w-10 ring-2 ring-background shadow-md flex-shrink-0">
                   <AvatarFallback class="bg-primary text-sm font-bold text-white">
                     {{ user.username.charAt(0).toUpperCase() }}
@@ -635,6 +699,16 @@
       :user="editingUser"
       @close="closeUserFormDialog"
       @submit="handleUserFormSubmit"
+    />
+
+    <UserBatchActionDialog
+      :open="showUserBatchDialog"
+      :selected-ids="selectedIds"
+      :select-all-filtered="selectAllFiltered"
+      :selected-count="selectedCount"
+      :filters="batchSelectionFilters"
+      @close="showUserBatchDialog = false"
+      @completed="handleUserBatchCompleted"
     />
 
     <!-- API Keys 管理对话框 -->
@@ -1060,7 +1134,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useUsersStore } from '@/stores/users'
-import type { User, ApiKey, UserSession } from '@/api/users'
+import type { User, ApiKey, UserSession, UserBatchActionResponse, UserBatchSelectionFilters } from '@/api/users'
 import { formatSessionMeta } from '@/types/session'
 import { adminWalletApi, type AdminWallet } from '@/api/admin-wallets'
 import { useToast } from '@/composables/useToast'
@@ -1093,7 +1167,8 @@ import {
   Avatar,
   AvatarFallback,
   Pagination,
-  RefreshButton
+  RefreshButton,
+  Checkbox
 } from '@/components/ui'
 
 import {
@@ -1114,11 +1189,13 @@ import {
 
 // 功能组件
 import UserFormDialog, { type UserFormData } from '@/features/users/components/UserFormDialog.vue'
+import UserBatchActionDialog from '@/features/users/components/UserBatchActionDialog.vue'
 import WalletOpsDrawer from '@/features/wallet/components/WalletOpsDrawer.vue'
 import { parseApiError } from '@/utils/errorParser'
 import { formatTokens, formatRateLimitInheritable, formatRateLimitSimple, isRateLimitInherited, isRateLimitUnlimited } from '@/utils/format'
 import { parseNumberInput } from '@/utils/form'
 import { log } from '@/utils/logger'
+import { useBatchSelection } from '@/composables/useBatchSelection'
 
 const { success, error } = useToast()
 const { confirmDanger } = useConfirm()
@@ -1155,6 +1232,7 @@ const userWalletMap = ref<Record<string, AdminWallet>>({})
 
 const showWalletActionDialogState = ref(false)
 const walletActionTarget = ref<{ user: User; wallet: AdminWallet } | null>(null)
+const showUserBatchDialog = ref(false)
 
 const searchQuery = ref('')
 const filterRole = ref('all')
@@ -1215,10 +1293,45 @@ const paginatedUsers = computed(() => {
   return filteredUsers.value.slice(start, start + pageSize.value)
 })
 
+const filteredUserCount = computed(() => filteredUsers.value.length)
+const {
+  selectedIds,
+  selectAllFiltered,
+  selectedIdSet,
+  selectedCount,
+  isAllFilteredSelected,
+  isPartiallyFilteredSelected,
+  isCurrentPageFullySelected,
+  canClearSelection,
+  rememberItems: rememberBatchPageUsers,
+  resetSelection: resetBatchSelection,
+  toggleOne,
+  toggleSelectFiltered,
+  toggleSelectCurrentPage,
+  clearSelection,
+} = useBatchSelection<User>({
+  pageItems: paginatedUsers,
+  filteredTotal: filteredUserCount,
+  getItemId: (user) => user.id,
+})
+
+const batchSelectionFilters = computed<UserBatchSelectionFilters>(() => {
+  const filters: UserBatchSelectionFilters = {}
+  const search = searchQuery.value.trim()
+  if (search) filters.search = search
+  if (filterRole.value === 'admin' || filterRole.value === 'user') filters.role = filterRole.value
+  if (filterStatus.value === 'active') filters.is_active = true
+  if (filterStatus.value === 'inactive') filters.is_active = false
+  return filters
+})
+
 // Watch filter changes and reset to first page
 watch([searchQuery, filterRole, filterStatus], () => {
   currentPage.value = 1
+  resetBatchSelection()
 })
+
+watch(paginatedUsers, (users) => rememberBatchPageUsers(users), { immediate: true })
 
 onMounted(() => {
   void refreshUsers({ preferCache: true })
@@ -1230,6 +1343,16 @@ async function refreshUsers(options: { preferCache?: boolean } = {}) {
   void loadUserWallets({
     cacheTtlMs: options.preferCache ? USER_WALLETS_CACHE_TTL_MS : 0,
   })
+}
+
+function openUserBatchDialog(): void {
+  if (selectedCount.value === 0) return
+  showUserBatchDialog.value = true
+}
+
+async function handleUserBatchCompleted(_result: UserBatchActionResponse): Promise<void> {
+  await refreshUsers()
+  resetBatchSelection(true)
 }
 
 function formatDate(dateString: string) {

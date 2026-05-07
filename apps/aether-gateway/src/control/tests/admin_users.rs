@@ -37,6 +37,38 @@ fn classifies_admin_users_create_as_admin_proxy_route() {
 }
 
 #[test]
+fn classifies_admin_user_batch_routes_as_admin_proxy_route() {
+    let headers = headers(&[]);
+
+    let resolve_uri: Uri = "/api/admin/users/resolve-selection"
+        .parse()
+        .expect("uri should parse");
+    let resolve = classify_control_route(&http::Method::POST, &resolve_uri, &headers)
+        .expect("route should classify");
+    assert_eq!(resolve.route_family.as_deref(), Some("users_manage"));
+    assert_eq!(
+        resolve.route_kind.as_deref(),
+        Some("resolve_user_selection")
+    );
+    assert_eq!(
+        resolve.auth_endpoint_signature.as_deref(),
+        Some("admin:users")
+    );
+
+    let batch_uri: Uri = "/api/admin/users/batch-action"
+        .parse()
+        .expect("uri should parse");
+    let batch = classify_control_route(&http::Method::POST, &batch_uri, &headers)
+        .expect("route should classify");
+    assert_eq!(batch.route_family.as_deref(), Some("users_manage"));
+    assert_eq!(batch.route_kind.as_deref(), Some("batch_action_users"));
+    assert_eq!(
+        batch.auth_endpoint_signature.as_deref(),
+        Some("admin:users")
+    );
+}
+
+#[test]
 fn classifies_admin_user_detail_routes_as_admin_proxy_route() {
     let headers = headers(&[]);
 

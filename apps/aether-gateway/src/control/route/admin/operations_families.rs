@@ -490,6 +490,32 @@ pub(super) fn classify_admin_operations_family_route(
             "admin:users",
             false,
         ))
+    } else if method == http::Method::POST
+        && matches!(
+            normalized_path,
+            "/api/admin/users/resolve-selection" | "/api/admin/users/resolve-selection/"
+        )
+    {
+        Some(classified(
+            "admin_proxy",
+            "users_manage",
+            "resolve_user_selection",
+            "admin:users",
+            false,
+        ))
+    } else if method == http::Method::POST
+        && matches!(
+            normalized_path,
+            "/api/admin/users/batch-action" | "/api/admin/users/batch-action/"
+        )
+    {
+        Some(classified(
+            "admin_proxy",
+            "users_manage",
+            "batch_action_users",
+            "admin:users",
+            false,
+        ))
     } else if method == http::Method::GET
         && normalized_path.starts_with("/api/admin/users/")
         && normalized_path.ends_with("/sessions")

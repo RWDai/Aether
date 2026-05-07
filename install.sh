@@ -26,6 +26,9 @@ ENV_SOURCE=""
 SKIP_START="false"
 GENERATED_ENV=""
 ADMIN_PASSWORD_SOURCE=""
+UI_LANG="${AETHER_LANG:-${AETHER_LANGUAGE:-auto}}"
+RELEASE_ARCHIVE_URL="${AETHER_RELEASE_ARCHIVE_URL:-${AETHER_DOWNLOAD_URL:-}}"
+RELEASE_CHECKSUM_URL="${AETHER_RELEASE_CHECKSUM_URL:-}"
 
 usage() {
     cat <<'EOF'
@@ -45,15 +48,20 @@ Options:
   --repo OWNER/REPO    GitHub repository to download from (default: fawney19/Aether)
   --source-ref REF     Source branch/tag used for compose templates (default: aether-rust-pioneer)
   --archive PATH       Install from a local release tarball instead of downloading
+  --download-url URL   Download the release archive from this URL instead of GitHub
+  --checksum-url URL   Download SHA256SUMS from this URL instead of GitHub
   --env-file PATH      Use an existing aether-gateway.env file
   --install-root PATH  Install root (default: /opt/aether)
   --compose-dir PATH   Docker Compose deployment directory (default: /opt/aether/compose)
   --config-dir PATH    Config directory (default: /etc/aether)
+  --lang LANG          Installer language: zh or en
   --skip-start         Install files and unit, but do not restart the service
   -h, --help           Show this help
 
 Environment overrides:
   AETHER_REPO, AETHER_SOURCE_REF, AETHER_INSTALL_MODE, AETHER_CHANNEL, AETHER_VERSION
+  AETHER_LANG or AETHER_LANGUAGE
+  AETHER_RELEASE_ARCHIVE_URL or AETHER_DOWNLOAD_URL, AETHER_RELEASE_CHECKSUM_URL
   AETHER_IMAGE_REPO, AETHER_APP_IMAGE
   INSTALL_ROOT, AETHER_COMPOSE_DIR, CONFIG_DIR, SERVICE_USER, SERVICE_GROUP
   ADMIN_PASSWORD (required for non-interactive first install when generating a new env)
@@ -62,7 +70,11 @@ EOF
 }
 
 die() {
-    echo "ERROR: $*" >&2
+    if ui_is_zh; then
+        echo "错误: $*" >&2
+    else
+        echo "ERROR: $*" >&2
+    fi
     exit 1
 }
 
@@ -71,7 +83,79 @@ info() {
 }
 
 warn() {
-    echo "WARNING: $*" >&2
+    if ui_is_zh; then
+        echo "警告: $*" >&2
+    else
+        echo "WARNING: $*" >&2
+    fi
+}
+
+ui_is_zh() {
+    case "${UI_LANG}" in
+        zh|zh-*|cn|chinese|Chinese|中文)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+interactive_tty_available() {
+    [[ -r /dev/tty && -w /dev/tty ]]
+}
+
+normalize_ui_lang() {
+    local value="$1"
+    value="$(printf '%s' "${value}" | tr '[:upper:]' '[:lower:]')"
+    case "${value}" in
+        zh|zh-cn|cn|chinese|中文)
+            echo "zh"
+            ;;
+        en|en-us|english|英语)
+            echo "en"
+            ;;
+        auto|"")
+            echo "auto"
+            ;;
+        *)
+            die "unsupported installer language: ${value}; expected zh or en"
+            ;;
+    esac
+}
+
+select_language() {
+    UI_LANG="$(normalize_ui_lang "${UI_LANG}")"
+    if [[ "${UI_LANG}" != "auto" ]]; then
+        return
+    fi
+
+    if interactive_tty_available; then
+        cat >/dev/tty <<'EOF'
+
+请选择安装语言 / Choose installer language:
+  1) 中文
+  2) 英语 / English
+
+请输入选项 / Enter choice [1]:
+EOF
+        local choice
+        IFS= read -r choice </dev/tty || choice=""
+        case "${choice:-1}" in
+            1)
+                UI_LANG="zh"
+                ;;
+            2)
+                UI_LANG="en"
+                ;;
+            *)
+                UI_LANG="zh"
+                die "无效的语言选项: ${choice}"
+                ;;
+        esac
+    else
+        UI_LANG="en"
+    fi
 }
 
 cleanup() {
@@ -115,6 +199,16 @@ parse_args() {
                 ARCHIVE_PATH="$2"
                 shift 2
                 ;;
+            --download-url|--archive-url|--release-url)
+                [[ $# -ge 2 ]] || die "--download-url requires a value"
+                RELEASE_ARCHIVE_URL="$2"
+                shift 2
+                ;;
+            --checksum-url|--sums-url)
+                [[ $# -ge 2 ]] || die "--checksum-url requires a value"
+                RELEASE_CHECKSUM_URL="$2"
+                shift 2
+                ;;
             --env-file)
                 [[ $# -ge 2 ]] || die "--env-file requires a path"
                 ENV_SOURCE="$2"
@@ -140,6 +234,11 @@ parse_args() {
                 ENV_TARGET="${CONFIG_DIR}/aether-gateway.env"
                 shift 2
                 ;;
+            --lang|--language)
+                [[ $# -ge 2 ]] || die "--lang requires a value"
+                UI_LANG="$2"
+                shift 2
+                ;;
             --skip-start)
                 SKIP_START="true"
                 shift
@@ -156,17 +255,33 @@ parse_args() {
 }
 
 require_linux() {
-    [[ "$(uname -s)" == "Linux" ]] || die "Aether binary install is only supported on Linux"
+    if [[ "$(uname -s)" != "Linux" ]]; then
+        if ui_is_zh; then
+            die "Aether 二进制安装仅支持 Linux"
+        else
+            die "Aether binary install is only supported on Linux"
+        fi
+    fi
 }
 
 require_root() {
     if [[ "${EUID}" -ne 0 ]]; then
-        die "run as root"
+        if ui_is_zh; then
+            die "请使用 root 运行"
+        else
+            die "run as root"
+        fi
     fi
 }
 
 require_systemd() {
-    command -v systemctl >/dev/null 2>&1 || die "systemctl not found"
+    if ! command -v systemctl >/dev/null 2>&1; then
+        if ui_is_zh; then
+            die "未找到 systemctl"
+        else
+            die "systemctl not found"
+        fi
+    fi
 }
 
 select_version() {
@@ -174,8 +289,18 @@ select_version() {
         return
     fi
 
-    if [[ -r /dev/tty && -w /dev/tty ]]; then
-        cat >/dev/tty <<'EOF'
+    if interactive_tty_available; then
+        if ui_is_zh; then
+            cat >/dev/tty <<'EOF'
+
+请选择 Aether 版本:
+  1) 最新预发布版本
+  2) 指定 tag，例如 v0.7.0-rc23
+
+请输入选项 [1]:
+EOF
+        else
+            cat >/dev/tty <<'EOF'
 
 Choose Aether version:
   1) Latest pre release
@@ -183,6 +308,7 @@ Choose Aether version:
 
 Enter choice [1]:
 EOF
+        fi
         local choice
         IFS= read -r choice </dev/tty || choice=""
         case "${choice:-1}" in
@@ -190,14 +316,30 @@ EOF
                 CHANNEL="pre"
                 ;;
             2)
-                cat >/dev/tty <<'EOF'
+                if ui_is_zh; then
+                    cat >/dev/tty <<'EOF'
+请输入准确 tag:
+EOF
+                else
+                    cat >/dev/tty <<'EOF'
 Enter exact tag:
 EOF
+                fi
                 IFS= read -r VERSION </dev/tty || VERSION=""
-                [[ -n "${VERSION}" ]] || die "exact tag cannot be empty"
+                if [[ -z "${VERSION}" ]]; then
+                    if ui_is_zh; then
+                        die "准确 tag 不能为空"
+                    else
+                        die "exact tag cannot be empty"
+                    fi
+                fi
                 ;;
             *)
-                die "invalid version choice: ${choice}"
+                if ui_is_zh; then
+                    die "无效的版本选项: ${choice}"
+                else
+                    die "invalid version choice: ${choice}"
+                fi
                 ;;
         esac
     fi
@@ -224,8 +366,19 @@ select_mode() {
             ;;
     esac
 
-    if [[ -r /dev/tty && -w /dev/tty ]]; then
-        cat >/dev/tty <<'EOF'
+    if interactive_tty_available; then
+        if ui_is_zh; then
+            cat >/dev/tty <<'EOF'
+
+请选择 Aether 部署模式:
+  1) Docker Compose: 应用 + Postgres + Redis
+  2) 单机服务: systemd + SQLite + 进程内运行时
+  3) 集群节点服务: systemd + 共享数据库 + Redis
+
+请输入选项 [2]:
+EOF
+        else
+            cat >/dev/tty <<'EOF'
 
 Choose Aether deployment mode:
   1) Docker Compose: app + Postgres + Redis
@@ -234,6 +387,7 @@ Choose Aether deployment mode:
 
 Enter choice [2]:
 EOF
+        fi
         local choice
         IFS= read -r choice </dev/tty || choice=""
         case "${choice:-2}" in
@@ -247,7 +401,11 @@ EOF
                 MODE="cluster"
                 ;;
             *)
-                die "invalid deployment mode choice: ${choice}"
+                if ui_is_zh; then
+                    die "无效的部署模式选项: ${choice}"
+                else
+                    die "invalid deployment mode choice: ${choice}"
+                fi
                 ;;
         esac
     else
@@ -261,25 +419,41 @@ prompt_admin_password() {
         return
     fi
 
-    if [[ -r /dev/tty && -w /dev/tty ]]; then
+    if interactive_tty_available; then
         local password confirm
         while true; do
-            printf '\nEnter initial admin password: ' >/dev/tty
+            if ui_is_zh; then
+                printf '\n请输入初始管理员密码: ' >/dev/tty
+            else
+                printf '\nEnter initial admin password: ' >/dev/tty
+            fi
             stty -echo </dev/tty
             IFS= read -r password </dev/tty || password=""
             stty echo </dev/tty
-            printf '\nConfirm initial admin password: ' >/dev/tty
+            if ui_is_zh; then
+                printf '\n请再次输入初始管理员密码: ' >/dev/tty
+            else
+                printf '\nConfirm initial admin password: ' >/dev/tty
+            fi
             stty -echo </dev/tty
             IFS= read -r confirm </dev/tty || confirm=""
             stty echo </dev/tty
             printf '\n' >/dev/tty
 
             [[ -n "${password}" ]] || {
-                echo "Admin password cannot be empty." >/dev/tty
+                if ui_is_zh; then
+                    echo "管理员密码不能为空。" >/dev/tty
+                else
+                    echo "Admin password cannot be empty." >/dev/tty
+                fi
                 continue
             }
             [[ "${password}" == "${confirm}" ]] || {
-                echo "Passwords did not match." >/dev/tty
+                if ui_is_zh; then
+                    echo "两次输入的密码不一致。" >/dev/tty
+                else
+                    echo "Passwords did not match." >/dev/tty
+                fi
                 continue
             }
             ADMIN_PASSWORD="${password}"
@@ -288,7 +462,11 @@ prompt_admin_password() {
         done
     fi
 
-    die "ADMIN_PASSWORD is required when installing without an interactive terminal"
+    if ui_is_zh; then
+        die "非交互式安装生成新配置时必须设置 ADMIN_PASSWORD"
+    else
+        die "ADMIN_PASSWORD is required when installing without an interactive terminal"
+    fi
 }
 
 detect_arch() {
@@ -339,6 +517,117 @@ download_stdout() {
         wget -qO- "${url}"
     else
         die "curl or wget is required to download release metadata"
+    fi
+}
+
+select_release_download_urls() {
+    local original_archive_url="$1"
+    local original_sums_url="$2"
+
+    if [[ -z "${RELEASE_ARCHIVE_URL}" && interactive_tty_available ]]; then
+        if ui_is_zh; then
+            cat >/dev/tty <<'EOF'
+
+是否使用下载加速源?
+  1) 否，使用原始 GitHub 地址
+  2) 是，手动填写新的下载 URL
+
+请输入选项 [1]:
+EOF
+        else
+            cat >/dev/tty <<'EOF'
+
+Use an accelerated download URL?
+  1) No, use the original GitHub URL
+  2) Yes, enter a replacement download URL
+
+Enter choice [1]:
+EOF
+        fi
+
+        local choice
+        IFS= read -r choice </dev/tty || choice=""
+        case "${choice:-1}" in
+            1)
+                ;;
+            2)
+                if ui_is_zh; then
+                    cat >/dev/tty <<EOF
+
+原始压缩包 URL:
+  ${original_archive_url}
+
+请输入新的压缩包下载 URL:
+EOF
+                else
+                    cat >/dev/tty <<EOF
+
+Original archive URL:
+  ${original_archive_url}
+
+Enter replacement archive download URL:
+EOF
+                fi
+                IFS= read -r RELEASE_ARCHIVE_URL </dev/tty || RELEASE_ARCHIVE_URL=""
+                [[ -n "${RELEASE_ARCHIVE_URL}" ]] || {
+                    if ui_is_zh; then
+                        die "新的压缩包下载 URL 不能为空"
+                    else
+                        die "replacement archive download URL cannot be empty"
+                    fi
+                }
+
+                if ui_is_zh; then
+                    cat >/dev/tty <<EOF
+
+原始校验文件 URL:
+  ${original_sums_url}
+
+如校验文件也需要加速，请输入新的校验文件下载 URL；直接回车使用原始 URL:
+EOF
+                else
+                    cat >/dev/tty <<EOF
+
+Original checksum URL:
+  ${original_sums_url}
+
+Enter replacement checksum download URL, or press Enter to use the original URL:
+EOF
+                fi
+                IFS= read -r RELEASE_CHECKSUM_URL </dev/tty || RELEASE_CHECKSUM_URL=""
+                ;;
+            *)
+                if ui_is_zh; then
+                    die "无效的下载源选项: ${choice}"
+                else
+                    die "invalid download source choice: ${choice}"
+                fi
+                ;;
+        esac
+    fi
+
+    if [[ -z "${RELEASE_ARCHIVE_URL}" ]]; then
+        RELEASE_ARCHIVE_URL="${original_archive_url}"
+    elif [[ "${RELEASE_ARCHIVE_URL}" != "${original_archive_url}" ]]; then
+        if ui_is_zh; then
+            info "使用自定义压缩包下载 URL"
+            info "原始压缩包 URL: ${original_archive_url}"
+        else
+            info "using custom archive download URL"
+            info "original archive URL: ${original_archive_url}"
+        fi
+    fi
+
+    if [[ -z "${RELEASE_CHECKSUM_URL}" ]]; then
+        RELEASE_CHECKSUM_URL="${original_sums_url}"
+    elif [[ "${RELEASE_CHECKSUM_URL}" != "${original_sums_url}" ]]; then
+        if ui_is_zh; then
+            info "使用自定义校验文件下载 URL"
+            info "原始校验文件 URL: ${original_sums_url}"
+        else
+            info "using custom checksum download URL"
+            info "original checksum URL: ${original_sums_url}"
+        fi
     fi
 }
 
@@ -435,18 +724,27 @@ download_or_unpack_bundle() {
         local arch
         arch="$(detect_arch)"
 
-        local tag asset base_url archive_file sums_file
+        local tag asset base_url archive_url sums_url archive_file sums_file
         tag="$(resolve_version)"
         [[ -n "${tag}" ]] || die "could not resolve ${CHANNEL} release tag for ${REPO}"
         VERSION="${tag}"
         asset="aether-${tag}-linux-${arch}.tar.gz"
         base_url="https://github.com/${REPO}/releases/download/${tag}"
+        archive_url="${base_url}/${asset}"
+        sums_url="${base_url}/SHA256SUMS"
         archive_file="${TMP_ROOT}/${asset}"
         sums_file="${TMP_ROOT}/SHA256SUMS"
 
-        info "downloading ${asset} from ${REPO}"
-        download_to "${base_url}/${asset}" "${archive_file}" progress
-        download_to "${base_url}/SHA256SUMS" "${sums_file}"
+        select_release_download_urls "${archive_url}" "${sums_url}"
+        if [[ "${RELEASE_ARCHIVE_URL}" == "${archive_url}" ]]; then
+            info "downloading ${asset} from ${REPO}"
+        elif ui_is_zh; then
+            info "从自定义 URL 下载 ${asset}"
+        else
+            info "downloading ${asset} from custom URL"
+        fi
+        download_to "${RELEASE_ARCHIVE_URL}" "${archive_file}" progress
+        download_to "${RELEASE_CHECKSUM_URL}" "${sums_file}"
         verify_checksum "${sums_file}" "${archive_file}"
         tar -xzf "${archive_file}" -C "${TMP_ROOT}"
     fi
@@ -1146,6 +1444,7 @@ main() {
     local bundle env_file
 
     parse_args "$@"
+    select_language
     require_linux
     select_version
     select_mode

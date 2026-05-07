@@ -79,28 +79,41 @@ git pull
 
 ### 一键安装（可选部署方式）
 
-安装脚本先从 `aether-rust-pioneer` 分支下载，不依赖 GitHub Release 的 `latest` 脚本地址。运行后会先选择版本，再选择部署方式。
+安装脚本先从 `aether-rust-pioneer` 分支下载，不依赖 GitHub Release 的 `latest` 脚本地址。运行后会先选择语言，再选择版本和部署方式。
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/fawney19/Aether/aether-rust-pioneer/install.sh | sudo bash
 ```
 
-运行后按提示输入版本和部署方式。固定安装某个 tag 时，版本选择选 `2`，再输入类似 `v0.7.0-rc23` 的 tag。默认会安装最新预发布版本；Docker Compose 模式默认使用 `pre` 镜像通道。
+运行后按提示输入语言、版本和部署方式。固定安装某个 tag 时，版本选择选 `2`，再输入类似 `v0.7.0-rc23` 的 tag。默认会安装最新预发布版本；Docker Compose 模式默认使用 `pre` 镜像通道。
+systemd 二进制安装在下载 Release 压缩包前会询问是否使用下载加速源；选择使用时会先打印原始 GitHub URL，再要求输入新的压缩包下载 URL。非交互式安装可用 `AETHER_RELEASE_ARCHIVE_URL` 指定压缩包 URL，用 `AETHER_RELEASE_CHECKSUM_URL` 指定 `SHA256SUMS` URL。
 如果安装目录里已经有配置，脚本会优先复用：Docker Compose 保留已有 `.env`，systemd 保留已有 `/etc/aether/aether-gateway.env`。只有首次生成新配置时才会提示输入管理员密码。
 
 ```text
-Choose Aether version:
-  1) Latest pre release
-  2) Exact tag, for example v0.7.0-rc23
+请选择安装语言 / Choose installer language:
+  1) 中文
+  2) 英语 / English
 
-Enter choice [1]:
+请输入选项 / Enter choice [1]:
 
-Choose Aether deployment mode:
-1) Docker Compose: app + Postgres + Redis
-2) Single-node service: systemd + SQLite + in-process runtime
-3) Cluster node service: systemd + shared database + Redis
+请选择 Aether 版本:
+  1) 最新预发布版本
+  2) 指定 tag，例如 v0.7.0-rc23
 
-Enter choice [2]:
+请输入选项 [1]:
+
+请选择 Aether 部署模式:
+  1) Docker Compose: 应用 + Postgres + Redis
+  2) 单机服务: systemd + SQLite + 进程内运行时
+  3) 集群节点服务: systemd + 共享数据库 + Redis
+
+请输入选项 [2]:
+
+是否使用下载加速源?
+  1) 否，使用原始 GitHub 地址
+  2) 是，手动填写新的下载 URL
+
+请输入选项 [1]:
 ```
 
 安装后的常用命令：

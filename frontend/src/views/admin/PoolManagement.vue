@@ -545,7 +545,7 @@
                   class="py-3 align-middle"
                 >
                   <div
-                    v-if="quotaProgressMap[key.key_id]?.length"
+                    v-if="quotaProgressMap[key.key_id]?.length || getCodexSparkQuotaItem(key)"
                     class="max-w-[208px] space-y-2"
                   >
                     <div
@@ -573,6 +573,50 @@
                           class="shrink-0 text-[10px] font-medium tabular-nums leading-none"
                           :class="getQuotaRemainingClassByRemaining(item.remainingPercent)"
                         >{{ item.remainingPercent.toFixed(1) }}%</span>
+                      </div>
+                    </div>
+                    <div
+                      v-if="getCodexSparkQuotaItem(key)"
+                      class="rounded-md border border-dashed border-border/70 bg-muted/20 px-2 py-1.5"
+                    >
+                      <button
+                        type="button"
+                        class="flex w-full items-center justify-between gap-2 text-[10px] leading-none text-muted-foreground transition-colors hover:text-foreground"
+                        :aria-expanded="isCodexSparkQuotaExpanded(key.key_id)"
+                        @click.stop="toggleCodexSparkQuota(key.key_id)"
+                      >
+                        <span class="font-medium">Spark 额度</span>
+                        <span class="ml-auto truncate tabular-nums">{{ getCodexSparkQuotaSummary(key) }}</span>
+                        <ChevronDown
+                          class="h-3 w-3 shrink-0 transition-transform duration-150"
+                          :class="isCodexSparkQuotaExpanded(key.key_id) ? 'rotate-180' : ''"
+                        />
+                      </button>
+                      <div
+                        v-if="isCodexSparkQuotaExpanded(key.key_id)"
+                        class="mt-2 flex flex-col gap-1"
+                      >
+                        <div class="flex items-center justify-between text-[10px] leading-none">
+                          <span class="font-medium text-muted-foreground">模型额度</span>
+                          <span
+                            v-if="getQuotaProgressDisplayText(getCodexSparkQuotaItem(key)!)"
+                            class="truncate tabular-nums text-muted-foreground/80"
+                            :title="getCodexSparkQuotaItem(key)?.detail"
+                          >{{ getQuotaProgressDisplayText(getCodexSparkQuotaItem(key)!) }}</span>
+                        </div>
+                        <div class="flex items-center gap-1.5">
+                          <div class="relative h-1.5 flex-1 overflow-hidden rounded-full bg-border">
+                            <div
+                              class="absolute left-0 top-0 h-full rounded-full transition-all duration-300"
+                              :class="getQuotaRemainingBarColorByRemaining(getCodexSparkQuotaItem(key)!.remainingPercent)"
+                              :style="{ width: `${getCodexSparkQuotaItem(key)!.remainingPercent}%` }"
+                            />
+                          </div>
+                          <span
+                            class="shrink-0 text-[10px] font-medium tabular-nums leading-none"
+                            :class="getQuotaRemainingClassByRemaining(getCodexSparkQuotaItem(key)!.remainingPercent)"
+                          >{{ getCodexSparkQuotaItem(key)!.remainingPercent.toFixed(1) }}%</span>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -939,7 +983,7 @@
                   配额
                 </div>
                 <div
-                  v-if="quotaProgressMap[key.key_id]?.length"
+                  v-if="quotaProgressMap[key.key_id]?.length || getCodexSparkQuotaItem(key)"
                   class="space-y-2"
                 >
                   <div
@@ -967,6 +1011,50 @@
                         class="shrink-0 text-[10px] font-medium tabular-nums leading-none"
                         :class="getQuotaRemainingClassByRemaining(item.remainingPercent)"
                       >{{ item.remainingPercent.toFixed(1) }}%</span>
+                    </div>
+                  </div>
+                  <div
+                    v-if="getCodexSparkQuotaItem(key)"
+                    class="rounded-md border border-dashed border-border/70 bg-background/70 px-2 py-1.5"
+                  >
+                    <button
+                      type="button"
+                      class="flex w-full items-center justify-between gap-2 text-[10px] leading-none text-muted-foreground transition-colors hover:text-foreground"
+                      :aria-expanded="isCodexSparkQuotaExpanded(key.key_id)"
+                      @click.stop="toggleCodexSparkQuota(key.key_id)"
+                    >
+                      <span class="font-medium">Spark 额度</span>
+                      <span class="ml-auto truncate tabular-nums">{{ getCodexSparkQuotaSummary(key) }}</span>
+                      <ChevronDown
+                        class="h-3 w-3 shrink-0 transition-transform duration-150"
+                        :class="isCodexSparkQuotaExpanded(key.key_id) ? 'rotate-180' : ''"
+                      />
+                    </button>
+                    <div
+                      v-if="isCodexSparkQuotaExpanded(key.key_id)"
+                      class="mt-2 flex flex-col gap-1"
+                    >
+                      <div class="flex items-center justify-between text-[10px] leading-none">
+                        <span class="font-medium text-muted-foreground">模型额度</span>
+                        <span
+                          v-if="getQuotaProgressDisplayText(getCodexSparkQuotaItem(key)!)"
+                          class="truncate tabular-nums text-muted-foreground/80"
+                          :title="getCodexSparkQuotaItem(key)?.detail"
+                        >{{ getQuotaProgressDisplayText(getCodexSparkQuotaItem(key)!) }}</span>
+                      </div>
+                      <div class="flex items-center gap-1.5">
+                        <div class="relative h-1.5 flex-1 overflow-hidden rounded-full bg-border">
+                          <div
+                            class="absolute left-0 top-0 h-full rounded-full transition-all duration-300"
+                            :class="getQuotaRemainingBarColorByRemaining(getCodexSparkQuotaItem(key)!.remainingPercent)"
+                            :style="{ width: `${getCodexSparkQuotaItem(key)!.remainingPercent}%` }"
+                          />
+                        </div>
+                        <span
+                          class="shrink-0 text-[10px] font-medium tabular-nums leading-none"
+                          :class="getQuotaRemainingClassByRemaining(getCodexSparkQuotaItem(key)!.remainingPercent)"
+                        >{{ getCodexSparkQuotaItem(key)!.remainingPercent.toFixed(1) }}%</span>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1914,6 +2002,7 @@ const CODEX_CYCLE_STAT_LABELS: Record<PoolStatsMetric['key'], string> = {
   total_tokens: 'Token',
   total_cost_usd: '费用',
 }
+const CODEX_SPARK_MODEL_ID = 'gpt-5.3-codex-spark'
 
 type PoolKeyUiState = {
   rowClass: string
@@ -1944,6 +2033,7 @@ const quotaProgressMap = computed<Record<string, QuotaProgressItem[]>>(() => {
   }
   return map
 })
+const expandedSparkQuotaKeyIds = ref<Set<string>>(new Set())
 
 const keyUiStateMap = computed<Record<string, PoolKeyUiState>>(() => {
   const map: Record<string, PoolKeyUiState> = {}
@@ -3134,7 +3224,7 @@ function getQuotaProgressLabel(label: string): string {
 }
 
 function getQuotaProgressCountdown(item: QuotaProgressItem) {
-  if (item.label !== '5H' && item.label !== '周') return null
+  if (item.label !== '5H' && item.label !== '周' && item.label !== 'Spark') return null
   if (item.resetAtSeconds == null && item.resetSeconds == null) return null
   return getCodexResetCountdown(
     item.resetAtSeconds,
@@ -3173,6 +3263,58 @@ function getQuotaProgressDisplayText(item: QuotaProgressItem): string {
 
 function getQuotaFallbackText(key: PoolKeyDetail): string | null {
   return getQuotaDisplayText(key, selectedProviderType.value)
+}
+
+function isCodexSparkQuotaExpanded(keyId: string): boolean {
+  return expandedSparkQuotaKeyIds.value.has(keyId)
+}
+
+function toggleCodexSparkQuota(keyId: string): void {
+  const next = new Set(expandedSparkQuotaKeyIds.value)
+  if (next.has(keyId)) {
+    next.delete(keyId)
+  } else {
+    next.add(keyId)
+  }
+  expandedSparkQuotaKeyIds.value = next
+}
+
+function getCodexSparkQuotaWindow(key: PoolKeyDetail): QuotaWindowSnapshot | null {
+  const quota = getCodexQuotaSnapshot(key)
+  if (!quota) return null
+  return getQuotaSnapshotWindowsByScope(quota, 'model').find((window) => {
+    return String(window.model || '').trim().toLowerCase() === CODEX_SPARK_MODEL_ID
+  }) ?? null
+}
+
+function isQuotaWindowActive(window: QuotaWindowSnapshot | null | undefined): boolean {
+  if (!window) return false
+  const resetAtSeconds = normalizeUnixSeconds(window.reset_at ?? null)
+  if (resetAtSeconds != null) return resetAtSeconds > Math.floor(Date.now() / 1000)
+  const resetSeconds = normalizeRemainingSeconds(window.reset_seconds ?? null)
+  return resetSeconds == null || resetSeconds > 0
+}
+
+function getCodexSparkQuotaItem(key: PoolKeyDetail): QuotaProgressItem | null {
+  const window = getCodexSparkQuotaWindow(key)
+  const remainingPercent = getQuotaWindowRemainingPercent(window)
+  if (!window || remainingPercent == null) return null
+  const exhausted = window.is_exhausted === true || (getQuotaWindowUsedPercent(window) ?? 0) >= 100 - 1e-6
+  return {
+    label: 'Spark',
+    remainingPercent,
+    detail: exhausted && isQuotaWindowActive(window) ? '冷却中' : undefined,
+    resetAtSeconds: normalizeUnixSeconds(window.reset_at ?? null),
+    resetSeconds: normalizeRemainingSeconds(window.reset_seconds ?? null),
+    updatedAtSeconds: getQuotaSnapshotUpdatedAtSeconds(getCodexQuotaSnapshot(key)),
+  }
+}
+
+function getCodexSparkQuotaSummary(key: PoolKeyDetail): string {
+  const item = getCodexSparkQuotaItem(key)
+  if (!item) return '未上报'
+  if (item.detail === '冷却中') return '冷却中'
+  return `剩余 ${item.remainingPercent.toFixed(1)}%`
 }
 
 

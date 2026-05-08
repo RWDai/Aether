@@ -9,7 +9,7 @@ use super::{
     InMemoryUsageReadRepository, PendingUsageCleanupSummary, StoredRequestUsageAudit,
     UpsertUsageRecord, UsageWriteRepository,
 };
-use crate::driver::sqlite::SqlitePool;
+use crate::driver::sqlite::{sqlite_optional_real, sqlite_real, SqlitePool};
 use crate::error::SqlResultExt;
 use crate::DataLayerError;
 
@@ -42,11 +42,11 @@ SELECT
   cache_creation_ephemeral_5m_input_tokens,
   cache_creation_ephemeral_1h_input_tokens,
   cache_read_input_tokens,
-  cache_creation_cost_usd,
-  cache_read_cost_usd,
-  output_price_per_1m,
-  total_cost_usd,
-  actual_total_cost_usd,
+  CAST(cache_creation_cost_usd AS REAL) AS cache_creation_cost_usd,
+  CAST(cache_read_cost_usd AS REAL) AS cache_read_cost_usd,
+  CAST(output_price_per_1m AS REAL) AS output_price_per_1m,
+  CAST(total_cost_usd AS REAL) AS total_cost_usd,
+  CAST(actual_total_cost_usd AS REAL) AS actual_total_cost_usd,
   status_code,
   error_message,
   error_category,
@@ -291,7 +291,7 @@ impl UsageWriteRepository for SqliteUsageWriteRepository {
 UPDATE api_keys
 SET total_requests = 0,
     total_tokens = 0,
-    total_cost_usd = 0,
+    total_cost_usd = 0.0,
     last_used_at = NULL
 "#,
         )
@@ -305,7 +305,7 @@ SELECT
   api_key_id,
   COUNT(*) AS total_requests,
   COALESCE(SUM(total_tokens), 0) AS total_tokens,
-  COALESCE(SUM(total_cost_usd), 0) AS total_cost_usd,
+  CAST(COALESCE(SUM(total_cost_usd), 0) AS REAL) AS total_cost_usd,
   MAX(updated_at_unix_secs) AS last_used_at
 FROM "usage"
 WHERE api_key_id IS NOT NULL AND api_key_id <> ''
@@ -329,7 +329,7 @@ WHERE id = ?
             )
             .bind(row.try_get::<i64, _>("total_requests").map_sql_err()?)
             .bind(row.try_get::<i64, _>("total_tokens").map_sql_err()?)
-            .bind(row.try_get::<f64, _>("total_cost_usd").map_sql_err()?)
+            .bind(sqlite_real(row, "total_cost_usd")?)
             .bind(
                 row.try_get::<Option<i64>, _>("last_used_at")
                     .map_sql_err()?,
@@ -351,7 +351,7 @@ SET request_count = 0,
     success_count = 0,
     error_count = 0,
     total_tokens = 0,
-    total_cost_usd = 0,
+    total_cost_usd = 0.0,
     total_response_time_ms = 0,
     last_used_at = NULL
 "#,
@@ -368,7 +368,7 @@ SELECT
   status_code,
   error_message,
   total_tokens,
-  total_cost_usd,
+  CAST(total_cost_usd AS REAL) AS total_cost_usd,
   response_time_ms,
   updated_at_unix_secs
 FROM "usage"
@@ -396,7 +396,7 @@ WHERE provider_api_key_id IS NOT NULL AND provider_api_key_id <> ''
                 entry.error_count += 1;
             }
             entry.total_tokens += row.try_get::<i64, _>("total_tokens").map_sql_err()?;
-            entry.total_cost_usd += row.try_get::<f64, _>("total_cost_usd").map_sql_err()?;
+            entry.total_cost_usd += sqlite_real(&row, "total_cost_usd")?;
             entry.total_response_time_ms += row
                 .try_get::<Option<i64>, _>("response_time_ms")
                 .map_sql_err()?
@@ -528,8 +528,8 @@ SET status = 'failed',
     error_message = ?,
     billing_status = 'void',
     finalized_at = ?,
-    total_cost_usd = 0,
-    actual_total_cost_usd = 0
+    total_cost_usd = 0.0,
+    actual_total_cost_usd = 0.0
 WHERE request_id = ?
 "#,
                     )
@@ -818,8 +818,8 @@ fn map_usage_row(row: &SqliteRow) -> Result<StoredRequestUsageAudit, DataLayerEr
         row_i32(row, "input_tokens")?,
         row_i32(row, "output_tokens")?,
         row_i32(row, "total_tokens")?,
-        row.try_get("total_cost_usd").map_sql_err()?,
-        row.try_get("actual_total_cost_usd").map_sql_err()?,
+        sqlite_real(row, "total_cost_usd")?,
+        sqlite_real(row, "actual_total_cost_usd")?,
         row_optional_i32(row, "status_code")?,
         row.try_get("error_message").map_sql_err()?,
         row.try_get("error_category").map_sql_err()?,
@@ -837,9 +837,10 @@ fn map_usage_row(row: &SqliteRow) -> Result<StoredRequestUsageAudit, DataLayerEr
     audit.cache_creation_ephemeral_1h_input_tokens =
         row_u64(row, "cache_creation_ephemeral_1h_input_tokens")?;
     audit.cache_read_input_tokens = row_u64(row, "cache_read_input_tokens")?;
-    audit.cache_creation_cost_usd = row.try_get("cache_creation_cost_usd").map_sql_err()?;
-    audit.cache_read_cost_usd = row.try_get("cache_read_cost_usd").map_sql_err()?;
-    audit.output_price_per_1m = row.try_get("output_price_per_1m").map_sql_err()?;
+    audit.cache_creation_cost_usd =
+        sqlite_optional_real(row, "cache_creation_cost_usd")?.unwrap_or(0.0);
+    audit.cache_read_cost_usd = sqlite_optional_real(row, "cache_read_cost_usd")?.unwrap_or(0.0);
+    audit.output_price_per_1m = sqlite_optional_real(row, "output_price_per_1m")?;
     audit.request_metadata = row
         .try_get::<Option<String>, _>("request_metadata")
         .map_sql_err()?

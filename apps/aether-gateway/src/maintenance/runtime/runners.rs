@@ -6,10 +6,10 @@ use crate::{AppState, GatewayError};
 
 use super::{
     advance_proxy_upgrade_rollout_once, cleanup_audit_logs_once,
-    cleanup_expired_gemini_file_mappings_once, cleanup_request_candidates_once,
-    cleanup_stale_pending_requests_once, cleanup_stale_proxy_nodes_once,
-    collect_proxy_upgrade_rollout_probes, perform_db_maintenance_once,
-    perform_provider_checkin_once, perform_stats_aggregation_once,
+    cleanup_expired_gemini_file_mappings_once, cleanup_proxy_node_metrics_once,
+    cleanup_request_candidates_once, cleanup_stale_pending_requests_once,
+    cleanup_stale_proxy_nodes_once, collect_proxy_upgrade_rollout_probes,
+    perform_db_maintenance_once, perform_provider_checkin_once, perform_stats_aggregation_once,
     perform_stats_hourly_aggregation_once, perform_usage_cleanup_once,
     perform_wallet_daily_usage_aggregation_once, record_proxy_upgrade_traffic_success,
     summarize_database_pool,
@@ -56,6 +56,23 @@ pub(super) async fn run_proxy_node_stale_cleanup_once(
             worker = "proxy_node_stale_cleanup",
             stale_marked,
             "gateway marked stale proxy nodes offline"
+        );
+    }
+    Ok(())
+}
+
+pub(super) async fn run_proxy_node_metrics_cleanup_once(
+    data: &GatewayDataState,
+) -> Result<(), DataLayerError> {
+    let summary = cleanup_proxy_node_metrics_once(data).await?;
+    if summary.deleted_1m_rows > 0 || summary.deleted_1h_rows > 0 {
+        info!(
+            event_name = "proxy_node_metrics_cleanup_completed",
+            log_type = "ops",
+            worker = "proxy_node_metrics_cleanup",
+            deleted_1m_rows = summary.deleted_1m_rows,
+            deleted_1h_rows = summary.deleted_1h_rows,
+            "gateway deleted expired proxy node metrics buckets"
         );
     }
     Ok(())

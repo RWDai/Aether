@@ -368,6 +368,7 @@ pub fn maybe_build_openai_image_sync_finalize_product(
     report_kind: &str,
     status_code: u16,
     report_context: Option<&Value>,
+    body_json: Option<&Value>,
     body_base64: Option<&str>,
 ) -> Result<Option<OpenAiImageSyncFinalizeProduct>, AiSurfaceFinalizeError> {
     if report_kind != OPENAI_IMAGE_SYNC_FINALIZE_REPORT_KIND || status_code >= 400 {
@@ -383,6 +384,45 @@ pub fn maybe_build_openai_image_sync_finalize_product(
         != Some("openai:image")
     {
         return Ok(None);
+    }
+    let provider_api_format = report_context
+        .get("provider_api_format")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    if provider_api_format == "gemini:generate_content" {
+        let Some(provider_body_json) = body_json else {
+            return Ok(None);
+        };
+        let Some(client_body_json) =
+            crate::formats::shared::image_bridge::build_openai_image_response_from_gemini_response(
+                provider_body_json,
+                Some(report_context),
+            )
+        else {
+            return Ok(None);
+        };
+        return Ok(Some(OpenAiImageSyncFinalizeProduct {
+            client_body_json,
+            provider_body_json: provider_body_json.clone(),
+        }));
+    }
+    if provider_api_format != "openai:image" {
+        return Ok(None);
+    }
+    if let Some(provider_body_json) = body_json {
+        if provider_body_json.get("output").is_some() && provider_body_json.get("data").is_none() {
+            let Some(client_body_json) = crate::formats::shared::image_bridge::build_openai_image_response_from_response_stream_sync_body(
+                provider_body_json,
+                Some(report_context),
+            ) else {
+                return Ok(None);
+            };
+            return Ok(Some(OpenAiImageSyncFinalizeProduct {
+                client_body_json,
+                provider_body_json: provider_body_json.clone(),
+            }));
+        }
     }
     let Some(body_base64) = body_base64 else {
         return Ok(None);
@@ -689,6 +729,7 @@ mod tests {
             "openai_image_sync_finalize",
             200,
             Some(&report_context),
+            None,
             Some(&body_base64),
         )
         .expect("finalize should succeed")

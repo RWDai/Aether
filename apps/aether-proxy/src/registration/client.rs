@@ -67,6 +67,7 @@ impl AetherClient {
             tcp_nodelay: config.aether_tcp_nodelay,
             http2_adaptive_window: config.aether_http2,
             user_agent: Some(format!("aether-proxy/{}", env!("CARGO_PKG_VERSION"))),
+            proxy_url: config.effective_aether_proxy_url().map(str::to_string),
             ..HttpClientConfig::default()
         })
         .expect("failed to create HTTP client");

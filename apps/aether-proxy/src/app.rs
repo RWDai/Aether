@@ -17,7 +17,7 @@ use crate::config::{Config, ServerEntry, TunnelPoolSizing};
 use crate::net;
 use crate::registration::client::AetherClient;
 use crate::runtime::{self, DynamicConfig};
-use crate::state::{AppState, ProxyMetrics, ServerContext};
+use crate::state::{AppState, ProxyMetrics, ServerContext, TunnelMetrics};
 use crate::upstream_client;
 use crate::{hardware, target_filter, tunnel};
 
@@ -80,6 +80,14 @@ pub async fn run(mut config: Config, servers: Vec<ServerEntry>) -> anyhow::Resul
         server_count = servers.len(),
         "aether-proxy starting (tunnel mode)"
     );
+    if let Some(proxy_url) = config.effective_aether_proxy_url() {
+        if let Ok(proxy) = crate::egress_proxy::UpstreamProxyConfig::parse(proxy_url) {
+            info!(
+                aether_proxy_url = %proxy.redacted_url(),
+                "Aether control and tunnel egress proxy configured"
+            );
+        }
+    }
     if let Some(proxy_url) = config
         .upstream_proxy_url
         .as_deref()
@@ -457,6 +465,7 @@ fn build_server_context(
         dynamic: Arc::new(ArcSwap::from_pointee(dynamic)),
         active_connections: Arc::new(AtomicU64::new(0)),
         metrics: Arc::new(ProxyMetrics::new()),
+        tunnel_metrics: Arc::new(TunnelMetrics::new()),
     })
 }
 
@@ -960,6 +969,7 @@ mod tests {
             aether_tcp_keepalive_secs: 60,
             aether_tcp_nodelay: true,
             aether_http2: true,
+            aether_proxy_url: None,
             aether_retry_max_attempts: 1,
             aether_retry_base_delay_ms: 50,
             aether_retry_max_delay_ms: 100,

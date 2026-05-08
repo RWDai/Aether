@@ -99,12 +99,16 @@ function buildTrace(candidates: CandidateRecord[]): RequestTrace {
   }
 }
 
-function mountTimeline(traceData: RequestTrace) {
+function mountTimeline(
+  traceData: RequestTrace,
+  extraProps: Record<string, unknown> = {},
+) {
   const root = document.createElement('div')
   document.body.appendChild(root)
   const app = createApp(HorizontalRequestTimeline, {
     requestId: traceData.request_id,
     traceData,
+    ...extraProps,
   })
   app.mount(root)
   mountedApps.push({ app, root })
@@ -306,5 +310,53 @@ describe('HorizontalRequestTimeline', () => {
     expect(root.textContent).toContain('15.00s')
     expect(root.textContent).toContain('response.output_item.added')
     expect(root.textContent).toContain('image_generation.partial_image')
+  })
+
+  it('treats 3xx terminal responses as failed for node display', async () => {
+    const trace = buildTrace([
+      buildCandidate({
+        id: 'cand-redirect',
+        provider_id: 'provider-redirect',
+        provider_name: 'Provider Redirect',
+        key_id: 'key-redirect',
+        key_name: 'Redirect Key',
+        candidate_index: 0,
+        status: 'success',
+        status_code: 302,
+      }),
+    ])
+
+    const root = mountTimeline(trace)
+    await nextTick()
+
+    const nodeDot = root.querySelector<HTMLElement>('.node-dot')
+    expect(nodeDot?.classList.contains('status-failed')).toBe(true)
+    expect(nodeDot?.classList.contains('status-success')).toBe(false)
+  })
+
+  it('shows request path from request metadata', async () => {
+    const trace = buildTrace([
+      buildCandidate({
+        id: 'cand-path',
+        provider_id: 'provider-path',
+        provider_name: 'Provider Path',
+        key_id: 'key-path',
+        key_name: 'Path Key',
+        candidate_index: 0,
+        status: 'failed',
+      }),
+    ])
+
+    const root = mountTimeline(trace, {
+      requestMetadata: {
+        request_path: '/v1beta/models/gemini-2.5-pro:generateContent',
+        request_query_string: 'alt=sse',
+      },
+    })
+    await nextTick()
+
+    expect(root.textContent).toContain('请求路径')
+    const requestPathCode = root.querySelector<HTMLElement>('.request-path-code')
+    expect(requestPathCode?.textContent).toContain('/v1beta/models/gemini-2.5-pro:generateContent?alt=sse')
   })
 })

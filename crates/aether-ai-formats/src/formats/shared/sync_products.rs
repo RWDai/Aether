@@ -595,6 +595,17 @@ pub fn maybe_build_standard_cross_format_sync_product(
     let provider_api_format = provider_api_format.trim().to_ascii_lowercase();
     let client_api_format = client_api_format.trim().to_ascii_lowercase();
 
+    if provider_api_format == "openai:image" && client_api_format == "gemini:generate_content" {
+        let client_body_json = crate::formats::shared::image_bridge::build_gemini_image_response_from_openai_responses_image_response(
+            &provider_body_json,
+            Some(report_context),
+        )?;
+        return Some(StandardCrossFormatSyncProduct {
+            client_body_json,
+            provider_body_json,
+        });
+    }
+
     let client_body_json = if is_standard_chat_finalize_kind(report_kind) {
         sync_chat_response_conversion_kind(&provider_api_format, &client_api_format)?;
         convert_standard_chat_response(

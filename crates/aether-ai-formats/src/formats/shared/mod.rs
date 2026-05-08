@@ -2,6 +2,7 @@ use std::fmt;
 
 pub mod error_body;
 pub mod family;
+pub mod image_bridge;
 pub mod model_directives;
 pub mod passthrough;
 pub mod request;

@@ -2,6 +2,7 @@ use sha2::{Digest, Sha256};
 use sqlx::Row;
 
 use crate::backend::{MysqlBackend, PostgresBackend, SqliteBackend};
+use crate::driver::sqlite::sqlite_real;
 use crate::error::{SqlResultExt, SqlxResultExt};
 use crate::{DataLayerError, WalletDailyUsageAggregationInput, WalletDailyUsageAggregationResult};
 
@@ -119,7 +120,7 @@ const SQLITE_SELECT_WALLET_DAILY_USAGE_AGGREGATES_SQL: &str = r#"
 SELECT
   usage_settlement_snapshots.wallet_id AS wallet_id,
   COUNT(*) AS total_requests,
-  COALESCE(SUM("usage".total_cost_usd), 0) AS total_cost_usd,
+  CAST(COALESCE(SUM("usage".total_cost_usd), 0) AS REAL) AS total_cost_usd,
   COALESCE(SUM("usage".input_tokens), 0) AS input_tokens,
   COALESCE(SUM("usage".output_tokens), 0) AS output_tokens,
   COALESCE(SUM("usage".cache_creation_input_tokens), 0) AS cache_creation_tokens,
@@ -400,7 +401,7 @@ INSERT INTO wallet_daily_usage_ledgers (
             .bind(&wallet_id)
             .bind(&input.billing_date)
             .bind(&input.billing_timezone)
-            .bind(row.try_get::<f64, _>("total_cost_usd").map_sql_err()?)
+            .bind(sqlite_real(&row, "total_cost_usd")?)
             .bind(row.try_get::<i64, _>("total_requests").map_sql_err()?)
             .bind(row.try_get::<i64, _>("input_tokens").map_sql_err()?)
             .bind(row.try_get::<i64, _>("output_tokens").map_sql_err()?)

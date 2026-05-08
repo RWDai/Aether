@@ -27,7 +27,12 @@ pub fn maybe_bridge_standard_sync_json_to_stream(
 ) -> Result<Option<SyncToStreamBridgeOutcome>, AiSurfaceFinalizeError> {
     let provider_api_format = normalize_api_format(provider_api_format);
     let client_api_format = normalize_api_format(client_api_format);
-    if provider_api_format == "openai:image" && client_api_format == "openai:image" {
+    if client_api_format == "openai:image"
+        && matches!(
+            provider_api_format.as_str(),
+            "openai:image" | "gemini:generate_content"
+        )
+    {
         return maybe_bridge_openai_image_sync_json_to_stream(provider_body_json, report_context);
     }
     if !is_standard_api_format(provider_api_format.as_str())
@@ -67,6 +72,36 @@ fn maybe_bridge_openai_image_sync_json_to_stream(
     provider_body_json: &Value,
     report_context: Option<&Value>,
 ) -> Result<Option<SyncToStreamBridgeOutcome>, AiSurfaceFinalizeError> {
+    let provider_api_format = report_context
+        .and_then(|value| value.get("provider_api_format"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("openai:image");
+    let owned_response;
+    let provider_body_json = if provider_api_format == "gemini:generate_content" {
+        let Some(converted) =
+            crate::formats::shared::image_bridge::build_openai_image_response_from_gemini_response(
+                provider_body_json,
+                report_context,
+            )
+        else {
+            return Ok(None);
+        };
+        owned_response = converted;
+        &owned_response
+    } else if provider_body_json.get("output").is_some() && provider_body_json.get("data").is_none()
+    {
+        let Some(converted) = crate::formats::shared::image_bridge::build_openai_image_response_from_response_stream_sync_body(
+            provider_body_json,
+            report_context,
+        ) else {
+            return Ok(None);
+        };
+        owned_response = converted;
+        &owned_response
+    } else {
+        provider_body_json
+    };
     let Some(response) = provider_body_json.as_object() else {
         return Ok(None);
     };

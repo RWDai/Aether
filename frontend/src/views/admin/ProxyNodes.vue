@@ -131,6 +131,7 @@
         <Table>
           <TableHeader>
             <TableRow class="border-b border-border/60 hover:bg-transparent">
+              <TableHead class="w-[28px] min-w-[28px] max-w-[28px] h-12 p-0 pl-2" />
               <TableHead class="w-[160px] h-12 font-semibold">
                 名称
               </TableHead>
@@ -173,141 +174,177 @@
               <TableHead class="w-[160px] h-12 font-semibold">
                 最后心跳
               </TableHead>
-              <TableHead class="w-[80px] h-12 font-semibold text-center">
+              <TableHead class="w-[140px] h-12 font-semibold text-center">
                 操作
               </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            <TableRow
+            <template
               v-for="node in paginatedNodes"
               :key="node.id"
-              class="border-b border-border/40 hover:bg-muted/30 transition-colors"
             >
-              <TableCell class="py-4">
-                <div class="flex items-center gap-1.5">
-                  <span class="text-sm font-semibold">{{ node.name }}</span>
-                  <Badge
-                    v-if="node.is_manual"
-                    variant="outline"
-                    class="text-[10px] px-1.5 py-0"
+              <TableRow
+                class="border-b border-border/40 hover:bg-muted/30 transition-colors"
+                :class="isNodeExpanded(node.id) ? 'bg-muted/20' : ''"
+              >
+                <TableCell class="w-[28px] min-w-[28px] max-w-[28px] p-0 pl-2 text-center">
+                  <button
+                    type="button"
+                    class="inline-flex h-5 w-5 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
+                    :title="isNodeExpanded(node.id) ? '收起数据' : '展开数据'"
+                    @click="toggleNodeDetails(node)"
                   >
-                    手动
-                  </Badge>
-                  <Badge
-                    v-if="node.tunnel_mode"
-                    variant="outline"
-                    class="text-[10px] px-1.5 py-0"
-                  >
-                    Tunnel
-                  </Badge>
-                  <Badge
-                    v-if="nodeSchedulingBadge(node)"
-                    :variant="nodeSchedulingBadge(node)!.variant"
-                    class="text-[10px] px-1.5 py-0"
-                  >
-                    {{ nodeSchedulingBadge(node)!.label }}
-                  </Badge>
-                  <HardwareTooltip :node="node" />
-                </div>
-              </TableCell>
-              <TableCell class="py-4">
-                <code class="text-xs text-muted-foreground">{{ nodeAddress(node) }}</code>
-              </TableCell>
-              <TableCell class="py-4">
-                <span class="text-sm text-muted-foreground">{{ formatRegion(node.region) }}</span>
-              </TableCell>
-              <TableCell class="py-4 text-center">
-                <Badge
-                  :variant="statusVariant(node.status)"
-                  :title="statusTitle(node)"
-                  class="font-medium px-2.5 py-0.5 text-xs"
-                >
-                  {{ statusLabel(node) }}
-                </Badge>
-              </TableCell>
-              <TableCell class="py-4 text-center">
-                <span class="text-sm tabular-nums">{{ formatNumber(node.total_requests) }}</span>
-              </TableCell>
-              <TableCell class="py-4 text-center">
-                <span
-                  class="text-sm tabular-nums"
-                  :class="failureRate(node) > 5 ? 'text-destructive font-medium' : ''"
-                >{{ formatFailureRate(node) }}</span>
-              </TableCell>
-              <TableCell class="py-4 text-center">
-                <span class="text-sm tabular-nums">{{ node.avg_latency_ms != null ? `${node.avg_latency_ms.toFixed(0)}ms` : '-' }}</span>
-              </TableCell>
-              <TableCell class="py-4 text-center">
-                <span class="text-sm tabular-nums">{{ node.is_manual ? '-' : nodeProxyVersion(node) }}</span>
-              </TableCell>
-              <TableCell class="py-4">
-                <span class="text-xs text-muted-foreground">{{ formatTime(node.last_heartbeat_at) }}</span>
-              </TableCell>
-              <TableCell class="py-4 text-center">
-                <div class="flex items-center justify-center gap-0.5">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    class="h-8 w-8"
-                    :title="testingNodes.has(node.id) ? '测试中...' : '测试连通性'"
-                    :disabled="testingNodes.has(node.id)"
-                    @click="handleTest(node)"
-                  >
-                    <Loader2
-                      v-if="testingNodes.has(node.id)"
-                      class="h-4 w-4 animate-spin"
+                    <ChevronDown
+                      v-if="isNodeExpanded(node.id)"
+                      class="h-3.5 w-3.5"
                     />
-                    <Activity
+                    <ChevronRight
                       v-else
-                      class="h-4 w-4"
+                      class="h-3.5 w-3.5"
                     />
-                  </Button>
-                  <Button
-                    v-if="node.is_manual"
-                    variant="ghost"
-                    size="icon"
-                    class="h-8 w-8"
-                    title="编辑"
-                    @click="handleEdit(node)"
+                  </button>
+                </TableCell>
+                <TableCell class="py-4">
+                  <div class="flex items-center gap-1.5">
+                    <span class="text-sm font-semibold">{{ node.name }}</span>
+                    <Badge
+                      v-if="node.is_manual"
+                      variant="outline"
+                      class="text-[10px] px-1.5 py-0"
+                    >
+                      手动
+                    </Badge>
+                    <Badge
+                      v-if="node.tunnel_mode"
+                      variant="outline"
+                      class="text-[10px] px-1.5 py-0"
+                    >
+                      Tunnel
+                    </Badge>
+                    <Badge
+                      v-if="nodeSchedulingBadge(node)"
+                      :variant="nodeSchedulingBadge(node)!.variant"
+                      class="text-[10px] px-1.5 py-0"
+                    >
+                      {{ nodeSchedulingBadge(node)!.label }}
+                    </Badge>
+                    <HardwareTooltip :node="node" />
+                  </div>
+                </TableCell>
+                <TableCell class="py-4">
+                  <code class="text-xs text-muted-foreground">{{ nodeAddress(node) }}</code>
+                </TableCell>
+                <TableCell class="py-4">
+                  <span class="text-sm text-muted-foreground">{{ formatRegion(node.region) }}</span>
+                </TableCell>
+                <TableCell class="py-4 text-center">
+                  <Badge
+                    :variant="statusVariant(node.status)"
+                    :title="statusTitle(node)"
+                    class="font-medium px-2.5 py-0.5 text-xs"
                   >
-                    <SquarePen class="h-4 w-4" />
-                  </Button>
-                  <Button
-                    v-if="!node.is_manual"
-                    variant="ghost"
-                    size="icon"
-                    class="h-8 w-8"
-                    title="远程配置"
-                    @click="handleConfig(node)"
-                  >
-                    <Settings class="h-4 w-4" />
-                  </Button>
-                  <Button
-                    v-if="!node.is_manual"
-                    variant="ghost"
-                    size="icon"
-                    class="h-8 w-8"
-                    title="连接事件"
-                    @click="handleViewEvents(node)"
-                  >
-                    <History class="h-4 w-4" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    class="h-8 w-8"
-                    title="删除"
-                    @click="handleDelete(node)"
-                  >
-                    <Trash2 class="h-4 w-4" />
-                  </Button>
-                </div>
-              </TableCell>
-            </TableRow>
+                    {{ statusLabel(node) }}
+                  </Badge>
+                </TableCell>
+                <TableCell class="py-4 text-center">
+                  <span class="text-sm tabular-nums">{{ formatNumber(node.total_requests) }}</span>
+                </TableCell>
+                <TableCell class="py-4 text-center">
+                  <span
+                    class="text-sm tabular-nums"
+                    :class="failureRate(node) > 5 ? 'text-destructive font-medium' : ''"
+                  >{{ formatFailureRate(node) }}</span>
+                </TableCell>
+                <TableCell class="py-4 text-center">
+                  <span class="text-sm tabular-nums">{{ node.avg_latency_ms != null ? `${node.avg_latency_ms.toFixed(0)}ms` : '-' }}</span>
+                </TableCell>
+                <TableCell class="py-4 text-center">
+                  <span class="text-sm tabular-nums">{{ node.is_manual ? '-' : nodeProxyVersion(node) }}</span>
+                </TableCell>
+                <TableCell class="py-4">
+                  <span class="text-xs text-muted-foreground">{{ formatTime(node.last_heartbeat_at) }}</span>
+                </TableCell>
+                <TableCell class="py-4 text-center">
+                  <div class="flex items-center justify-center gap-0.5">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      class="h-8 w-8"
+                      :title="testingNodes.has(node.id) ? '测试中...' : '测试连通性'"
+                      :disabled="testingNodes.has(node.id)"
+                      @click="handleTest(node)"
+                    >
+                      <Loader2
+                        v-if="testingNodes.has(node.id)"
+                        class="h-4 w-4 animate-spin"
+                      />
+                      <Activity
+                        v-else
+                        class="h-4 w-4"
+                      />
+                    </Button>
+                    <Button
+                      v-if="node.is_manual"
+                      variant="ghost"
+                      size="icon"
+                      class="h-8 w-8"
+                      title="编辑"
+                      @click="handleEdit(node)"
+                    >
+                      <SquarePen class="h-4 w-4" />
+                    </Button>
+                    <Button
+                      v-if="!node.is_manual"
+                      variant="ghost"
+                      size="icon"
+                      class="h-8 w-8"
+                      title="远程配置"
+                      @click="handleConfig(node)"
+                    >
+                      <Settings class="h-4 w-4" />
+                    </Button>
+                    <Button
+                      v-if="!node.is_manual"
+                      variant="ghost"
+                      size="icon"
+                      class="h-8 w-8"
+                      title="连接事件"
+                      @click="handleViewEvents(node)"
+                    >
+                      <History class="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      class="h-8 w-8"
+                      title="删除"
+                      @click="handleDelete(node)"
+                    >
+                      <Trash2 class="h-4 w-4" />
+                    </Button>
+                  </div>
+                </TableCell>
+              </TableRow>
+              <TableRow
+                v-if="isNodeExpanded(node.id)"
+                class="border-b border-border/40 hover:bg-transparent"
+              >
+                <TableCell
+                  colspan="11"
+                  class="p-0"
+                >
+                  <ProxyNodeDataPanel
+                    :node="node"
+                    :state="nodeDetails[node.id]"
+                    @refresh="loadNodeDetails(node)"
+                  />
+                </TableCell>
+              </TableRow>
+            </template>
             <TableRow v-if="paginatedNodes.length === 0">
               <TableCell
-                colspan="10"
+                colspan="11"
                 class="py-12 text-center text-muted-foreground text-sm"
               >
                 {{ store.loading ? '加载中...' : '暂无代理节点' }}
@@ -327,6 +364,21 @@
           <div class="flex items-start justify-between mb-2">
             <div>
               <div class="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  class="inline-flex h-5 w-5 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 shrink-0"
+                  :title="isNodeExpanded(node.id) ? '收起数据' : '展开数据'"
+                  @click="toggleNodeDetails(node)"
+                >
+                  <ChevronDown
+                    v-if="isNodeExpanded(node.id)"
+                    class="h-3.5 w-3.5"
+                  />
+                  <ChevronRight
+                    v-else
+                    class="h-3.5 w-3.5"
+                  />
+                </button>
                 <span class="font-semibold text-sm">{{ node.name }}</span>
                 <Badge
                   v-if="node.is_manual"
@@ -390,7 +442,7 @@
           </div>
           <div class="flex items-center justify-between">
             <span class="text-xs text-muted-foreground">{{ formatTime(node.last_heartbeat_at) }}</span>
-            <div class="flex items-center gap-1">
+            <div class="flex flex-wrap items-center justify-end gap-1">
               <Button
                 variant="ghost"
                 size="sm"
@@ -438,6 +490,16 @@
                 删除
               </Button>
             </div>
+          </div>
+          <div
+            v-if="isNodeExpanded(node.id)"
+            class="mt-4 -mx-4 sm:-mx-5"
+          >
+            <ProxyNodeDataPanel
+              :node="node"
+              :state="nodeDetails[node.id]"
+              @refresh="loadNodeDetails(node)"
+            />
           </div>
         </div>
         <div
@@ -779,6 +841,7 @@ import {
   proxyNodesApi,
   type ProxyNode,
   type ProxyNodeEvent,
+  type ProxyNodeMetricsResponse,
   type ProxyNodeRemoteConfig,
   type ProxyNodeSchedulingState,
   type ProxyNodeTestResult,
@@ -808,10 +871,11 @@ import {
   Dialog,
 } from '@/components/ui'
 
-import { Search, Trash2, Plus, SquarePen, Activity, Loader2, Settings, History } from 'lucide-vue-next'
+import { Search, Trash2, Plus, SquarePen, Activity, Loader2, Settings, History, ChevronDown, ChevronRight } from 'lucide-vue-next'
 import { parseApiError } from '@/utils/errorParser'
 import { formatRegion } from '@/utils/region'
 import HardwareTooltip from './components/HardwareTooltip.vue'
+import ProxyNodeDataPanel from './components/ProxyNodeDataPanel.vue'
 
 const { success, error: toastError } = useToast()
 const { confirmDanger } = useConfirm()
@@ -859,6 +923,18 @@ const showEventsDialog = ref(false)
 const eventsNode = ref<ProxyNode | null>(null)
 const nodeEvents = ref<ProxyNodeEvent[]>([])
 const loadingEvents = ref(false)
+
+interface ProxyNodeDetailState {
+  loading: boolean
+  error: string | null
+  node: ProxyNode | null
+  metrics: ProxyNodeMetricsResponse | null
+  events: ProxyNodeEvent[]
+  loadedAt: number | null
+}
+
+const expandedNodeIds = ref(new Set<string>())
+const nodeDetails = ref<Record<string, ProxyNodeDetailState>>({})
 
 // 测试连通性
 const testingNodes = ref(new Set<string>())
@@ -1131,12 +1207,82 @@ async function handleTest(node: ProxyNode) {
   }
 }
 
+function createNodeDetailState(): ProxyNodeDetailState {
+  return {
+    loading: false,
+    error: null,
+    node: null,
+    metrics: null,
+    events: [],
+    loadedAt: null,
+  }
+}
+
+function updateNodeDetailState(nodeId: string, patch: Partial<ProxyNodeDetailState>) {
+  nodeDetails.value = {
+    ...nodeDetails.value,
+    [nodeId]: {
+      ...(nodeDetails.value[nodeId] ?? createNodeDetailState()),
+      ...patch,
+    },
+  }
+}
+
+function isNodeExpanded(nodeId: string) {
+  return expandedNodeIds.value.has(nodeId)
+}
+
+function toggleNodeDetails(node: ProxyNode) {
+  const next = new Set(expandedNodeIds.value)
+  if (next.has(node.id)) {
+    next.delete(node.id)
+    expandedNodeIds.value = next
+    return
+  }
+
+  next.add(node.id)
+  expandedNodeIds.value = next
+
+  const detailState = nodeDetails.value[node.id]
+  if (!detailState?.loadedAt && !detailState?.loading) {
+    void loadNodeDetails(node)
+  }
+}
+
+async function loadNodeDetails(node: ProxyNode) {
+  updateNodeDetailState(node.id, { loading: true, error: null })
+  const to = Math.floor(Date.now() / 1000)
+  const from = to - 24 * 60 * 60
+  const eventsFrom = to - 7 * 24 * 60 * 60
+
+  try {
+    const [detail, metrics, events] = await Promise.all([
+      proxyNodesApi.getNode(node.id),
+      proxyNodesApi.listNodeMetrics(node.id, { from, to, step: '1h' }),
+      proxyNodesApi.listNodeEvents(node.id, { limit: 8, from: eventsFrom, to }),
+    ])
+    updateNodeDetailState(node.id, {
+      loading: false,
+      error: null,
+      node: detail.node,
+      metrics,
+      events: events.items,
+      loadedAt: Date.now(),
+    })
+  } catch (err: unknown) {
+    updateNodeDetailState(node.id, {
+      loading: false,
+      error: parseApiError(err, '加载节点数据失败'),
+    })
+  }
+}
+
 async function handleViewEvents(node: ProxyNode) {
   eventsNode.value = node
   showEventsDialog.value = true
   loadingEvents.value = true
   try {
-    const res = await proxyNodesApi.listNodeEvents(node.id, 50)
+    const res = await proxyNodesApi.listNodeEvents(node.id, { limit: 50 })
     nodeEvents.value = res.items
   } catch (err: unknown) {
     toastError(parseApiError(err, '加载事件失败'))

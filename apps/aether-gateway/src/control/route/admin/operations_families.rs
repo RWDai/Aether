@@ -114,6 +114,34 @@ pub(super) fn classify_admin_operations_family_route(
             false,
         ))
     } else if method == http::Method::GET
+        && matches!(
+            normalized_path,
+            "/api/admin/proxy-nodes/metrics/fleet" | "/api/admin/proxy-nodes/metrics/fleet/"
+        )
+    {
+        Some(classified(
+            "admin_proxy",
+            "proxy_nodes_manage",
+            "list_fleet_metrics",
+            "admin:proxy_nodes",
+            false,
+        ))
+    } else if method == http::Method::GET
+        && normalized_path_no_trailing.starts_with("/api/admin/proxy-nodes/")
+        && normalized_path_no_trailing.ends_with("/metrics")
+        && normalized_path_no_trailing["/api/admin/proxy-nodes/".len()..]
+            .split('/')
+            .count()
+            == 2
+    {
+        Some(classified(
+            "admin_proxy",
+            "proxy_nodes_manage",
+            "list_node_metrics",
+            "admin:proxy_nodes",
+            false,
+        ))
+    } else if method == http::Method::GET
         && normalized_path_no_trailing.starts_with("/api/admin/proxy-nodes/")
         && normalized_path_no_trailing["/api/admin/proxy-nodes/".len()..]
             .split('/')

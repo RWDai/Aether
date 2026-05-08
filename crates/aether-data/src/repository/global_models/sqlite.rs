@@ -10,7 +10,7 @@ use super::{
     StoredPublicCatalogModel, StoredPublicGlobalModel, StoredPublicGlobalModelPage,
     UpdateAdminGlobalModelRecord, UpsertAdminProviderModelRecord,
 };
-use crate::driver::sqlite::SqlitePool;
+use crate::driver::sqlite::{sqlite_optional_real, SqlitePool};
 use crate::error::SqlResultExt;
 use crate::DataLayerError;
 
@@ -50,7 +50,7 @@ SELECT
   name,
   display_name,
   is_active,
-  default_price_per_request,
+  CAST(default_price_per_request AS REAL) AS default_price_per_request,
   default_tiered_pricing,
   supported_capabilities,
   config,
@@ -74,7 +74,7 @@ SELECT
   name,
   COALESCE(NULLIF(display_name, ''), name) AS display_name,
   is_active,
-  default_price_per_request,
+  CAST(default_price_per_request AS REAL) AS default_price_per_request,
   default_tiered_pricing,
   supported_capabilities,
   config,
@@ -101,7 +101,7 @@ SELECT
   m.global_model_id,
   m.provider_model_name,
   m.provider_model_mappings,
-  m.price_per_request,
+  CAST(m.price_per_request AS REAL) AS price_per_request,
   m.tiered_pricing,
   m.supports_vision,
   m.supports_function_calling,
@@ -115,7 +115,7 @@ SELECT
   m.updated_at AS updated_at_unix_secs,
   gm.name AS global_model_name,
   gm.display_name AS global_model_display_name,
-  gm.default_price_per_request AS global_model_default_price_per_request,
+  CAST(gm.default_price_per_request AS REAL) AS global_model_default_price_per_request,
   gm.default_tiered_pricing AS global_model_default_tiered_pricing,
   gm.supported_capabilities AS global_model_supported_capabilities,
   gm.config AS global_model_config
@@ -711,7 +711,7 @@ fn map_public_global_model_row(row: &SqliteRow) -> Result<StoredPublicGlobalMode
         row.try_get("name").map_sql_err()?,
         row.try_get("display_name").map_sql_err()?,
         row.try_get("is_active").map_sql_err()?,
-        row.try_get("default_price_per_request").map_sql_err()?,
+        sqlite_optional_real(row, "default_price_per_request")?,
         optional_json_from_string(
             row.try_get("default_tiered_pricing").map_sql_err()?,
             "global_models.default_tiered_pricing",
@@ -731,7 +731,7 @@ fn map_admin_global_model_row(row: &SqliteRow) -> Result<StoredAdminGlobalModel,
         row.try_get("name").map_sql_err()?,
         row.try_get("display_name").map_sql_err()?,
         row.try_get("is_active").map_sql_err()?,
-        row.try_get("default_price_per_request").map_sql_err()?,
+        sqlite_optional_real(row, "default_price_per_request")?,
         optional_json_from_string(
             row.try_get("default_tiered_pricing").map_sql_err()?,
             "global_models.default_tiered_pricing",
@@ -767,7 +767,7 @@ fn map_admin_provider_model_row(
             row.try_get("provider_model_mappings").map_sql_err()?,
             "models.provider_model_mappings",
         )?,
-        row.try_get("price_per_request").map_sql_err()?,
+        sqlite_optional_real(row, "price_per_request")?,
         optional_json_from_string(
             row.try_get("tiered_pricing").map_sql_err()?,
             "models.tiered_pricing",
@@ -790,8 +790,7 @@ fn map_admin_provider_model_row(
         )?,
         row.try_get("global_model_name").map_sql_err()?,
         row.try_get("global_model_display_name").map_sql_err()?,
-        row.try_get("global_model_default_price_per_request")
-            .map_sql_err()?,
+        sqlite_optional_real(row, "global_model_default_price_per_request")?,
         optional_json_from_string(
             row.try_get("global_model_default_tiered_pricing")
                 .map_sql_err()?,

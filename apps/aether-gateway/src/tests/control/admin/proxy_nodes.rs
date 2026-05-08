@@ -1,4 +1,5 @@
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use aether_data::repository::management_tokens::InMemoryManagementTokenRepository;
 use aether_data::repository::provider_catalog::InMemoryProviderCatalogReadRepository;
@@ -1442,6 +1443,7 @@ async fn gateway_handles_admin_proxy_node_events_locally_with_trusted_admin_prin
                 node_id: "node-1".to_string(),
                 event_type: "connected".to_string(),
                 detail: Some("older".to_string()),
+                event_metadata: None,
                 created_at_unix_ms: Some(1_710_000_000),
             },
             StoredProxyNodeEvent {
@@ -1449,6 +1451,7 @@ async fn gateway_handles_admin_proxy_node_events_locally_with_trusted_admin_prin
                 node_id: "node-1".to_string(),
                 event_type: "disconnected".to_string(),
                 detail: Some("newer".to_string()),
+                event_metadata: None,
                 created_at_unix_ms: Some(1_710_000_100),
             },
         ],
@@ -1488,6 +1491,150 @@ async fn gateway_handles_admin_proxy_node_events_locally_with_trusted_admin_prin
 
     gateway_handle.abort();
     upstream_handle.abort();
+}
+
+#[tokio::test]
+async fn gateway_reports_proxy_node_metrics_and_filters_events_locally() {
+    let proxy_node_repository =
+        Arc::new(InMemoryProxyNodeRepository::seed(vec![sample_proxy_node(
+            "node-1",
+        )]));
+    let gateway = build_router_with_state(
+        AppState::new()
+            .expect("gateway should build")
+            .with_data_state_for_tests(GatewayDataState::with_proxy_node_repository_for_tests(
+                proxy_node_repository,
+            )),
+    );
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+    let client = reqwest::Client::new();
+    let now_unix_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time should be after epoch")
+        .as_secs();
+
+    let heartbeat_response = client
+        .post(format!("{gateway_url}/api/internal/tunnel/heartbeat"))
+        .json(&json!({
+            "node_id": "node-1",
+            "heartbeat_id": 91,
+            "heartbeat_interval": 30,
+            "active_connections": 7,
+            "proxy_metadata": {
+                "tunnel_metrics": {
+                    "connect_errors": 3,
+                    "disconnects": 1,
+                    "error_events_total": 1,
+                    "ws_in_bytes": 1000,
+                    "ws_out_bytes": 2000,
+                    "ws_in_frames": 10,
+                    "ws_out_frames": 20,
+                    "heartbeat_rtt_last_ms": 42
+                },
+                "recent_tunnel_errors": [{
+                    "timestamp_unix_secs": now_unix_secs,
+                    "category": "tcp_connect_timeout",
+                    "message": "tunnel TCP connect timeout"
+                }]
+            },
+            "proxy_version": "2.0.0"
+        }))
+        .send()
+        .await
+        .expect("heartbeat request should succeed");
+    assert_eq!(heartbeat_response.status(), StatusCode::OK);
+
+    let from = now_unix_secs.saturating_sub(120);
+    let to = now_unix_secs.saturating_add(120);
+    let metrics_response = client
+        .get(format!(
+            "{gateway_url}/api/admin/proxy-nodes/node-1/metrics?from={from}&to={to}&step=1m"
+        ))
+        .header(GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .send()
+        .await
+        .expect("metrics request should succeed");
+    assert_eq!(metrics_response.status(), StatusCode::OK);
+    let metrics_payload: serde_json::Value = metrics_response
+        .json()
+        .await
+        .expect("metrics json should parse");
+    assert_eq!(metrics_payload["step"], "1m");
+    assert_eq!(metrics_payload["summary"]["samples"], 1);
+    assert_eq!(metrics_payload["summary"]["uptime_samples"], 1);
+    assert_eq!(metrics_payload["summary"]["active_connections_max"], 7);
+    assert_eq!(metrics_payload["summary"]["heartbeat_rtt_ms_avg"], 42.0);
+    assert_eq!(metrics_payload["summary"]["connect_errors_delta"], 3);
+    assert_eq!(metrics_payload["summary"]["ws_out_frames_delta"], 20);
+    let metric_items = metrics_payload["items"]
+        .as_array()
+        .expect("metrics items should be array");
+    assert_eq!(metric_items.len(), 1);
+    assert_eq!(metric_items[0]["node_id"], "node-1");
+    assert!(metric_items[0]["bucket_start"].is_string());
+
+    let fleet_response = client
+        .get(format!(
+            "{gateway_url}/api/admin/proxy-nodes/metrics/fleet?from={from}&to={to}&step=1m"
+        ))
+        .header(GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .send()
+        .await
+        .expect("fleet metrics request should succeed");
+    assert_eq!(fleet_response.status(), StatusCode::OK);
+    let fleet_payload: serde_json::Value = fleet_response
+        .json()
+        .await
+        .expect("fleet json should parse");
+    assert_eq!(fleet_payload["summary"]["samples"], 1);
+    assert_eq!(fleet_payload["summary"]["error_events_delta"], 1);
+
+    let events_response = client
+        .get(format!(
+            "{gateway_url}/api/admin/proxy-nodes/node-1/events?from={from}&to={to}&event_type=tunnel_err"
+        ))
+        .header(GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .send()
+        .await
+        .expect("events request should succeed");
+    assert_eq!(events_response.status(), StatusCode::OK);
+    let events_payload: serde_json::Value = events_response
+        .json()
+        .await
+        .expect("events json should parse");
+    let event_items = events_payload["items"]
+        .as_array()
+        .expect("event items should be array");
+    assert_eq!(event_items.len(), 1);
+    assert_eq!(event_items[0]["event_type"], "tunnel_err");
+    assert_eq!(
+        event_items[0]["event_metadata"]["category"],
+        "tcp_connect_timeout"
+    );
+
+    let invalid_metrics_response = client
+        .get(format!(
+            "{gateway_url}/api/admin/proxy-nodes/node-1/metrics?from={from}&to={to}&step=5m"
+        ))
+        .header(GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .send()
+        .await
+        .expect("invalid metrics request should succeed");
+    assert_eq!(invalid_metrics_response.status(), StatusCode::BAD_REQUEST);
+
+    gateway_handle.abort();
 }
 
 #[tokio::test]

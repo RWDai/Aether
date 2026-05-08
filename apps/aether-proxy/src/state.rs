@@ -1,8 +1,10 @@
 //! Shared application state passed to all subsystems.
 
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use aether_runtime::{AdmissionPermit, ConcurrencyError, ConcurrencyGate, ConcurrencySnapshot};
 use aether_runtime_state::{RuntimeSemaphore, RuntimeSemaphoreError, RuntimeSemaphoreSnapshot};
@@ -50,6 +52,8 @@ pub struct ServerContext {
     pub active_connections: Arc<AtomicU64>,
     /// Per-server request/latency metrics.
     pub metrics: Arc<ProxyMetrics>,
+    /// Per-server tunnel stability/traffic metrics.
+    pub tunnel_metrics: Arc<TunnelMetrics>,
 }
 
 /// Aggregate metrics for reporting to Aether.
@@ -81,6 +85,221 @@ impl ProxyMetrics {
         self.total_requests.fetch_add(1, Ordering::Release);
         self.total_latency_ns.fetch_add(nanos, Ordering::Release);
     }
+}
+
+const RECENT_TUNNEL_ERROR_CAPACITY: usize = 64;
+const TUNNEL_ERROR_CATEGORY_MAX_CHARS: usize = 48;
+const TUNNEL_ERROR_MESSAGE_MAX_CHARS: usize = 320;
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TunnelErrorEvent {
+    pub timestamp_unix_secs: u64,
+    pub category: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TunnelMetricsSnapshot {
+    pub connect_attempts: u64,
+    pub connect_successes: u64,
+    pub connect_errors: u64,
+    pub disconnects: u64,
+    pub last_connected_at_unix_secs: u64,
+    pub last_disconnected_at_unix_secs: u64,
+    pub last_connected_duration_ms: u64,
+    pub connected_duration_total_ms: u64,
+    pub heartbeat_sent: u64,
+    pub heartbeat_ack: u64,
+    pub heartbeat_rtt_last_ms: u64,
+    pub heartbeat_rtt_total_ms: u64,
+    pub ws_in_frames: u64,
+    pub ws_in_bytes: u64,
+    pub ws_out_frames: u64,
+    pub ws_out_bytes: u64,
+    pub error_events_total: u64,
+}
+
+impl TunnelMetricsSnapshot {
+    pub fn heartbeat_rtt_avg_ms(self) -> Option<f64> {
+        if self.heartbeat_ack == 0 {
+            None
+        } else {
+            Some(self.heartbeat_rtt_total_ms as f64 / self.heartbeat_ack as f64)
+        }
+    }
+}
+
+pub struct TunnelMetrics {
+    connect_attempts: AtomicU64,
+    connect_successes: AtomicU64,
+    connect_errors: AtomicU64,
+    disconnects: AtomicU64,
+    last_connected_at_unix_secs: AtomicU64,
+    last_disconnected_at_unix_secs: AtomicU64,
+    last_connected_duration_ms: AtomicU64,
+    connected_duration_total_ms: AtomicU64,
+    heartbeat_sent: AtomicU64,
+    heartbeat_ack: AtomicU64,
+    heartbeat_rtt_last_ms: AtomicU64,
+    heartbeat_rtt_total_ms: AtomicU64,
+    ws_in_frames: AtomicU64,
+    ws_in_bytes: AtomicU64,
+    ws_out_frames: AtomicU64,
+    ws_out_bytes: AtomicU64,
+    error_events_total: AtomicU64,
+    recent_errors: Mutex<VecDeque<TunnelErrorEvent>>,
+}
+
+impl TunnelMetrics {
+    pub fn new() -> Self {
+        Self {
+            connect_attempts: AtomicU64::new(0),
+            connect_successes: AtomicU64::new(0),
+            connect_errors: AtomicU64::new(0),
+            disconnects: AtomicU64::new(0),
+            last_connected_at_unix_secs: AtomicU64::new(0),
+            last_disconnected_at_unix_secs: AtomicU64::new(0),
+            last_connected_duration_ms: AtomicU64::new(0),
+            connected_duration_total_ms: AtomicU64::new(0),
+            heartbeat_sent: AtomicU64::new(0),
+            heartbeat_ack: AtomicU64::new(0),
+            heartbeat_rtt_last_ms: AtomicU64::new(0),
+            heartbeat_rtt_total_ms: AtomicU64::new(0),
+            ws_in_frames: AtomicU64::new(0),
+            ws_in_bytes: AtomicU64::new(0),
+            ws_out_frames: AtomicU64::new(0),
+            ws_out_bytes: AtomicU64::new(0),
+            error_events_total: AtomicU64::new(0),
+            recent_errors: Mutex::new(VecDeque::with_capacity(RECENT_TUNNEL_ERROR_CAPACITY)),
+        }
+    }
+
+    pub fn record_connect_attempt(&self) {
+        self.connect_attempts.fetch_add(1, Ordering::Release);
+    }
+
+    pub fn record_connect_success(&self) {
+        self.connect_successes.fetch_add(1, Ordering::Release);
+        self.last_connected_at_unix_secs
+            .store(now_unix_secs(), Ordering::Release);
+    }
+
+    pub fn record_connect_error(&self) {
+        self.connect_errors.fetch_add(1, Ordering::Release);
+    }
+
+    pub fn record_disconnect(&self, connected_for: Duration) {
+        let duration_ms = duration_to_millis_u64(connected_for);
+        self.disconnects.fetch_add(1, Ordering::Release);
+        self.last_disconnected_at_unix_secs
+            .store(now_unix_secs(), Ordering::Release);
+        self.last_connected_duration_ms
+            .store(duration_ms, Ordering::Release);
+        self.connected_duration_total_ms
+            .fetch_add(duration_ms, Ordering::Release);
+    }
+
+    pub fn record_heartbeat_sent(&self) {
+        self.heartbeat_sent.fetch_add(1, Ordering::Release);
+    }
+
+    pub fn record_heartbeat_ack(&self, rtt: Duration) {
+        let rtt_ms = duration_to_millis_u64(rtt);
+        self.heartbeat_ack.fetch_add(1, Ordering::Release);
+        self.heartbeat_rtt_last_ms.store(rtt_ms, Ordering::Release);
+        self.heartbeat_rtt_total_ms
+            .fetch_add(rtt_ms, Ordering::Release);
+    }
+
+    pub fn record_ws_incoming_frame(&self, payload_len: usize) {
+        self.ws_in_frames.fetch_add(1, Ordering::Release);
+        self.ws_in_bytes.fetch_add(
+            u64::try_from(payload_len).unwrap_or(u64::MAX),
+            Ordering::Release,
+        );
+    }
+
+    pub fn record_ws_outgoing_frame(&self, payload_len: usize) {
+        self.ws_out_frames.fetch_add(1, Ordering::Release);
+        self.ws_out_bytes.fetch_add(
+            u64::try_from(payload_len).unwrap_or(u64::MAX),
+            Ordering::Release,
+        );
+    }
+
+    pub fn record_error(&self, category: &str, message: &str) {
+        self.error_events_total.fetch_add(1, Ordering::Release);
+
+        let event = TunnelErrorEvent {
+            timestamp_unix_secs: now_unix_secs(),
+            category: normalize_error_field(category, TUNNEL_ERROR_CATEGORY_MAX_CHARS, "unknown"),
+            message: normalize_error_field(message, TUNNEL_ERROR_MESSAGE_MAX_CHARS, "n/a"),
+        };
+
+        let mut recent_errors = match self.recent_errors.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if recent_errors.len() >= RECENT_TUNNEL_ERROR_CAPACITY {
+            recent_errors.pop_front();
+        }
+        recent_errors.push_back(event);
+    }
+
+    pub fn recent_errors(&self, limit: usize) -> Vec<TunnelErrorEvent> {
+        if limit == 0 {
+            return Vec::new();
+        }
+        let recent_errors = match self.recent_errors.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let start = recent_errors.len().saturating_sub(limit);
+        recent_errors.iter().skip(start).cloned().collect()
+    }
+
+    pub fn snapshot(&self) -> TunnelMetricsSnapshot {
+        TunnelMetricsSnapshot {
+            connect_attempts: self.connect_attempts.load(Ordering::Acquire),
+            connect_successes: self.connect_successes.load(Ordering::Acquire),
+            connect_errors: self.connect_errors.load(Ordering::Acquire),
+            disconnects: self.disconnects.load(Ordering::Acquire),
+            last_connected_at_unix_secs: self.last_connected_at_unix_secs.load(Ordering::Acquire),
+            last_disconnected_at_unix_secs: self
+                .last_disconnected_at_unix_secs
+                .load(Ordering::Acquire),
+            last_connected_duration_ms: self.last_connected_duration_ms.load(Ordering::Acquire),
+            connected_duration_total_ms: self.connected_duration_total_ms.load(Ordering::Acquire),
+            heartbeat_sent: self.heartbeat_sent.load(Ordering::Acquire),
+            heartbeat_ack: self.heartbeat_ack.load(Ordering::Acquire),
+            heartbeat_rtt_last_ms: self.heartbeat_rtt_last_ms.load(Ordering::Acquire),
+            heartbeat_rtt_total_ms: self.heartbeat_rtt_total_ms.load(Ordering::Acquire),
+            ws_in_frames: self.ws_in_frames.load(Ordering::Acquire),
+            ws_in_bytes: self.ws_in_bytes.load(Ordering::Acquire),
+            ws_out_frames: self.ws_out_frames.load(Ordering::Acquire),
+            ws_out_bytes: self.ws_out_bytes.load(Ordering::Acquire),
+            error_events_total: self.error_events_total.load(Ordering::Acquire),
+        }
+    }
+}
+
+fn now_unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn duration_to_millis_u64(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+fn normalize_error_field(value: &str, max_chars: usize, fallback: &str) -> String {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() {
+        return fallback.to_string();
+    }
+    normalized.chars().take(max_chars).collect()
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]

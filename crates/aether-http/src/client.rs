@@ -33,7 +33,6 @@ pub fn apply_http_client_config(
     if let Some(user_agent) = &config.user_agent {
         builder = builder.user_agent(user_agent.clone());
     }
-
     builder
 }
 
@@ -46,6 +45,14 @@ pub fn build_http_client_with_headers(
     default_headers: HeaderMap,
 ) -> Result<reqwest::Client, reqwest::Error> {
     let mut builder = apply_http_client_config(reqwest::Client::builder(), config);
+    if let Some(proxy_url) = config
+        .proxy_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        builder = builder.proxy(reqwest::Proxy::all(proxy_url)?);
+    }
     if !default_headers.is_empty() {
         builder = builder.default_headers(default_headers);
     }

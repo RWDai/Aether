@@ -42,10 +42,12 @@ use aether_data::repository::oauth_providers::{
     UpsertOAuthProviderConfigRecord,
 };
 use aether_data::repository::proxy_nodes::{
-    ProxyNodeHeartbeatMutation, ProxyNodeManualCreateMutation, ProxyNodeManualUpdateMutation,
+    ProxyNodeEventQuery, ProxyNodeHeartbeatMutation, ProxyNodeManualCreateMutation,
+    ProxyNodeManualUpdateMutation, ProxyNodeMetricsCleanupSummary, ProxyNodeMetricsStep,
     ProxyNodeReadRepository, ProxyNodeRegistrationMutation, ProxyNodeRemoteConfigMutation,
     ProxyNodeTrafficMutation, ProxyNodeTunnelStatusMutation, ProxyNodeWriteRepository,
-    StoredProxyNode, StoredProxyNodeEvent,
+    StoredProxyFleetMetricsBucket, StoredProxyNode, StoredProxyNodeEvent,
+    StoredProxyNodeMetricsBucket,
 };
 pub(crate) use aether_data::repository::system::{AdminSystemStats, StoredSystemConfigEntry};
 use aether_data::repository::users::{

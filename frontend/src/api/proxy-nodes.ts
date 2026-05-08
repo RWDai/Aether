@@ -48,9 +48,58 @@ export interface ProxyNode {
 
 export interface ProxyNodeEvent {
   id: number
-  event_type: 'connected' | 'disconnected' | 'error'
+  event_type: string
   detail: string | null
-  created_at: string
+  event_metadata?: Record<string, unknown> | null
+  created_at: string | null
+}
+
+export type ProxyNodeMetricsStep = '1m' | '1h'
+
+export interface ProxyNodeMetricsSummary {
+  samples: number
+  uptime_samples: number
+  uptime_ratio: number | null
+  active_connections_sum: number
+  active_connections_max: number
+  active_connections_avg: number | null
+  heartbeat_rtt_ms_sum: number
+  heartbeat_rtt_ms_max: number
+  heartbeat_rtt_ms_avg: number | null
+  connect_errors_delta: number
+  disconnects_delta: number
+  error_events_delta: number
+  ws_in_bytes_delta: number
+  ws_out_bytes_delta: number
+  ws_in_frames_delta: number
+  ws_out_frames_delta: number
+}
+
+export interface ProxyNodeMetricsBucket extends ProxyNodeMetricsSummary {
+  node_id?: string
+  bucket_start_unix_secs: number
+  bucket_start: string | null
+}
+
+export interface ProxyNodeMetricsResponse {
+  step: ProxyNodeMetricsStep
+  from: number
+  to: number
+  items: ProxyNodeMetricsBucket[]
+  summary: ProxyNodeMetricsSummary
+}
+
+export interface ProxyNodeMetricsQuery {
+  from: number
+  to: number
+  step: ProxyNodeMetricsStep
+}
+
+export interface ProxyNodeEventQuery {
+  limit?: number
+  from?: number
+  to?: number
+  event_type?: string
 }
 
 export interface ProxyNodeUpgradeRolloutProbe {
@@ -272,8 +321,19 @@ export const proxyNodesApi = {
     return response.data
   },
 
-  async listNodeEvents(nodeId: string, limit = 50): Promise<{ items: ProxyNodeEvent[] }> {
-    const response = await apiClient.get<{ items: ProxyNodeEvent[] }>(`/api/admin/proxy-nodes/${nodeId}/events`, { params: { limit } })
+  async listNodeMetrics(nodeId: string, params: ProxyNodeMetricsQuery): Promise<ProxyNodeMetricsResponse> {
+    const response = await apiClient.get<ProxyNodeMetricsResponse>(`/api/admin/proxy-nodes/${nodeId}/metrics`, { params })
+    return response.data
+  },
+
+  async listFleetMetrics(params: ProxyNodeMetricsQuery): Promise<ProxyNodeMetricsResponse> {
+    const response = await apiClient.get<ProxyNodeMetricsResponse>('/api/admin/proxy-nodes/metrics/fleet', { params })
+    return response.data
+  },
+
+  async listNodeEvents(nodeId: string, query: ProxyNodeEventQuery | number = 50): Promise<{ items: ProxyNodeEvent[] }> {
+    const params = typeof query === 'number' ? { limit: query } : query
+    const response = await apiClient.get<{ items: ProxyNodeEvent[] }>(`/api/admin/proxy-nodes/${nodeId}/events`, { params })
     return response.data
   },
 }

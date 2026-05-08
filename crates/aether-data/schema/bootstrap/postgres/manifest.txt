@@ -8,3 +8,4 @@
 110_redeem_codes.sql
 120_stats_rollups.sql
 130_stats_cost_savings.sql
+140_proxy_node_metrics.sql

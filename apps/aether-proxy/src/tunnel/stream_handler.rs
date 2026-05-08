@@ -1532,7 +1532,7 @@ mod tests {
     use crate::config::Config;
     use crate::registration::client::AetherClient;
     use crate::runtime::DynamicConfig;
-    use crate::state::ProxyMetrics;
+    use crate::state::{ProxyMetrics, TunnelMetrics};
     use crate::target_filter::DnsCache;
     use crate::tunnel::client::build_tls_config;
 
@@ -2335,6 +2335,7 @@ mod tests {
             dynamic: Arc::new(ArcSwap::from_pointee(DynamicConfig::from_config(&config))),
             active_connections: Arc::new(AtomicU64::new(0)),
             metrics: Arc::new(ProxyMetrics::new()),
+            tunnel_metrics: Arc::new(TunnelMetrics::new()),
         })
     }
 
@@ -2355,6 +2356,7 @@ mod tests {
             aether_tcp_keepalive_secs: 60,
             aether_tcp_nodelay: true,
             aether_http2: true,
+            aether_proxy_url: None,
             aether_retry_max_attempts: 3,
             aether_retry_base_delay_ms: 200,
             aether_retry_max_delay_ms: 2_000,

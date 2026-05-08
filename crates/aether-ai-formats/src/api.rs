@@ -58,6 +58,17 @@ pub use crate::formats::openai::shared::{
 pub use crate::formats::shared::error_body::{
     build_core_error_body_for_client_format, is_core_error_finalize_kind, LocalCoreSyncErrorKind,
 };
+pub use crate::formats::shared::image_bridge::{
+    build_gemini_image_request_body_from_openai_image_request,
+    build_gemini_image_response_from_openai_image_response,
+    build_gemini_image_response_from_openai_responses_image_response,
+    build_openai_image_provider_body_from_response_stream_sync_body,
+    build_openai_image_request_body_from_gemini_image_request,
+    build_openai_image_response_from_gemini_response,
+    build_openai_image_response_from_response_stream_sync_body, gemini_request_is_image_generation,
+    resolve_requested_gemini_image_model_for_request, GeminiImageRequestForOpenAi,
+    OpenAiImageRequestForGemini,
+};
 pub use crate::formats::shared::model_directives::{
     apply_model_directive_mapping_patch, apply_model_directive_overrides_from_model,
     apply_model_directive_overrides_from_request, claude_model_uses_adaptive_effort,

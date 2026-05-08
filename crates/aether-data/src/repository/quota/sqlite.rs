@@ -4,7 +4,7 @@ use sqlx::{sqlite::SqliteRow, QueryBuilder, Row, Sqlite};
 use super::{
     ProviderQuotaReadRepository, ProviderQuotaWriteRepository, StoredProviderQuotaSnapshot,
 };
-use crate::driver::sqlite::SqlitePool;
+use crate::driver::sqlite::{sqlite_optional_real, sqlite_real, SqlitePool};
 use crate::error::SqlResultExt;
 use crate::DataLayerError;
 
@@ -12,8 +12,8 @@ const QUOTA_COLUMNS: &str = r#"
 SELECT
   id AS provider_id,
   billing_type,
-  monthly_quota_usd,
-  COALESCE(monthly_used_usd, 0) AS monthly_used_usd,
+  CAST(monthly_quota_usd AS REAL) AS monthly_quota_usd,
+  CAST(COALESCE(monthly_used_usd, 0) AS REAL) AS monthly_used_usd,
   quota_reset_day,
   quota_last_reset_at AS quota_last_reset_at_unix_secs,
   quota_expires_at AS quota_expires_at_unix_secs,
@@ -77,7 +77,7 @@ impl ProviderQuotaWriteRepository for SqliteProviderQuotaRepository {
         let rows_affected = sqlx::query(
             r#"
 UPDATE providers
-SET monthly_used_usd = 0,
+SET monthly_used_usd = 0.0,
     quota_last_reset_at = ?,
     updated_at = ?
 WHERE billing_type = 'monthly_quota'
@@ -103,8 +103,8 @@ fn map_row(row: &SqliteRow) -> Result<StoredProviderQuotaSnapshot, DataLayerErro
     StoredProviderQuotaSnapshot::new(
         row.try_get("provider_id").map_sql_err()?,
         row.try_get("billing_type").map_sql_err()?,
-        row.try_get("monthly_quota_usd").map_sql_err()?,
-        row.try_get("monthly_used_usd").map_sql_err()?,
+        sqlite_optional_real(row, "monthly_quota_usd")?,
+        sqlite_real(row, "monthly_used_usd")?,
         row.try_get("quota_reset_day").map_sql_err()?,
         row.try_get("quota_last_reset_at_unix_secs").map_sql_err()?,
         row.try_get("quota_expires_at_unix_secs").map_sql_err()?,
@@ -137,6 +137,13 @@ mod tests {
             .expect("quota should load")
             .expect("quota should exist");
         assert_eq!(quota.monthly_used_usd, 5.0);
+
+        let quota = repository
+            .find_by_provider_id("provider-null-used")
+            .await
+            .expect("quota with null usage should load")
+            .expect("quota with null usage should exist");
+        assert_eq!(quota.monthly_used_usd, 0.0);
 
         let quotas = repository
             .find_by_provider_ids(&["provider-2".to_string(), "provider-1".to_string()])
@@ -173,7 +180,8 @@ INSERT INTO providers (
 )
 VALUES
   ('provider-1', 'Provider One', 'openai', 'monthly_quota', 20.0, 5.0, 7, 1000, 1, 1, 1),
-  ('provider-2', 'Provider Two', 'openai', 'payg', NULL, 1.5, NULL, NULL, 1, 1, 1)
+  ('provider-2', 'Provider Two', 'openai', 'payg', NULL, 1.5, NULL, NULL, 1, 1, 1),
+  ('provider-null-used', 'Provider Null Used', 'openai', 'payg', NULL, NULL, NULL, NULL, 1, 1, 1)
 "#,
         )
         .execute(pool)

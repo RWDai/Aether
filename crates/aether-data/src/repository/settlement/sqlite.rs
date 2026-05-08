@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use sqlx::{sqlite::SqliteRow, Row};
 
 use super::{SettlementWriteRepository, StoredUsageSettlement, UsageSettlementInput};
-use crate::driver::sqlite::SqlitePool;
+use crate::driver::sqlite::{sqlite_optional_real, sqlite_real, SqlitePool};
 use crate::error::SqlResultExt;
 use crate::DataLayerError;
 
@@ -35,7 +35,7 @@ SELECT
     usage_settlement_snapshots.wallet_gift_balance_after,
     usage_record.wallet_gift_balance_after
   ) AS wallet_gift_balance_after,
-  usage_settlement_snapshots.provider_monthly_used_usd AS provider_monthly_used_usd,
+  CAST(usage_settlement_snapshots.provider_monthly_used_usd AS REAL) AS provider_monthly_used_usd,
   usage_record.provider_id,
   COALESCE(usage_settlement_snapshots.finalized_at, usage_record.finalized_at) AS finalized_at_unix_secs
 FROM "usage" AS usage_record
@@ -120,17 +120,16 @@ fn settlement_from_row(row: &SqliteRow) -> Result<StoredUsageSettlement, DataLay
         request_id: row.try_get("request_id").map_sql_err()?,
         wallet_id: row.try_get("wallet_id").map_sql_err()?,
         billing_status: row.try_get("billing_status").map_sql_err()?,
-        wallet_balance_before: row.try_get("wallet_balance_before").map_sql_err()?,
-        wallet_balance_after: row.try_get("wallet_balance_after").map_sql_err()?,
-        wallet_recharge_balance_before: row
-            .try_get("wallet_recharge_balance_before")
-            .map_sql_err()?,
-        wallet_recharge_balance_after: row
-            .try_get("wallet_recharge_balance_after")
-            .map_sql_err()?,
-        wallet_gift_balance_before: row.try_get("wallet_gift_balance_before").map_sql_err()?,
-        wallet_gift_balance_after: row.try_get("wallet_gift_balance_after").map_sql_err()?,
-        provider_monthly_used_usd: row.try_get("provider_monthly_used_usd").map_sql_err()?,
+        wallet_balance_before: sqlite_optional_real(row, "wallet_balance_before")?,
+        wallet_balance_after: sqlite_optional_real(row, "wallet_balance_after")?,
+        wallet_recharge_balance_before: sqlite_optional_real(
+            row,
+            "wallet_recharge_balance_before",
+        )?,
+        wallet_recharge_balance_after: sqlite_optional_real(row, "wallet_recharge_balance_after")?,
+        wallet_gift_balance_before: sqlite_optional_real(row, "wallet_gift_balance_before")?,
+        wallet_gift_balance_after: sqlite_optional_real(row, "wallet_gift_balance_after")?,
+        provider_monthly_used_usd: sqlite_optional_real(row, "provider_monthly_used_usd")?,
         finalized_at_unix_secs: row
             .try_get::<Option<i64>, _>("finalized_at_unix_secs")
             .map_sql_err()?
@@ -268,8 +267,8 @@ LIMIT 1
 
             if let Some(wallet_row) = wallet_row {
                 let wallet_id: String = wallet_row.try_get("id").map_sql_err()?;
-                let before_recharge: f64 = wallet_row.try_get("balance").map_sql_err()?;
-                let before_gift: f64 = wallet_row.try_get("gift_balance").map_sql_err()?;
+                let before_recharge = sqlite_real(&wallet_row, "balance")?;
+                let before_gift = sqlite_real(&wallet_row, "gift_balance")?;
                 let limit_mode: String = wallet_row.try_get("limit_mode").map_sql_err()?;
                 let before_total = before_recharge + before_gift;
                 let mut after_recharge = before_recharge;
@@ -318,7 +317,7 @@ WHERE id = ?
                     r#"
 UPDATE providers
 SET
-  monthly_used_usd = COALESCE(monthly_used_usd, 0) + ?,
+  monthly_used_usd = CAST(COALESCE(monthly_used_usd, 0) AS REAL) + ?,
   updated_at = ?
 WHERE id = ?
 "#,
@@ -330,14 +329,15 @@ WHERE id = ?
                 .await
                 .map_sql_err()?;
 
-                settlement.provider_monthly_used_usd = sqlx::query_scalar::<_, Option<f64>>(
-                    "SELECT monthly_used_usd FROM providers WHERE id = ? LIMIT 1",
+                settlement.provider_monthly_used_usd = sqlx::query(
+                    "SELECT CAST(monthly_used_usd AS REAL) AS monthly_used_usd FROM providers WHERE id = ? LIMIT 1",
                 )
                 .bind(provider_id)
                 .fetch_optional(&mut *tx)
                 .await
                 .map_sql_err()?
-                .flatten();
+                .map(|row| sqlite_real(&row, "monthly_used_usd"))
+                .transpose()?;
             }
         }
 

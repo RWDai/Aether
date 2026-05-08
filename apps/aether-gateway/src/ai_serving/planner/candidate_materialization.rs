@@ -75,6 +75,18 @@ enum LocalExecutionCandidateAttemptSourceItem<'a> {
 }
 
 impl<'a> LocalExecutionCandidateAttemptSource<'a> {
+    pub(crate) fn from_static_attempts_for_image_bridge(
+        attempts: Vec<LocalExecutionCandidateAttempt>,
+    ) -> Self {
+        let mut items = VecDeque::new();
+        if !attempts.is_empty() {
+            items.push_back(LocalExecutionCandidateAttemptSourceItem::Static {
+                attempts: VecDeque::from(attempts),
+            });
+        }
+        Self { items }
+    }
+
     pub(crate) async fn next_attempt(&mut self) -> Option<LocalExecutionCandidateAttempt> {
         loop {
             let front = self.items.front_mut()?;

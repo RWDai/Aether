@@ -6,7 +6,8 @@ use super::{
     RegenerateManagementTokenSecret, StoredAuthApiKeyExportRecord, StoredAuthApiKeySnapshot,
     StoredLdapModuleConfig, StoredManagementToken, StoredManagementTokenListPage,
     StoredManagementTokenWithUser, StoredOAuthProviderConfig, StoredOAuthProviderModuleConfig,
-    StoredProxyNode, StoredProxyNodeEvent, StoredUserAuthRecord, StoredUserOAuthLinkSummary,
+    StoredProxyFleetMetricsBucket, StoredProxyNode, StoredProxyNodeEvent,
+    StoredProxyNodeMetricsBucket, StoredUserAuthRecord, StoredUserOAuthLinkSummary,
     StoredUserPreferenceRecord, StoredUserSessionRecord, StoredWalletSnapshot,
     UpdateManagementTokenRecord, UpsertOAuthProviderConfigRecord,
 };
@@ -979,6 +980,56 @@ impl GatewayDataState {
         }
     }
 
+    pub(crate) async fn list_proxy_node_events_filtered(
+        &self,
+        node_id: &str,
+        query: &super::ProxyNodeEventQuery,
+    ) -> Result<Vec<StoredProxyNodeEvent>, DataLayerError> {
+        match &self.proxy_node_reader {
+            Some(repository) => {
+                repository
+                    .list_proxy_node_events_filtered(node_id, query)
+                    .await
+            }
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn list_proxy_node_metrics(
+        &self,
+        node_id: &str,
+        step: super::ProxyNodeMetricsStep,
+        from_unix_secs: u64,
+        to_unix_secs: u64,
+        limit: usize,
+    ) -> Result<Vec<StoredProxyNodeMetricsBucket>, DataLayerError> {
+        match &self.proxy_node_reader {
+            Some(repository) => {
+                repository
+                    .list_proxy_node_metrics(node_id, step, from_unix_secs, to_unix_secs, limit)
+                    .await
+            }
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn list_proxy_fleet_metrics(
+        &self,
+        step: super::ProxyNodeMetricsStep,
+        from_unix_secs: u64,
+        to_unix_secs: u64,
+        limit: usize,
+    ) -> Result<Vec<StoredProxyFleetMetricsBucket>, DataLayerError> {
+        match &self.proxy_node_reader {
+            Some(repository) => {
+                repository
+                    .list_proxy_fleet_metrics(step, from_unix_secs, to_unix_secs, limit)
+                    .await
+            }
+            None => Ok(Vec::new()),
+        }
+    }
+
     pub(crate) async fn register_proxy_node(
         &self,
         mutation: &ProxyNodeRegistrationMutation,
@@ -1015,6 +1066,26 @@ impl GatewayDataState {
         match &self.proxy_node_writer {
             Some(repository) => repository.reset_stale_tunnel_statuses().await,
             None => Ok(0),
+        }
+    }
+
+    pub(crate) async fn cleanup_proxy_node_metrics(
+        &self,
+        retain_1m_from_unix_secs: u64,
+        retain_1h_from_unix_secs: u64,
+        delete_limit: usize,
+    ) -> Result<super::ProxyNodeMetricsCleanupSummary, DataLayerError> {
+        match &self.proxy_node_writer {
+            Some(repository) => {
+                repository
+                    .cleanup_proxy_node_metrics(
+                        retain_1m_from_unix_secs,
+                        retain_1h_from_unix_secs,
+                        delete_limit,
+                    )
+                    .await
+            }
+            None => Ok(super::ProxyNodeMetricsCleanupSummary::default()),
         }
     }
 

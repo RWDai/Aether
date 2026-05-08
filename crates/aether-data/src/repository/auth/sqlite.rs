@@ -7,7 +7,7 @@ use super::types::{
     StandaloneApiKeyExportListQuery, StoredAuthApiKeyExportRecord, StoredAuthApiKeySnapshot,
     UpdateStandaloneApiKeyBasicRecord, UpdateUserApiKeyBasicRecord,
 };
-use crate::driver::sqlite::SqlitePool;
+use crate::driver::sqlite::{sqlite_real, SqlitePool};
 use crate::error::SqlResultExt;
 use crate::DataLayerError;
 
@@ -57,7 +57,7 @@ SELECT
   api_keys.auto_delete_on_expiry,
   api_keys.total_requests,
   COALESCE(api_keys.total_tokens, 0) AS total_tokens,
-  COALESCE(api_keys.total_cost_usd, 0) AS total_cost_usd,
+  CAST(COALESCE(api_keys.total_cost_usd, 0) AS REAL) AS total_cost_usd,
   api_keys.last_used_at AS last_used_at_unix_secs,
   api_keys.created_at AS created_at_unix_secs,
   api_keys.updated_at AS updated_at_unix_secs,
@@ -904,7 +904,7 @@ fn map_auth_api_key_export_row(
         row.try_get("auto_delete_on_expiry").map_sql_err()?,
         row.try_get("total_requests").map_sql_err()?,
         row.try_get("total_tokens").map_sql_err()?,
-        row.try_get("total_cost_usd").map_sql_err()?,
+        sqlite_real(row, "total_cost_usd")?,
         row.try_get("is_standalone").map_sql_err()?,
     )
     .and_then(|record| {

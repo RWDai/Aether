@@ -101,6 +101,24 @@ fn classifies_admin_proxy_nodes_detail_as_admin_proxy_route() {
 }
 
 #[test]
+fn classifies_admin_proxy_node_metrics_as_admin_proxy_route() {
+    assert_proxy_nodes_admin_route(
+        http::Method::GET,
+        "/api/admin/proxy-nodes/node-1/metrics?from=1700000000&to=1700003600&step=1m",
+        "list_node_metrics",
+    );
+}
+
+#[test]
+fn classifies_admin_proxy_fleet_metrics_as_admin_proxy_route() {
+    assert_proxy_nodes_admin_route(
+        http::Method::GET,
+        "/api/admin/proxy-nodes/metrics/fleet?from=1700000000&to=1700003600&step=1m",
+        "list_fleet_metrics",
+    );
+}
+
+#[test]
 fn classifies_admin_proxy_nodes_delete_as_admin_proxy_route() {
     assert_proxy_nodes_admin_route(
         http::Method::DELETE,

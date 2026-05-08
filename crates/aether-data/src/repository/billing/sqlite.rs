@@ -6,7 +6,7 @@ use super::{
     AdminBillingPresetApplyResult, AdminBillingRuleRecord, AdminBillingRuleWriteInput,
     BillingReadRepository, StoredBillingModelContext,
 };
-use crate::driver::sqlite::SqlitePool;
+use crate::driver::sqlite::{sqlite_optional_real, SqlitePool};
 use crate::error::SqlResultExt;
 use crate::DataLayerError;
 
@@ -20,12 +20,12 @@ SELECT
   gm.id AS global_model_id,
   gm.name AS global_model_name,
   gm.config AS global_model_config,
-  gm.default_price_per_request AS default_price_per_request,
+  CAST(gm.default_price_per_request AS REAL) AS default_price_per_request,
   gm.default_tiered_pricing AS default_tiered_pricing,
   m.id AS model_id,
   m.provider_model_name AS model_provider_model_name,
   m.config AS model_config,
-  m.price_per_request AS model_price_per_request,
+  CAST(m.price_per_request AS REAL) AS model_price_per_request,
   m.tiered_pricing AS model_tiered_pricing,
   m.provider_model_mappings AS provider_model_mappings,
   m.is_available AS model_is_available,
@@ -641,19 +641,13 @@ fn match_rank(
         return Ok(None);
     };
 
-    let has_model_price = row
-        .try_get::<Option<f64>, _>("model_price_per_request")
-        .map_sql_err()?
-        .is_some()
+    let has_model_price = sqlite_optional_real(row, "model_price_per_request")?.is_some()
         || row
             .try_get::<Option<String>, _>("model_tiered_pricing")
             .ok()
             .flatten()
             .is_some();
-    let has_default_price = row
-        .try_get::<Option<f64>, _>("default_price_per_request")
-        .map_sql_err()?
-        .is_some()
+    let has_default_price = sqlite_optional_real(row, "default_price_per_request")?.is_some()
         || row
             .try_get::<Option<String>, _>("default_tiered_pricing")
             .ok()
@@ -717,12 +711,12 @@ fn map_row(row: &SqliteRow) -> Result<StoredBillingModelContext, DataLayerError>
         row.try_get("global_model_id").map_sql_err()?,
         row.try_get("global_model_name").map_sql_err()?,
         parse_json(row.try_get("global_model_config").ok().flatten())?,
-        row.try_get("default_price_per_request").map_sql_err()?,
+        sqlite_optional_real(row, "default_price_per_request")?,
         parse_json(row.try_get("default_tiered_pricing").ok().flatten())?,
         row.try_get("model_id").map_sql_err()?,
         row.try_get("model_provider_model_name").map_sql_err()?,
         parse_json(row.try_get("model_config").ok().flatten())?,
-        row.try_get("model_price_per_request").map_sql_err()?,
+        sqlite_optional_real(row, "model_price_per_request")?,
         parse_json(row.try_get("model_tiered_pricing").ok().flatten())?,
     )
 }

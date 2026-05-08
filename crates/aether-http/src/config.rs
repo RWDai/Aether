@@ -9,6 +9,7 @@ pub struct HttpClientConfig {
     pub http2_adaptive_window: bool,
     pub use_rustls_tls: bool,
     pub user_agent: Option<String>,
+    pub proxy_url: Option<String>,
 }
 
 impl Default for HttpClientConfig {
@@ -23,6 +24,7 @@ impl Default for HttpClientConfig {
             http2_adaptive_window: false,
             use_rustls_tls: true,
             user_agent: None,
+            proxy_url: None,
         }
     }
 }

@@ -10,12 +10,14 @@ use crate::maintenance::{
 };
 use crate::GatewayError;
 use aether_admin::system::{
-    admin_proxy_node_event_node_id_from_path, build_admin_proxy_node_payload,
-    build_admin_proxy_nodes_data_unavailable_response, build_admin_proxy_nodes_not_found_response,
+    admin_proxy_node_event_node_id_from_path, admin_proxy_node_metrics_node_id_from_path,
+    build_admin_proxy_node_payload, build_admin_proxy_nodes_data_unavailable_response,
+    build_admin_proxy_nodes_not_found_response,
 };
 use aether_contracts::tunnel::{
     TUNNEL_RELAY_FORWARDED_BY_HEADER, TUNNEL_RELAY_OWNER_INSTANCE_HEADER,
 };
+use aether_data::repository::proxy_nodes::{ProxyNodeEventQuery, ProxyNodeMetricsStep};
 use axum::{
     body::{Body, Bytes},
     http,
@@ -148,6 +150,9 @@ const DEFAULT_PROXY_CONNECTIVITY_PROBE_URL: &str = "https://www.cloudflare.com/c
 const PROXY_CONNECTIVITY_TIMEOUT_SECS: u64 = 10;
 const TUNNEL_RELAY_ENVELOPE_CONTENT_TYPE: &str = "application/vnd.aether.tunnel-envelope";
 const MAX_PROXY_CONNECTIVITY_RESPONSE_BYTES: usize = 64 * 1024;
+const PROXY_NODE_METRICS_MAX_POINTS: usize = 50_000;
+const PROXY_NODE_METRICS_1M_MAX_WINDOW_SECS: u64 = 30 * 24 * 60 * 60;
+const PROXY_NODE_METRICS_1H_MAX_WINDOW_SECS: u64 = 365 * 24 * 60 * 60;
 
 #[cfg(test)]
 fn manual_proxy_connectivity_probe_url_override() -> &'static std::sync::RwLock<Option<String>> {
@@ -244,13 +249,53 @@ pub(crate) async fn maybe_build_local_admin_proxy_nodes_response(
             return Ok(Some(build_admin_proxy_nodes_not_found_response()));
         };
 
-        let limit = query_param_value(request_context.query_string(), "limit")
-            .and_then(|value| value.parse::<usize>().ok())
-            .filter(|value| *value > 0 && *value <= 200)
-            .unwrap_or(50);
+        let query = match parse_proxy_node_event_query(request_context.query_string()) {
+            Ok(query) => query,
+            Err(response) => return Ok(Some(response)),
+        };
         return Ok(Some(
             state
-                .build_admin_proxy_node_events_response(node_id, limit)
+                .build_admin_proxy_node_events_response(node_id, &query)
+                .await?,
+        ));
+    }
+
+    if decision.route_kind.as_deref() == Some("list_node_metrics")
+        && request_context.method() == http::Method::GET
+    {
+        let Some(node_id) = admin_proxy_node_metrics_node_id_from_path(request_context.path())
+        else {
+            return Ok(Some(build_admin_proxy_nodes_not_found_response()));
+        };
+        let (step, from_unix_secs, to_unix_secs, limit) =
+            match parse_proxy_node_metrics_query(request_context.query_string()) {
+                Ok(query) => query,
+                Err(response) => return Ok(Some(response)),
+            };
+        return Ok(Some(
+            state
+                .build_admin_proxy_node_metrics_response(
+                    node_id,
+                    step,
+                    from_unix_secs,
+                    to_unix_secs,
+                    limit,
+                )
+                .await?,
+        ));
+    }
+
+    if decision.route_kind.as_deref() == Some("list_fleet_metrics")
+        && request_context.method() == http::Method::GET
+    {
+        let (step, from_unix_secs, to_unix_secs, limit) =
+            match parse_proxy_node_metrics_query(request_context.query_string()) {
+                Ok(query) => query,
+                Err(response) => return Ok(Some(response)),
+            };
+        return Ok(Some(
+            state
+                .build_admin_proxy_fleet_metrics_response(step, from_unix_secs, to_unix_secs, limit)
                 .await?,
         ));
     }
@@ -1974,6 +2019,86 @@ fn validate_optional_object(value: Option<&Value>, field: &str) -> Result<(), Re
         return Err(bad_request_response(format!("{field} 必须是 JSON 对象")));
     }
     Ok(())
+}
+
+fn parse_proxy_node_event_query(
+    query: Option<&str>,
+) -> Result<ProxyNodeEventQuery, Response<Body>> {
+    let limit = query_param_value(query, "limit")
+        .map(|value| parse_query_u64("limit", &value))
+        .transpose()?
+        .and_then(|value| usize::try_from(value).ok())
+        .filter(|value| *value > 0 && *value <= 200)
+        .unwrap_or(50);
+    let from_unix_secs = query_param_value(query, "from")
+        .map(|value| parse_query_u64("from", &value))
+        .transpose()?;
+    let to_unix_secs = query_param_value(query, "to")
+        .map(|value| parse_query_u64("to", &value))
+        .transpose()?;
+    if from_unix_secs
+        .zip(to_unix_secs)
+        .is_some_and(|(from, to)| from > to)
+    {
+        return Err(bad_request_response("from 不能大于 to"));
+    }
+    let event_type = query_param_value(query, "event_type")
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty());
+
+    Ok(ProxyNodeEventQuery {
+        limit,
+        from_unix_secs,
+        to_unix_secs,
+        event_type,
+    })
+}
+
+fn parse_proxy_node_metrics_query(
+    query: Option<&str>,
+) -> Result<(ProxyNodeMetricsStep, u64, u64, usize), Response<Body>> {
+    let step = match query_param_value(query, "step")
+        .unwrap_or_else(|| "1m".to_string())
+        .trim()
+    {
+        "1m" => ProxyNodeMetricsStep::OneMinute,
+        "1h" => ProxyNodeMetricsStep::OneHour,
+        _ => return Err(bad_request_response("step 仅支持 1m 或 1h")),
+    };
+    let from_unix_secs = query_param_value(query, "from")
+        .ok_or_else(|| bad_request_response("from 为必填 Unix 秒时间戳"))?;
+    let from_unix_secs = parse_query_u64("from", &from_unix_secs)?;
+    let to_unix_secs = query_param_value(query, "to")
+        .ok_or_else(|| bad_request_response("to 为必填 Unix 秒时间戳"))?;
+    let to_unix_secs = parse_query_u64("to", &to_unix_secs)?;
+    if from_unix_secs > to_unix_secs {
+        return Err(bad_request_response("from 不能大于 to"));
+    }
+
+    let window_secs = to_unix_secs.saturating_sub(from_unix_secs);
+    let max_window_secs = match step {
+        ProxyNodeMetricsStep::OneMinute => PROXY_NODE_METRICS_1M_MAX_WINDOW_SECS,
+        ProxyNodeMetricsStep::OneHour => PROXY_NODE_METRICS_1H_MAX_WINDOW_SECS,
+    };
+    if window_secs > max_window_secs {
+        return Err(bad_request_response(match step {
+            ProxyNodeMetricsStep::OneMinute => "1m 最大查询窗口为 30 天",
+            ProxyNodeMetricsStep::OneHour => "1h 最大查询窗口为 365 天",
+        }));
+    }
+
+    let points = window_secs / step.bucket_size_secs() + 1;
+    let limit = usize::try_from(points)
+        .ok()
+        .filter(|value| *value > 0 && *value <= PROXY_NODE_METRICS_MAX_POINTS)
+        .ok_or_else(|| bad_request_response("查询点数过多"))?;
+    Ok((step, from_unix_secs, to_unix_secs, limit))
+}
+
+fn parse_query_u64(field: &str, value: &str) -> Result<u64, Response<Body>> {
+    value
+        .parse::<u64>()
+        .map_err(|_| bad_request_response(format!("{field} 必须是非负 Unix 秒时间戳")))
 }
 
 fn bad_request_response(detail: impl Into<String>) -> Response<Body> {

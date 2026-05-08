@@ -4,8 +4,10 @@ use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 
 use aether_data::repository::proxy_nodes::{
-    ProxyNodeHeartbeatMutation, ProxyNodeManualCreateMutation, ProxyNodeManualUpdateMutation,
-    ProxyNodeTrafficMutation, ProxyNodeTunnelStatusMutation, StoredProxyNode, StoredProxyNodeEvent,
+    ProxyNodeEventQuery, ProxyNodeHeartbeatMutation, ProxyNodeManualCreateMutation,
+    ProxyNodeManualUpdateMutation, ProxyNodeMetricsStep, ProxyNodeTrafficMutation,
+    ProxyNodeTunnelStatusMutation, StoredProxyFleetMetricsBucket, StoredProxyNode,
+    StoredProxyNodeEvent, StoredProxyNodeMetricsBucket,
 };
 use aether_http::{build_http_client, HttpClientConfig};
 use aether_runtime::{
@@ -46,6 +48,7 @@ use crate::maintenance::spawn_pending_cleanup_worker;
 use crate::maintenance::spawn_pool_monitor_worker;
 use crate::maintenance::spawn_pool_quota_probe_worker;
 use crate::maintenance::spawn_provider_checkin_worker;
+use crate::maintenance::spawn_proxy_node_metrics_cleanup_worker;
 use crate::maintenance::spawn_proxy_node_stale_cleanup_worker;
 use crate::maintenance::spawn_proxy_upgrade_rollout_worker;
 use crate::maintenance::spawn_request_candidate_cleanup_worker;
@@ -593,6 +596,44 @@ impl AppState {
             .map_err(|err| GatewayError::Internal(err.to_string()))
     }
 
+    pub(crate) async fn list_proxy_node_events_filtered(
+        &self,
+        node_id: &str,
+        query: &ProxyNodeEventQuery,
+    ) -> Result<Vec<StoredProxyNodeEvent>, GatewayError> {
+        self.data
+            .list_proxy_node_events_filtered(node_id, query)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))
+    }
+
+    pub(crate) async fn list_proxy_node_metrics(
+        &self,
+        node_id: &str,
+        step: ProxyNodeMetricsStep,
+        from_unix_secs: u64,
+        to_unix_secs: u64,
+        limit: usize,
+    ) -> Result<Vec<StoredProxyNodeMetricsBucket>, GatewayError> {
+        self.data
+            .list_proxy_node_metrics(node_id, step, from_unix_secs, to_unix_secs, limit)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))
+    }
+
+    pub(crate) async fn list_proxy_fleet_metrics(
+        &self,
+        step: ProxyNodeMetricsStep,
+        from_unix_secs: u64,
+        to_unix_secs: u64,
+        limit: usize,
+    ) -> Result<Vec<StoredProxyFleetMetricsBucket>, GatewayError> {
+        self.data
+            .list_proxy_fleet_metrics(step, from_unix_secs, to_unix_secs, limit)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))
+    }
+
     pub(crate) async fn register_proxy_node(
         &self,
         mutation: &aether_data::repository::proxy_nodes::ProxyNodeRegistrationMutation,
@@ -628,6 +669,23 @@ impl AppState {
             .reset_stale_proxy_node_tunnel_statuses()
             .await
             .map_err(|err| std::io::Error::other(err.to_string()))
+    }
+
+    pub(crate) async fn cleanup_proxy_node_metrics(
+        &self,
+        retain_1m_from_unix_secs: u64,
+        retain_1h_from_unix_secs: u64,
+        delete_limit: usize,
+    ) -> Result<aether_data::repository::proxy_nodes::ProxyNodeMetricsCleanupSummary, GatewayError>
+    {
+        self.data
+            .cleanup_proxy_node_metrics(
+                retain_1m_from_unix_secs,
+                retain_1h_from_unix_secs,
+                delete_limit,
+            )
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))
     }
 
     pub(crate) async fn apply_proxy_node_heartbeat(
@@ -977,6 +1035,9 @@ impl AppState {
             tasks.push(handle);
         }
         if let Some(handle) = spawn_proxy_node_stale_cleanup_worker(self.data.clone()) {
+            tasks.push(handle);
+        }
+        if let Some(handle) = spawn_proxy_node_metrics_cleanup_worker(self.data.clone()) {
             tasks.push(handle);
         }
         if let Some(handle) = spawn_proxy_upgrade_rollout_worker(self.clone()) {

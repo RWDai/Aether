@@ -1,7 +1,7 @@
 //! WebSocket tunnel client: connect, authenticate, and run the tunnel.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::net::TcpStream;
 use tokio::sync::watch;
@@ -10,6 +10,7 @@ use tokio_tungstenite::tungstenite::http;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tracing::{debug, warn};
 
+use crate::egress_proxy::{connect_target_via_proxy, ProxyConnectOptions, UpstreamProxyConfig};
 use crate::state::{AppState, ServerContext};
 
 use super::{dispatcher, heartbeat, writer};
@@ -71,14 +72,7 @@ pub async fn connect_and_run(
         .config
         .tunnel_connect_timeout()
         .expect("validated config should resolve tunnel connect timeout");
-    let tcp_stream = tokio::time::timeout(connect_timeout, TcpStream::connect((host, port)))
-        .await
-        .map_err(|_| {
-            anyhow::anyhow!(
-                "tunnel TCP connect timeout ({}ms)",
-                connect_timeout.as_millis()
-            )
-        })??;
+    let tcp_stream = connect_tunnel_tcp(state, host, port, connect_timeout).await?;
 
     // Configure TCP parameters via socket2
     configure_tcp_socket(&tcp_stream, state);
@@ -133,6 +127,8 @@ pub async fn connect_and_run(
         ping_interval_ms = ping_interval.as_millis(),
         "tunnel connected"
     );
+    server.tunnel_metrics.record_connect_success();
+    let connected_at = Instant::now();
 
     // NOTE: reconnect_attempts reset is handled by the caller (mod.rs)
     // based on how long the connection stayed alive.
@@ -141,7 +137,11 @@ pub async fn connect_and_run(
     let (ws_sink, ws_read) = futures_util::StreamExt::split(ws_stream);
 
     // Spawn writer task (with WebSocket ping keepalive)
-    let (frame_tx, mut writer_handle) = writer::spawn_writer(ws_sink, ping_interval);
+    let (frame_tx, mut writer_handle) = writer::spawn_writer_with_metrics(
+        ws_sink,
+        ping_interval,
+        Some(Arc::clone(&server.tunnel_metrics)),
+    );
     let drain_signal = spawn_drain_signal(conn_idx, frame_tx.clone(), drain.clone());
 
     // Spawn heartbeat task (only for primary connection to avoid
@@ -174,8 +174,13 @@ pub async fn connect_and_run(
             drain.clone(),
         ) => {
             match result {
-                Ok(()) => TunnelOutcome::Disconnected,
-                Err(e) => return Err(e),
+                Ok(()) => Ok(TunnelOutcome::Disconnected),
+                Err(e) => {
+                    server
+                        .tunnel_metrics
+                        .record_error("dispatcher_error", &e.to_string());
+                    Err(e)
+                }
             }
         }
         writer_result = &mut writer_handle => {
@@ -184,16 +189,22 @@ pub async fn connect_and_run(
                 Err(e) => {
                     if e.is_panic() {
                         tracing::error!(error = %e, "writer task panicked, triggering reconnect");
+                        server
+                            .tunnel_metrics
+                            .record_error("writer_task_panic", &e.to_string());
                     } else {
                         warn!(error = %e, "writer task cancelled, triggering reconnect");
+                        server
+                            .tunnel_metrics
+                            .record_error("writer_task_cancelled", &e.to_string());
                     }
                 }
             }
-            TunnelOutcome::Disconnected
+            Ok(TunnelOutcome::Disconnected)
         }
         _ = shutdown.changed() => {
             debug!("shutdown during tunnel dispatch");
-            TunnelOutcome::Shutdown
+            Ok(TunnelOutcome::Shutdown)
         }
     };
 
@@ -213,8 +224,12 @@ pub async fn connect_and_run(
         let _ = tokio::time::timeout(Duration::from_secs(35), writer_handle).await;
     }
 
+    server
+        .tunnel_metrics
+        .record_disconnect(connected_at.elapsed());
+
     debug!("tunnel disconnected");
-    Ok(outcome)
+    outcome
 }
 
 fn spawn_drain_signal(
@@ -244,6 +259,56 @@ fn spawn_drain_signal(
         )
         .await;
     })
+}
+
+async fn connect_tunnel_tcp(
+    state: &Arc<AppState>,
+    host: &str,
+    port: u16,
+    connect_timeout: Duration,
+) -> Result<TcpStream, anyhow::Error> {
+    if let Some(proxy_url) = state.config.effective_aether_proxy_url() {
+        let proxy = UpstreamProxyConfig::parse(proxy_url)
+            .map_err(|err| anyhow::anyhow!("aether proxy URL invalid: {err}"))?;
+        debug!(
+            proxy_url = %proxy.redacted_url(),
+            host = %host,
+            port = port,
+            "connecting tunnel via Aether egress proxy"
+        );
+        return tokio::time::timeout(
+            connect_timeout,
+            connect_target_via_proxy(
+                &proxy,
+                host,
+                port,
+                ProxyConnectOptions {
+                    connect_timeout,
+                    tcp_nodelay: state.config.tunnel_tcp_nodelay,
+                    tcp_keepalive: (state.config.tunnel_tcp_keepalive_secs > 0)
+                        .then(|| Duration::from_secs(state.config.tunnel_tcp_keepalive_secs)),
+                },
+            ),
+        )
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "tunnel proxy TCP connect timeout ({}ms)",
+                connect_timeout.as_millis()
+            )
+        })?
+        .map_err(anyhow::Error::from);
+    }
+
+    tokio::time::timeout(connect_timeout, TcpStream::connect((host, port)))
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "tunnel TCP connect timeout ({}ms)",
+                connect_timeout.as_millis()
+            )
+        })?
+        .map_err(anyhow::Error::from)
 }
 
 /// Configure TCP keepalive and NODELAY on an established socket.

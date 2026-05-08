@@ -173,7 +173,7 @@ function hasTerminalSuccessStatusCode(
 ): boolean {
   return typeof record.status_code === 'number' &&
     record.status_code >= 200 &&
-    record.status_code < 400
+    record.status_code < 300
 }
 
 export function isUsageRecordFailed(record: UsageFailureSignal & Pick<UsageRecord, 'status'>): boolean {
@@ -284,18 +284,28 @@ export function resolveTimelineFinalStatus(params: {
   requestStatus?: RequestStatusLike
   statusCode?: number
 }): TimelineFinalStatus {
+  const hasTerminalSuccessStatusCode = typeof params.statusCode === 'number'
+    ? params.statusCode >= 200 && params.statusCode < 300
+    : undefined
+
   const requestStatus = mapRequestStatusToTimelineStatus(params.requestStatus)
   if (requestStatus === 'success' || requestStatus === 'failed' || requestStatus === 'cancelled') {
+    if (requestStatus === 'success' && hasTerminalSuccessStatusCode === false) {
+      return 'failed'
+    }
     return requestStatus
   }
 
   const traceStatus = normalizeTimelineFinalStatus(params.traceFinalStatus)
   if (traceStatus === 'success' || traceStatus === 'failed' || traceStatus === 'cancelled') {
+    if (traceStatus === 'success' && hasTerminalSuccessStatusCode === false) {
+      return 'failed'
+    }
     return traceStatus
   }
 
-  if (typeof params.statusCode === 'number') {
-    return params.statusCode >= 200 && params.statusCode < 400 ? 'success' : 'failed'
+  if (hasTerminalSuccessStatusCode !== undefined) {
+    return hasTerminalSuccessStatusCode ? 'success' : 'failed'
   }
 
   if (params.hasPendingCandidates) {

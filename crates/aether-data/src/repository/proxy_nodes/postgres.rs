@@ -4,10 +4,14 @@ use sha2::{Digest, Sha256};
 use sqlx::{postgres::PgRow, PgPool, Row};
 
 use super::types::{
-    normalize_proxy_metadata, reconcile_remote_config_after_heartbeat, ProxyNodeHeartbeatMutation,
-    ProxyNodeManualCreateMutation, ProxyNodeManualUpdateMutation, ProxyNodeReadRepository,
+    bucket_start_unix_secs, build_tunnel_error_event_detail, build_tunnel_metrics_sample,
+    normalize_proxy_metadata, reconcile_remote_config_after_heartbeat, ProxyNodeEventQuery,
+    ProxyNodeHeartbeatMutation, ProxyNodeManualCreateMutation, ProxyNodeManualUpdateMutation,
+    ProxyNodeMetricsCleanupSummary, ProxyNodeMetricsStep, ProxyNodeReadRepository,
     ProxyNodeRegistrationMutation, ProxyNodeRemoteConfigMutation, ProxyNodeTrafficMutation,
-    ProxyNodeTunnelStatusMutation, ProxyNodeWriteRepository, StoredProxyNode, StoredProxyNodeEvent,
+    ProxyNodeTunnelStatusMutation, ProxyNodeWriteRepository, StoredProxyFleetMetricsBucket,
+    StoredProxyNode, StoredProxyNodeEvent, StoredProxyNodeMetricsBucket, TunnelMetricsSample,
+    PROXY_NODE_EVENT_TYPE_TUNNEL_ERROR,
 };
 use crate::{
     error::{postgres_error, SqlxResultExt},
@@ -91,11 +95,29 @@ SELECT
   node_id,
   CAST(event_type AS TEXT) AS event_type,
   detail,
+  event_metadata,
   EXTRACT(EPOCH FROM created_at)::bigint AS created_at_unix_ms
 FROM proxy_node_events
 WHERE node_id = $1
 ORDER BY created_at DESC, id DESC
 LIMIT $2
+"#;
+
+const LIST_PROXY_NODE_EVENTS_FILTERED_SQL: &str = r#"
+SELECT
+  id,
+  node_id,
+  CAST(event_type AS TEXT) AS event_type,
+  detail,
+  event_metadata,
+  EXTRACT(EPOCH FROM created_at)::bigint AS created_at_unix_ms
+FROM proxy_node_events
+WHERE node_id = $1
+  AND ($2::double precision IS NULL OR created_at >= TO_TIMESTAMP($2::double precision))
+  AND ($3::double precision IS NULL OR created_at <= TO_TIMESTAMP($3::double precision))
+  AND ($4::text IS NULL OR LOWER(CAST(event_type AS TEXT)) = LOWER($4::text))
+ORDER BY created_at DESC, id DESC
+LIMIT $5
 "#;
 
 const APPLY_HEARTBEAT_SQL: &str = r#"
@@ -381,6 +403,188 @@ WHERE id = $4
   AND is_manual = TRUE
 "#;
 
+const INSERT_PROXY_NODE_EVENT_SQL: &str = r#"
+INSERT INTO proxy_node_events (node_id, event_type, detail, event_metadata, created_at)
+VALUES (
+  $1,
+  $2,
+  $3,
+  $4::json,
+  CASE
+    WHEN $5::double precision IS NULL THEN NOW()
+    ELSE TO_TIMESTAMP($5::double precision)
+  END
+)
+"#;
+
+const UPSERT_PROXY_NODE_METRICS_1M_SQL: &str = r#"
+INSERT INTO proxy_node_metrics_1m (
+  node_id,
+  bucket_start_unix_secs,
+  samples,
+  uptime_samples,
+  active_connections_sum,
+  active_connections_max,
+  heartbeat_rtt_ms_sum,
+  heartbeat_rtt_ms_max,
+  connect_errors_delta,
+  disconnects_delta,
+  error_events_delta,
+  ws_in_bytes_delta,
+  ws_out_bytes_delta,
+  ws_in_frames_delta,
+  ws_out_frames_delta
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+ON CONFLICT (node_id, bucket_start_unix_secs) DO UPDATE SET
+  samples = proxy_node_metrics_1m.samples + EXCLUDED.samples,
+  uptime_samples = proxy_node_metrics_1m.uptime_samples + EXCLUDED.uptime_samples,
+  active_connections_sum = proxy_node_metrics_1m.active_connections_sum + EXCLUDED.active_connections_sum,
+  active_connections_max = GREATEST(proxy_node_metrics_1m.active_connections_max, EXCLUDED.active_connections_max),
+  heartbeat_rtt_ms_sum = proxy_node_metrics_1m.heartbeat_rtt_ms_sum + EXCLUDED.heartbeat_rtt_ms_sum,
+  heartbeat_rtt_ms_max = GREATEST(proxy_node_metrics_1m.heartbeat_rtt_ms_max, EXCLUDED.heartbeat_rtt_ms_max),
+  connect_errors_delta = proxy_node_metrics_1m.connect_errors_delta + EXCLUDED.connect_errors_delta,
+  disconnects_delta = proxy_node_metrics_1m.disconnects_delta + EXCLUDED.disconnects_delta,
+  error_events_delta = proxy_node_metrics_1m.error_events_delta + EXCLUDED.error_events_delta,
+  ws_in_bytes_delta = proxy_node_metrics_1m.ws_in_bytes_delta + EXCLUDED.ws_in_bytes_delta,
+  ws_out_bytes_delta = proxy_node_metrics_1m.ws_out_bytes_delta + EXCLUDED.ws_out_bytes_delta,
+  ws_in_frames_delta = proxy_node_metrics_1m.ws_in_frames_delta + EXCLUDED.ws_in_frames_delta,
+  ws_out_frames_delta = proxy_node_metrics_1m.ws_out_frames_delta + EXCLUDED.ws_out_frames_delta
+"#;
+
+const UPSERT_PROXY_NODE_METRICS_1H_SQL: &str = r#"
+INSERT INTO proxy_node_metrics_1h (
+  node_id,
+  bucket_start_unix_secs,
+  samples,
+  uptime_samples,
+  active_connections_sum,
+  active_connections_max,
+  heartbeat_rtt_ms_sum,
+  heartbeat_rtt_ms_max,
+  connect_errors_delta,
+  disconnects_delta,
+  error_events_delta,
+  ws_in_bytes_delta,
+  ws_out_bytes_delta,
+  ws_in_frames_delta,
+  ws_out_frames_delta
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+ON CONFLICT (node_id, bucket_start_unix_secs) DO UPDATE SET
+  samples = proxy_node_metrics_1h.samples + EXCLUDED.samples,
+  uptime_samples = proxy_node_metrics_1h.uptime_samples + EXCLUDED.uptime_samples,
+  active_connections_sum = proxy_node_metrics_1h.active_connections_sum + EXCLUDED.active_connections_sum,
+  active_connections_max = GREATEST(proxy_node_metrics_1h.active_connections_max, EXCLUDED.active_connections_max),
+  heartbeat_rtt_ms_sum = proxy_node_metrics_1h.heartbeat_rtt_ms_sum + EXCLUDED.heartbeat_rtt_ms_sum,
+  heartbeat_rtt_ms_max = GREATEST(proxy_node_metrics_1h.heartbeat_rtt_ms_max, EXCLUDED.heartbeat_rtt_ms_max),
+  connect_errors_delta = proxy_node_metrics_1h.connect_errors_delta + EXCLUDED.connect_errors_delta,
+  disconnects_delta = proxy_node_metrics_1h.disconnects_delta + EXCLUDED.disconnects_delta,
+  error_events_delta = proxy_node_metrics_1h.error_events_delta + EXCLUDED.error_events_delta,
+  ws_in_bytes_delta = proxy_node_metrics_1h.ws_in_bytes_delta + EXCLUDED.ws_in_bytes_delta,
+  ws_out_bytes_delta = proxy_node_metrics_1h.ws_out_bytes_delta + EXCLUDED.ws_out_bytes_delta,
+  ws_in_frames_delta = proxy_node_metrics_1h.ws_in_frames_delta + EXCLUDED.ws_in_frames_delta,
+  ws_out_frames_delta = proxy_node_metrics_1h.ws_out_frames_delta + EXCLUDED.ws_out_frames_delta
+"#;
+
+const LIST_PROXY_NODE_METRICS_1M_SQL: &str = r#"
+SELECT
+  node_id,
+  bucket_start_unix_secs,
+  samples,
+  uptime_samples,
+  active_connections_sum,
+  active_connections_max,
+  heartbeat_rtt_ms_sum,
+  heartbeat_rtt_ms_max,
+  connect_errors_delta,
+  disconnects_delta,
+  error_events_delta,
+  ws_in_bytes_delta,
+  ws_out_bytes_delta,
+  ws_in_frames_delta,
+  ws_out_frames_delta
+FROM proxy_node_metrics_1m
+WHERE node_id = $1
+  AND bucket_start_unix_secs >= $2
+  AND bucket_start_unix_secs <= $3
+ORDER BY bucket_start_unix_secs ASC
+LIMIT $4
+"#;
+
+const LIST_PROXY_NODE_METRICS_1H_SQL: &str = r#"
+SELECT
+  node_id,
+  bucket_start_unix_secs,
+  samples,
+  uptime_samples,
+  active_connections_sum,
+  active_connections_max,
+  heartbeat_rtt_ms_sum,
+  heartbeat_rtt_ms_max,
+  connect_errors_delta,
+  disconnects_delta,
+  error_events_delta,
+  ws_in_bytes_delta,
+  ws_out_bytes_delta,
+  ws_in_frames_delta,
+  ws_out_frames_delta
+FROM proxy_node_metrics_1h
+WHERE node_id = $1
+  AND bucket_start_unix_secs >= $2
+  AND bucket_start_unix_secs <= $3
+ORDER BY bucket_start_unix_secs ASC
+LIMIT $4
+"#;
+
+const LIST_PROXY_FLEET_METRICS_1M_SQL: &str = r#"
+SELECT
+  bucket_start_unix_secs,
+  SUM(samples) AS samples,
+  SUM(uptime_samples) AS uptime_samples,
+  SUM(active_connections_sum) AS active_connections_sum,
+  MAX(active_connections_max) AS active_connections_max,
+  SUM(heartbeat_rtt_ms_sum) AS heartbeat_rtt_ms_sum,
+  MAX(heartbeat_rtt_ms_max) AS heartbeat_rtt_ms_max,
+  SUM(connect_errors_delta) AS connect_errors_delta,
+  SUM(disconnects_delta) AS disconnects_delta,
+  SUM(error_events_delta) AS error_events_delta,
+  SUM(ws_in_bytes_delta) AS ws_in_bytes_delta,
+  SUM(ws_out_bytes_delta) AS ws_out_bytes_delta,
+  SUM(ws_in_frames_delta) AS ws_in_frames_delta,
+  SUM(ws_out_frames_delta) AS ws_out_frames_delta
+FROM proxy_node_metrics_1m
+WHERE bucket_start_unix_secs >= $1
+  AND bucket_start_unix_secs <= $2
+GROUP BY bucket_start_unix_secs
+ORDER BY bucket_start_unix_secs ASC
+LIMIT $3
+"#;
+
+const LIST_PROXY_FLEET_METRICS_1H_SQL: &str = r#"
+SELECT
+  bucket_start_unix_secs,
+  SUM(samples) AS samples,
+  SUM(uptime_samples) AS uptime_samples,
+  SUM(active_connections_sum) AS active_connections_sum,
+  MAX(active_connections_max) AS active_connections_max,
+  SUM(heartbeat_rtt_ms_sum) AS heartbeat_rtt_ms_sum,
+  MAX(heartbeat_rtt_ms_max) AS heartbeat_rtt_ms_max,
+  SUM(connect_errors_delta) AS connect_errors_delta,
+  SUM(disconnects_delta) AS disconnects_delta,
+  SUM(error_events_delta) AS error_events_delta,
+  SUM(ws_in_bytes_delta) AS ws_in_bytes_delta,
+  SUM(ws_out_bytes_delta) AS ws_out_bytes_delta,
+  SUM(ws_in_frames_delta) AS ws_in_frames_delta,
+  SUM(ws_out_frames_delta) AS ws_out_frames_delta
+FROM proxy_node_metrics_1h
+WHERE bucket_start_unix_secs >= $1
+  AND bucket_start_unix_secs <= $2
+GROUP BY bucket_start_unix_secs
+ORDER BY bucket_start_unix_secs ASC
+LIMIT $3
+"#;
+
 #[derive(Debug, Clone)]
 pub struct SqlxProxyNodeRepository {
     pool: PgPool,
@@ -446,10 +650,109 @@ impl SqlxProxyNodeRepository {
             node_id: row.try_get("node_id").map_postgres_err()?,
             event_type: row.try_get("event_type").map_postgres_err()?,
             detail: row.try_get("detail").map_postgres_err()?,
+            event_metadata: row.try_get("event_metadata").map_postgres_err()?,
             created_at_unix_ms: Self::optional_unix_secs(
                 row.try_get("created_at_unix_ms").map_postgres_err()?,
             ),
         })
+    }
+
+    fn row_to_node_metric(row: &PgRow) -> Result<StoredProxyNodeMetricsBucket, DataLayerError> {
+        Ok(StoredProxyNodeMetricsBucket {
+            node_id: row.try_get("node_id").map_postgres_err()?,
+            bucket_start_unix_secs: Self::optional_unix_secs(
+                row.try_get("bucket_start_unix_secs").map_postgres_err()?,
+            )
+            .unwrap_or_default(),
+            samples: row.try_get("samples").map_postgres_err()?,
+            uptime_samples: row.try_get("uptime_samples").map_postgres_err()?,
+            active_connections_sum: row.try_get("active_connections_sum").map_postgres_err()?,
+            active_connections_max: row.try_get("active_connections_max").map_postgres_err()?,
+            heartbeat_rtt_ms_sum: row.try_get("heartbeat_rtt_ms_sum").map_postgres_err()?,
+            heartbeat_rtt_ms_max: row.try_get("heartbeat_rtt_ms_max").map_postgres_err()?,
+            connect_errors_delta: row.try_get("connect_errors_delta").map_postgres_err()?,
+            disconnects_delta: row.try_get("disconnects_delta").map_postgres_err()?,
+            error_events_delta: row.try_get("error_events_delta").map_postgres_err()?,
+            ws_in_bytes_delta: row.try_get("ws_in_bytes_delta").map_postgres_err()?,
+            ws_out_bytes_delta: row.try_get("ws_out_bytes_delta").map_postgres_err()?,
+            ws_in_frames_delta: row.try_get("ws_in_frames_delta").map_postgres_err()?,
+            ws_out_frames_delta: row.try_get("ws_out_frames_delta").map_postgres_err()?,
+        })
+    }
+
+    fn row_to_fleet_metric(row: &PgRow) -> Result<StoredProxyFleetMetricsBucket, DataLayerError> {
+        Ok(StoredProxyFleetMetricsBucket {
+            bucket_start_unix_secs: Self::optional_unix_secs(
+                row.try_get("bucket_start_unix_secs").map_postgres_err()?,
+            )
+            .unwrap_or_default(),
+            samples: row.try_get("samples").map_postgres_err()?,
+            uptime_samples: row.try_get("uptime_samples").map_postgres_err()?,
+            active_connections_sum: row.try_get("active_connections_sum").map_postgres_err()?,
+            active_connections_max: row.try_get("active_connections_max").map_postgres_err()?,
+            heartbeat_rtt_ms_sum: row.try_get("heartbeat_rtt_ms_sum").map_postgres_err()?,
+            heartbeat_rtt_ms_max: row.try_get("heartbeat_rtt_ms_max").map_postgres_err()?,
+            connect_errors_delta: row.try_get("connect_errors_delta").map_postgres_err()?,
+            disconnects_delta: row.try_get("disconnects_delta").map_postgres_err()?,
+            error_events_delta: row.try_get("error_events_delta").map_postgres_err()?,
+            ws_in_bytes_delta: row.try_get("ws_in_bytes_delta").map_postgres_err()?,
+            ws_out_bytes_delta: row.try_get("ws_out_bytes_delta").map_postgres_err()?,
+            ws_in_frames_delta: row.try_get("ws_in_frames_delta").map_postgres_err()?,
+            ws_out_frames_delta: row.try_get("ws_out_frames_delta").map_postgres_err()?,
+        })
+    }
+
+    async fn insert_event(
+        &self,
+        node_id: &str,
+        event_type: &str,
+        detail: Option<&str>,
+        event_metadata: Option<&serde_json::Value>,
+        created_at_unix_secs: Option<u64>,
+    ) -> Result<(), DataLayerError> {
+        sqlx::query(INSERT_PROXY_NODE_EVENT_SQL)
+            .bind(node_id)
+            .bind(event_type)
+            .bind(detail)
+            .bind(event_metadata)
+            .bind(created_at_unix_secs.map(|value| value as f64))
+            .execute(&self.pool)
+            .await
+            .map_postgres_err()?;
+        Ok(())
+    }
+
+    async fn upsert_metrics_bucket(
+        &self,
+        step: ProxyNodeMetricsStep,
+        node_id: &str,
+        bucket_start: u64,
+        sample: &TunnelMetricsSample,
+    ) -> Result<(), DataLayerError> {
+        let sql = match step {
+            ProxyNodeMetricsStep::OneMinute => UPSERT_PROXY_NODE_METRICS_1M_SQL,
+            ProxyNodeMetricsStep::OneHour => UPSERT_PROXY_NODE_METRICS_1H_SQL,
+        };
+        sqlx::query(sql)
+            .bind(node_id)
+            .bind(i64::try_from(bucket_start).unwrap_or(i64::MAX))
+            .bind(sample.samples)
+            .bind(sample.uptime_samples)
+            .bind(sample.active_connections_sum)
+            .bind(sample.active_connections_max)
+            .bind(sample.heartbeat_rtt_ms_sum)
+            .bind(sample.heartbeat_rtt_ms_max)
+            .bind(sample.connect_errors_delta)
+            .bind(sample.disconnects_delta)
+            .bind(sample.error_events_delta)
+            .bind(sample.ws_in_bytes_delta)
+            .bind(sample.ws_out_bytes_delta)
+            .bind(sample.ws_in_frames_delta)
+            .bind(sample.ws_out_frames_delta)
+            .execute(&self.pool)
+            .await
+            .map_postgres_err()?;
+        Ok(())
     }
 
     fn registration_lock_key(ip: &str, port: i32) -> i64 {
@@ -599,6 +902,73 @@ impl ProxyNodeReadRepository for SqlxProxyNodeRepository {
         let mut items = Vec::new();
         while let Some(row) = rows.try_next().await.map_postgres_err()? {
             items.push(Self::row_to_event(&row)?);
+        }
+        Ok(items)
+    }
+
+    async fn list_proxy_node_events_filtered(
+        &self,
+        node_id: &str,
+        query: &ProxyNodeEventQuery,
+    ) -> Result<Vec<StoredProxyNodeEvent>, DataLayerError> {
+        let mut rows = sqlx::query(LIST_PROXY_NODE_EVENTS_FILTERED_SQL)
+            .bind(node_id)
+            .bind(query.from_unix_secs.map(|value| value as f64))
+            .bind(query.to_unix_secs.map(|value| value as f64))
+            .bind(query.event_type.as_deref())
+            .bind(i64::try_from(query.limit).unwrap_or(i64::MAX))
+            .fetch(&self.pool);
+        let mut items = Vec::new();
+        while let Some(row) = rows.try_next().await.map_postgres_err()? {
+            items.push(Self::row_to_event(&row)?);
+        }
+        Ok(items)
+    }
+
+    async fn list_proxy_node_metrics(
+        &self,
+        node_id: &str,
+        step: ProxyNodeMetricsStep,
+        from_unix_secs: u64,
+        to_unix_secs: u64,
+        limit: usize,
+    ) -> Result<Vec<StoredProxyNodeMetricsBucket>, DataLayerError> {
+        let sql = match step {
+            ProxyNodeMetricsStep::OneMinute => LIST_PROXY_NODE_METRICS_1M_SQL,
+            ProxyNodeMetricsStep::OneHour => LIST_PROXY_NODE_METRICS_1H_SQL,
+        };
+        let mut rows = sqlx::query(sql)
+            .bind(node_id)
+            .bind(i64::try_from(from_unix_secs).unwrap_or(i64::MAX))
+            .bind(i64::try_from(to_unix_secs).unwrap_or(i64::MAX))
+            .bind(i64::try_from(limit).unwrap_or(i64::MAX))
+            .fetch(&self.pool);
+        let mut items = Vec::new();
+        while let Some(row) = rows.try_next().await.map_postgres_err()? {
+            items.push(Self::row_to_node_metric(&row)?);
+        }
+        Ok(items)
+    }
+
+    async fn list_proxy_fleet_metrics(
+        &self,
+        step: ProxyNodeMetricsStep,
+        from_unix_secs: u64,
+        to_unix_secs: u64,
+        limit: usize,
+    ) -> Result<Vec<StoredProxyFleetMetricsBucket>, DataLayerError> {
+        let sql = match step {
+            ProxyNodeMetricsStep::OneMinute => LIST_PROXY_FLEET_METRICS_1M_SQL,
+            ProxyNodeMetricsStep::OneHour => LIST_PROXY_FLEET_METRICS_1H_SQL,
+        };
+        let mut rows = sqlx::query(sql)
+            .bind(i64::try_from(from_unix_secs).unwrap_or(i64::MAX))
+            .bind(i64::try_from(to_unix_secs).unwrap_or(i64::MAX))
+            .bind(i64::try_from(limit).unwrap_or(i64::MAX))
+            .fetch(&self.pool);
+        let mut items = Vec::new();
+        while let Some(row) = rows.try_next().await.map_postgres_err()? {
+            items.push(Self::row_to_fleet_metric(&row)?);
         }
         Ok(items)
     }
@@ -822,6 +1192,54 @@ impl ProxyNodeWriteRepository for SqlxProxyNodeRepository {
         let Some(updated) = updated else {
             return Ok(None);
         };
+        let now_unix_secs = updated
+            .last_heartbeat_at_unix_secs
+            .unwrap_or_else(|| chrono::Utc::now().timestamp().max(0) as u64);
+        let tunnel_metrics_sample = build_tunnel_metrics_sample(
+            existing.proxy_metadata.as_ref(),
+            updated.proxy_metadata.as_ref(),
+            updated.active_connections,
+            updated.tunnel_connected,
+        );
+
+        if let Some(sample) = tunnel_metrics_sample.as_ref() {
+            self.upsert_metrics_bucket(
+                ProxyNodeMetricsStep::OneMinute,
+                &updated.id,
+                bucket_start_unix_secs(now_unix_secs, ProxyNodeMetricsStep::OneMinute),
+                sample,
+            )
+            .await?;
+            self.upsert_metrics_bucket(
+                ProxyNodeMetricsStep::OneHour,
+                &updated.id,
+                bucket_start_unix_secs(now_unix_secs, ProxyNodeMetricsStep::OneHour),
+                sample,
+            )
+            .await?;
+
+            for error in &sample.recent_error_events {
+                let detail = build_tunnel_error_event_detail(error);
+                let event_metadata = serde_json::json!({
+                    "source": "heartbeat",
+                    "category": error.category,
+                    "message": error.message,
+                    "timestamp_unix_secs": error.timestamp_unix_secs,
+                });
+                self.insert_event(
+                    &updated.id,
+                    PROXY_NODE_EVENT_TYPE_TUNNEL_ERROR,
+                    Some(detail.as_str()),
+                    Some(&event_metadata),
+                    Some(if error.timestamp_unix_secs == 0 {
+                        now_unix_secs
+                    } else {
+                        error.timestamp_unix_secs
+                    }),
+                )
+                .await?;
+            }
+        }
 
         if reconcile_remote_config_after_heartbeat(
             updated.remote_config.as_ref(),
@@ -890,23 +1308,15 @@ impl ProxyNodeWriteRepository for SqlxProxyNodeRepository {
             .zip(observed_at_unix_secs)
             .is_some_and(|(last_transition, observed_at)| observed_at < last_transition)
         {
-            sqlx::query(
-                r#"
-INSERT INTO proxy_node_events (node_id, event_type, detail, created_at)
-VALUES (
-  $1,
-  $2,
-  $3,
-  NOW()
-)
-"#,
-            )
-            .bind(&mutation.node_id)
-            .bind(event_type)
-            .bind(format!("[stale_ignored] {event_detail}"))
-            .execute(&mut *tx)
-            .await
-            .map_postgres_err()?;
+            sqlx::query(INSERT_PROXY_NODE_EVENT_SQL)
+                .bind(&mutation.node_id)
+                .bind(event_type)
+                .bind(format!("[stale_ignored] {event_detail}"))
+                .bind(None::<serde_json::Value>)
+                .bind(None::<f64>)
+                .execute(&mut *tx)
+                .await
+                .map_postgres_err()?;
             tx.commit().await.map_err(postgres_error)?;
             return self.find_proxy_node(&mutation.node_id).await;
         }
@@ -942,27 +1352,15 @@ WHERE id = $1
         .await
         .map_postgres_err()?;
 
-        sqlx::query(
-            r#"
-INSERT INTO proxy_node_events (node_id, event_type, detail, created_at)
-VALUES (
-  $1,
-  $2,
-  $3,
-  CASE
-    WHEN $4::double precision IS NULL THEN NOW()
-    ELSE TO_TIMESTAMP($4::double precision)
-  END
-)
-"#,
-        )
-        .bind(&mutation.node_id)
-        .bind(event_type)
-        .bind(event_detail)
-        .bind(observed_at_unix_secs.map(|value| value as f64))
-        .execute(&mut *tx)
-        .await
-        .map_postgres_err()?;
+        sqlx::query(INSERT_PROXY_NODE_EVENT_SQL)
+            .bind(&mutation.node_id)
+            .bind(event_type)
+            .bind(event_detail)
+            .bind(None::<serde_json::Value>)
+            .bind(observed_at_unix_secs.map(|value| value as f64))
+            .execute(&mut *tx)
+            .await
+            .map_postgres_err()?;
 
         tx.commit().await.map_err(postgres_error)?;
         self.find_proxy_node(&mutation.node_id).await
@@ -1044,6 +1442,63 @@ VALUES (
             .await
             .map_postgres_err()?;
         Ok(())
+    }
+
+    async fn cleanup_proxy_node_metrics(
+        &self,
+        retain_1m_from_unix_secs: u64,
+        retain_1h_from_unix_secs: u64,
+        delete_limit: usize,
+    ) -> Result<ProxyNodeMetricsCleanupSummary, DataLayerError> {
+        let delete_limit_i64 = i64::try_from(delete_limit.max(1)).unwrap_or(i64::MAX);
+        let deleted_1m = sqlx::query(
+            r#"
+WITH expired AS (
+  SELECT node_id, bucket_start_unix_secs
+  FROM proxy_node_metrics_1m
+  WHERE bucket_start_unix_secs < $1
+  ORDER BY bucket_start_unix_secs ASC
+  LIMIT $2
+)
+DELETE FROM proxy_node_metrics_1m metrics
+USING expired
+WHERE metrics.node_id = expired.node_id
+  AND metrics.bucket_start_unix_secs = expired.bucket_start_unix_secs
+"#,
+        )
+        .bind(i64::try_from(retain_1m_from_unix_secs).unwrap_or(i64::MAX))
+        .bind(delete_limit_i64)
+        .execute(&self.pool)
+        .await
+        .map_postgres_err()?
+        .rows_affected() as usize;
+
+        let deleted_1h = sqlx::query(
+            r#"
+WITH expired AS (
+  SELECT node_id, bucket_start_unix_secs
+  FROM proxy_node_metrics_1h
+  WHERE bucket_start_unix_secs < $1
+  ORDER BY bucket_start_unix_secs ASC
+  LIMIT $2
+)
+DELETE FROM proxy_node_metrics_1h metrics
+USING expired
+WHERE metrics.node_id = expired.node_id
+  AND metrics.bucket_start_unix_secs = expired.bucket_start_unix_secs
+"#,
+        )
+        .bind(i64::try_from(retain_1h_from_unix_secs).unwrap_or(i64::MAX))
+        .bind(delete_limit_i64)
+        .execute(&self.pool)
+        .await
+        .map_postgres_err()?
+        .rows_affected() as usize;
+
+        Ok(ProxyNodeMetricsCleanupSummary {
+            deleted_1m_rows: deleted_1m,
+            deleted_1h_rows: deleted_1h,
+        })
     }
 }
 

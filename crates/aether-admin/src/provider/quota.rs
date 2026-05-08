@@ -5,6 +5,8 @@ use std::collections::BTreeMap;
 
 use super::status as provider_status;
 
+pub const CODEX_SPARK_MODEL_ID: &str = "gpt-5.3-codex-spark";
+
 const OAUTH_ACCOUNT_BLOCK_PREFIX: &str = "[ACCOUNT_BLOCK] ";
 const OAUTH_REFRESH_FAILED_PREFIX: &str = "[REFRESH_FAILED] ";
 const OAUTH_EXPIRED_PREFIX: &str = "[OAUTH_EXPIRED] ";
@@ -216,6 +218,150 @@ fn codex_write_window(
     }
 }
 
+fn codex_model_id_matches_spark(value: &str) -> bool {
+    value.trim().eq_ignore_ascii_case(CODEX_SPARK_MODEL_ID)
+}
+
+fn codex_model_source<'a>(
+    root: &'a serde_json::Map<String, serde_json::Value>,
+) -> Option<&'a serde_json::Value> {
+    for bucket_name in ["quota_by_model", "model_quotas", "model_usage", "models"] {
+        let Some(bucket) = root.get(bucket_name) else {
+            continue;
+        };
+        if let Some(item) = bucket
+            .as_object()
+            .and_then(|models| models.get(CODEX_SPARK_MODEL_ID))
+        {
+            return Some(item);
+        }
+        if let Some(item) = bucket.as_array().and_then(|items| {
+            items.iter().find(|item| {
+                item.as_object().is_some_and(|object| {
+                    ["model", "model_id", "id", "name"]
+                        .iter()
+                        .filter_map(|field| object.get(*field).and_then(serde_json::Value::as_str))
+                        .any(codex_model_id_matches_spark)
+                })
+            })
+        }) {
+            return Some(item);
+        }
+    }
+    None
+}
+
+fn codex_model_reset_seconds(window: &serde_json::Map<String, serde_json::Value>) -> Option<u64> {
+    for field in [
+        "reset_seconds",
+        "reset_after_seconds",
+        "reset_after",
+        "cooldown_seconds",
+        "retry_after_seconds",
+    ] {
+        if let Some(value) = window.get(field).and_then(coerce_json_u64) {
+            return Some(value);
+        }
+    }
+    None
+}
+
+fn codex_model_reset_at(window: &serde_json::Map<String, serde_json::Value>) -> Option<u64> {
+    for field in ["reset_at", "next_reset_at", "resetTime", "reset_time"] {
+        if let Some(value) = window.get(field).and_then(coerce_json_u64) {
+            return Some(value);
+        }
+    }
+    None
+}
+
+fn codex_model_remaining_ratio(window: &serde_json::Map<String, serde_json::Value>) -> Option<f64> {
+    for field in ["remaining_ratio", "remaining_fraction"] {
+        if let Some(value) = window.get(field).and_then(coerce_json_f64) {
+            return Some(value.clamp(0.0, 1.0));
+        }
+    }
+    window
+        .get("remaining_percent")
+        .and_then(coerce_json_f64)
+        .map(|value| (value / 100.0).clamp(0.0, 1.0))
+}
+
+fn codex_model_used_ratio(window: &serde_json::Map<String, serde_json::Value>) -> Option<f64> {
+    if let Some(value) = window.get("used_ratio").and_then(coerce_json_f64) {
+        return Some(value.clamp(0.0, 1.0));
+    }
+    if let Some(value) = window.get("used_percent").and_then(coerce_json_f64) {
+        return Some((value / 100.0).clamp(0.0, 1.0));
+    }
+    codex_model_remaining_ratio(window).map(|value| (1.0 - value).clamp(0.0, 1.0))
+}
+
+fn codex_model_window_payload(
+    source: &serde_json::Map<String, serde_json::Value>,
+    updated_at_unix_secs: u64,
+) -> Option<serde_json::Value> {
+    let used_ratio = codex_model_used_ratio(source);
+    let remaining_ratio = codex_model_remaining_ratio(source)
+        .or_else(|| used_ratio.map(|value| (1.0 - value).clamp(0.0, 1.0)));
+    let reset_seconds = codex_model_reset_seconds(source);
+    let reset_at = codex_model_reset_at(source)
+        .or_else(|| reset_seconds.map(|seconds| updated_at_unix_secs.saturating_add(seconds)));
+    let is_exhausted = source
+        .get("is_exhausted")
+        .or_else(|| source.get("exhausted"))
+        .or_else(|| source.get("cooldown"))
+        .or_else(|| source.get("cooling_down"))
+        .and_then(coerce_json_bool)
+        .or_else(|| used_ratio.map(|value| value >= 1.0 - 1e-6));
+
+    if used_ratio.is_none()
+        && remaining_ratio.is_none()
+        && reset_seconds.is_none()
+        && reset_at.is_none()
+        && is_exhausted.is_none()
+    {
+        return None;
+    }
+
+    Some(json!({
+        "code": "spark",
+        "scope": "model",
+        "model": CODEX_SPARK_MODEL_ID,
+        "unit": "percent",
+        "used_ratio": used_ratio,
+        "remaining_ratio": remaining_ratio,
+        "reset_seconds": reset_seconds,
+        "reset_at": reset_at,
+        "is_exhausted": is_exhausted,
+        "source": "codex_usage",
+    }))
+}
+
+fn codex_extract_spark_model_quota(
+    root: &serde_json::Map<String, serde_json::Value>,
+    updated_at_unix_secs: u64,
+) -> Option<serde_json::Value> {
+    let source = codex_model_source(root)?.as_object()?;
+    let mut windows = Vec::new();
+    if let Some(source_windows) = source.get("windows").and_then(serde_json::Value::as_array) {
+        windows.extend(source_windows.iter().filter_map(|window| {
+            codex_model_window_payload(window.as_object()?, updated_at_unix_secs)
+        }));
+    }
+    if let Some(window) = codex_model_window_payload(source, updated_at_unix_secs) {
+        windows.push(window);
+    }
+    if windows.is_empty() {
+        return None;
+    }
+
+    Some(json!({
+        "updated_at": updated_at_unix_secs,
+        "windows": windows,
+    }))
+}
+
 pub fn parse_codex_wham_usage_response(
     value: &serde_json::Value,
     updated_at_unix_secs: u64,
@@ -266,6 +412,17 @@ pub fn parse_codex_wham_usage_response(
         if let Some(value) = credits.get("unlimited").and_then(coerce_json_bool) {
             result.insert("credits_unlimited".to_string(), json!(value));
         }
+    }
+
+    if let Some(spark_quota) = codex_extract_spark_model_quota(root, updated_at_unix_secs) {
+        result.insert(
+            "schema_version".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(2)),
+        );
+        result.insert(
+            "quota_by_model".to_string(),
+            json!({ CODEX_SPARK_MODEL_ID: spark_quota }),
+        );
     }
 
     if result.is_empty() {
@@ -874,8 +1031,9 @@ pub fn parse_chatgpt_web_conversation_init_response(
 mod tests {
     use super::{
         codex_build_invalid_state, codex_runtime_invalid_reason,
-        parse_chatgpt_web_conversation_init_response, OAUTH_ACCOUNT_BLOCK_PREFIX,
-        OAUTH_EXPIRED_PREFIX, OAUTH_REFRESH_FAILED_PREFIX, OAUTH_REQUEST_FAILED_PREFIX,
+        parse_chatgpt_web_conversation_init_response, parse_codex_wham_usage_response,
+        CODEX_SPARK_MODEL_ID, OAUTH_ACCOUNT_BLOCK_PREFIX, OAUTH_EXPIRED_PREFIX,
+        OAUTH_REFRESH_FAILED_PREFIX, OAUTH_REQUEST_FAILED_PREFIX,
     };
     use aether_data_contracts::repository::provider_catalog::StoredProviderCatalogKey;
     use serde_json::json;
@@ -967,6 +1125,46 @@ mod tests {
                     "{OAUTH_ACCOUNT_BLOCK_PREFIX}account has been deactivated"
                 ))
             )
+        );
+    }
+
+    #[test]
+    fn parses_codex_spark_model_quota_without_account_exhaustion() {
+        let parsed = parse_codex_wham_usage_response(
+            &json!({
+                "plan_type": "pro",
+                "rate_limit": {
+                    "primary_window": {"used_percent": 10.0},
+                    "secondary_window": {"used_percent": 20.0}
+                },
+                "quota_by_model": {
+                    CODEX_SPARK_MODEL_ID: {
+                        "windows": [
+                            {
+                                "remaining_ratio": 0.0,
+                                "reset_after_seconds": 300,
+                                "is_exhausted": true
+                            }
+                        ]
+                    }
+                }
+            }),
+            1_770_000_000,
+        )
+        .expect("codex metadata should parse");
+
+        assert_eq!(parsed.get("primary_used_percent"), Some(&json!(20.0)));
+        assert_eq!(parsed.get("secondary_used_percent"), Some(&json!(10.0)));
+        assert_eq!(parsed.get("schema_version"), Some(&json!(2)));
+        assert_eq!(
+            parsed
+                .get("quota_by_model")
+                .and_then(|value| value.get(CODEX_SPARK_MODEL_ID))
+                .and_then(|value| value.get("windows"))
+                .and_then(serde_json::Value::as_array)
+                .and_then(|windows| windows.first())
+                .and_then(|window| window.get("is_exhausted")),
+            Some(&json!(true))
         );
     }
 

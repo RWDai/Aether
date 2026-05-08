@@ -478,7 +478,11 @@ fn model_quota_window_snapshot(
     let reset_at = provider_quota_timestamp_unix_secs(
         item.get("reset_at").or_else(|| item.get("next_reset_at")),
     );
-    let reset_seconds = quota_window_reset_seconds(observed_at_unix_secs, reset_at);
+    let reset_seconds = item
+        .get("reset_seconds")
+        .or_else(|| item.get("reset_after_seconds"))
+        .and_then(admin_provider_quota_pure::coerce_json_u64)
+        .or_else(|| quota_window_reset_seconds(observed_at_unix_secs, reset_at));
     let is_exhausted = item
         .get("is_exhausted")
         .and_then(admin_provider_quota_pure::coerce_json_bool)
@@ -500,7 +504,14 @@ fn model_quota_window_snapshot(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or(model_name);
-    window.insert("code".to_string(), json!(format!("model:{model_name}")));
+    let code = item
+        .get("code")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| format!("model:{model_name}"));
+    window.insert("code".to_string(), json!(code));
     window.insert("label".to_string(), json!(label));
     window.insert("scope".to_string(), json!("model"));
     window.insert("unit".to_string(), json!("percent"));
@@ -732,13 +743,43 @@ fn build_codex_quota_status_snapshot(
         .get("credits_unlimited")
         .and_then(admin_provider_quota_pure::coerce_json_bool);
 
-    let windows = [
+    let mut windows = [
         codex_quota_window_snapshot(metadata, "primary", "weekly", "周", observed_at_unix_secs),
         codex_quota_window_snapshot(metadata, "secondary", "5h", "5H", observed_at_unix_secs),
     ]
     .into_iter()
     .flatten()
     .collect::<Vec<_>>();
+    if let Some(model_windows) = provider_quota_model_bucket(metadata).map(|models| {
+        models
+            .iter()
+            .filter_map(|(model_name, item)| {
+                let item = item.as_object()?;
+                if let Some(nested_windows) = item.get("windows").and_then(Value::as_array) {
+                    let snapshots = nested_windows
+                        .iter()
+                        .filter_map(|window| {
+                            let mut merged = item.clone();
+                            if let Some(window) = window.as_object() {
+                                for (key, value) in window {
+                                    merged.insert(key.clone(), value.clone());
+                                }
+                            }
+                            model_quota_window_snapshot(model_name, &merged, observed_at_unix_secs)
+                        })
+                        .collect::<Vec<_>>();
+                    if !snapshots.is_empty() {
+                        return Some(snapshots);
+                    }
+                }
+                model_quota_window_snapshot(model_name, item, observed_at_unix_secs)
+                    .map(|window| vec![window])
+            })
+            .flatten()
+            .collect::<Vec<_>>()
+    }) {
+        windows.extend(model_windows);
+    }
 
     if windows.is_empty()
         && plan_type.is_none()
@@ -750,21 +791,32 @@ fn build_codex_quota_status_snapshot(
         return None;
     }
 
-    let usage_ratio = windows
+    let account_windows = windows
+        .iter()
+        .filter(|window| {
+            window
+                .get("scope")
+                .and_then(Value::as_str)
+                .is_none_or(|scope| scope.eq_ignore_ascii_case("account"))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let usage_ratio = account_windows
         .iter()
         .filter_map(Value::as_object)
         .filter_map(|window| window.get("used_ratio"))
         .filter_map(Value::as_f64)
         .max_by(f64::total_cmp);
-    let reset_seconds = windows
+    let reset_seconds = account_windows
         .iter()
         .filter_map(Value::as_object)
         .filter_map(|window| window.get("reset_seconds"))
         .filter_map(admin_provider_quota_pure::coerce_json_u64)
         .min();
-    let reset_at = quota_windows_min_reset_at(&windows);
-    let exhausted_by_credits =
-        windows.is_empty() && credits_unlimited != Some(true) && credits_has_credits == Some(false);
+    let reset_at = quota_windows_min_reset_at(&account_windows);
+    let exhausted_by_credits = account_windows.is_empty()
+        && credits_unlimited != Some(true)
+        && credits_has_credits == Some(false);
     let exhausted_by_window = usage_ratio.is_some_and(|value| value >= 1.0 - 1e-6);
     let exhausted = exhausted_by_credits || exhausted_by_window;
 

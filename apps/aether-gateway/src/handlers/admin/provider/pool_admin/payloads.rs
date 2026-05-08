@@ -378,6 +378,11 @@ fn admin_pool_build_codex_account_quota_from_snapshot(
     ) {
         parts.push(part);
     }
+    if let Some(part) =
+        admin_pool_codex_spark_quota_part_from_snapshot(quota_snapshot, now_unix_secs)
+    {
+        parts.push(part);
+    }
 
     if !parts.is_empty() {
         return Some(parts.join(" | "));
@@ -401,6 +406,56 @@ fn admin_pool_build_codex_account_quota_from_snapshot(
     }
 
     None
+}
+
+fn admin_pool_codex_spark_quota_part_from_snapshot(
+    quota_snapshot: &serde_json::Map<String, serde_json::Value>,
+    now_unix_secs: u64,
+) -> Option<String> {
+    let window = admin_pool_quota_windows(quota_snapshot)
+        .into_iter()
+        .find(|window| {
+            let model_matches = window
+                .get("model")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|model| model.eq_ignore_ascii_case("gpt-5.3-codex-spark"));
+            let scope_matches = window
+                .get("scope")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|scope| scope.eq_ignore_ascii_case("model"));
+            model_matches && scope_matches
+        })?;
+    let reset_seconds =
+        admin_pool_quota_window_reset_seconds(quota_snapshot, window, now_unix_secs);
+    let exhausted = window
+        .get("is_exhausted")
+        .and_then(admin_provider_quota_pure::coerce_json_bool)
+        .or_else(|| {
+            admin_pool_json_to_f64(window.get("used_ratio")).map(|value| value >= 1.0 - 1e-6)
+        })
+        .unwrap_or(false);
+    if exhausted && reset_seconds.is_none_or(|value| value > 0.0) {
+        let mut part = "Spark 冷却中".to_string();
+        if let Some(reset_text) = reset_seconds.and_then(admin_pool_format_reset_after) {
+            part.push_str(&format!(" ({reset_text})"));
+        }
+        return Some(part);
+    }
+
+    let remaining_percent = admin_pool_json_to_f64(window.get("remaining_ratio"))
+        .map(|value| (value * 100.0).clamp(0.0, 100.0))
+        .or_else(|| {
+            admin_pool_json_to_f64(window.get("used_ratio"))
+                .map(|value| ((1.0 - value) * 100.0).clamp(0.0, 100.0))
+        })?;
+    let mut part = format!(
+        "Spark 剩余 {}",
+        admin_pool_format_percent(remaining_percent)
+    );
+    if let Some(reset_text) = reset_seconds.and_then(admin_pool_format_reset_after) {
+        part.push_str(&format!(" ({reset_text})"));
+    }
+    Some(part)
 }
 
 fn admin_pool_current_unix_secs() -> u64 {

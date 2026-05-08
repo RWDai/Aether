@@ -303,6 +303,11 @@ fn read_key_account_quota_exhaustion_map(
     provider_key_rpm_states: &BTreeMap<String, StoredProviderCatalogKey>,
     provider_skip_exhausted_accounts: &BTreeMap<String, bool>,
 ) -> BTreeMap<String, bool> {
+    let now_unix_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
     candidates
         .iter()
         .map(|candidate| {
@@ -316,11 +321,28 @@ fn read_key_account_quota_exhaustion_map(
                         admin_provider_pool_pure::admin_pool_key_account_quota_exhausted(
                             key,
                             candidate.provider_type.as_str(),
+                        ) || admin_provider_pool_pure::admin_pool_key_model_quota_exhausted(
+                            key,
+                            candidate.provider_type.as_str(),
+                            candidate_selected_model(candidate),
+                            now_unix_secs,
                         )
                     });
             (candidate.key_id.clone(), exhausted)
         })
         .collect()
+}
+
+fn candidate_selected_model(candidate: &SchedulerMinimalCandidateSelectionCandidate) -> &str {
+    let selected = candidate.selected_provider_model_name.trim();
+    if !selected.is_empty() {
+        return selected;
+    }
+    let global = candidate.global_model_name.trim();
+    if !global.is_empty() {
+        return global;
+    }
+    candidate.model_id.as_str()
 }
 
 fn read_key_oauth_invalid_map(

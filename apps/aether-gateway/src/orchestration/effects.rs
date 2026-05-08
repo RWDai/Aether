@@ -10,7 +10,7 @@ use aether_usage_runtime::{
     build_stream_terminal_usage_outcome, build_sync_terminal_usage_outcome,
     GatewayStreamReportRequest, GatewaySyncReportRequest, TerminalUsageOutcome,
 };
-use serde_json::Value;
+use serde_json::{json, Value};
 use tracing::warn;
 
 use super::{
@@ -29,6 +29,7 @@ use crate::handlers::shared::provider_pool::{
     record_admin_provider_pool_stream_timeout, record_admin_provider_pool_success,
     AdminProviderPoolConfig,
 };
+use crate::handlers::shared::sync_provider_key_quota_status_snapshot;
 use crate::scheduler::affinity::SCHEDULER_AFFINITY_TTL;
 use crate::AppState;
 
@@ -670,6 +671,15 @@ async fn record_oauth_invalidation_effect(
         return;
     }
 
+    record_codex_spark_model_quota_fallback(
+        state,
+        context.plan,
+        transport.provider.provider_type.as_str(),
+        effect.status_code,
+        effect.response_text,
+    )
+    .await;
+
     let Some(invalid_reason) = resolve_local_oauth_invalid_reason(
         transport.provider.provider_type.as_str(),
         effect.status_code,
@@ -691,6 +701,136 @@ async fn record_oauth_invalidation_effect(
             plan.provider_id, plan.endpoint_id, plan.key_id, err
         );
     }
+}
+
+async fn record_codex_spark_model_quota_fallback(
+    state: &AppState,
+    plan: &ExecutionPlan,
+    provider_type: &str,
+    status_code: u16,
+    response_text: Option<&str>,
+) {
+    if !provider_type.trim().eq_ignore_ascii_case("codex") {
+        return;
+    }
+    let requested_model = plan.model_name.as_deref().unwrap_or_default().trim();
+    if !requested_model.eq_ignore_ascii_case(admin_provider_quota_pure::CODEX_SPARK_MODEL_ID) {
+        return;
+    }
+    if !codex_spark_error_clearly_quota_limited(status_code, response_text) {
+        return;
+    }
+
+    let now_unix_secs = current_unix_secs();
+    let reset_seconds = codex_spark_quota_fallback_reset_seconds(status_code, response_text);
+    let Some(mut updated_key) = state
+        .read_provider_catalog_keys_by_ids(std::slice::from_ref(&plan.key_id))
+        .await
+        .ok()
+        .and_then(|mut keys| keys.drain(..).next())
+    else {
+        return;
+    };
+    let mut upstream_metadata = updated_key
+        .upstream_metadata
+        .as_ref()
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let mut codex = upstream_metadata
+        .get("codex")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    codex.insert("schema_version".to_string(), json!(2));
+    codex
+        .entry("updated_at".to_string())
+        .or_insert_with(|| json!(now_unix_secs));
+    let mut quota_by_model = codex
+        .get("quota_by_model")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    quota_by_model.insert(
+        admin_provider_quota_pure::CODEX_SPARK_MODEL_ID.to_string(),
+        json!({
+            "updated_at": now_unix_secs,
+            "windows": [
+                {
+                    "code": "spark",
+                    "scope": "model",
+                    "model": admin_provider_quota_pure::CODEX_SPARK_MODEL_ID,
+                    "unit": "percent",
+                    "used_ratio": 1.0,
+                    "remaining_ratio": 0.0,
+                    "reset_seconds": reset_seconds,
+                    "reset_at": now_unix_secs.saturating_add(reset_seconds),
+                    "is_exhausted": true,
+                    "source": "runtime_fallback"
+                }
+            ]
+        }),
+    );
+    codex.insert("quota_by_model".to_string(), Value::Object(quota_by_model));
+    upstream_metadata.insert("codex".to_string(), Value::Object(codex));
+    updated_key.upstream_metadata = Some(Value::Object(upstream_metadata));
+    updated_key.status_snapshot = sync_provider_key_quota_status_snapshot(
+        updated_key.status_snapshot.as_ref(),
+        provider_type,
+        updated_key.upstream_metadata.as_ref(),
+        "runtime_fallback",
+    )
+    .or(updated_key.status_snapshot);
+    updated_key.updated_at_unix_secs = Some(now_unix_secs);
+
+    if let Err(err) = state.update_provider_catalog_key(&updated_key).await {
+        warn!(
+            "gateway orchestration effects: failed to persist Codex Spark quota fallback for provider {} endpoint {} key {}: {:?}",
+            plan.provider_id, plan.endpoint_id, plan.key_id, err
+        );
+    }
+}
+
+fn codex_spark_error_clearly_quota_limited(status_code: u16, response_text: Option<&str>) -> bool {
+    if !matches!(status_code, 402 | 429) {
+        return false;
+    }
+    let message = local_failover_error_message(response_text)
+        .or_else(|| response_text.map(str::to_string))
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if message.trim().is_empty() {
+        return status_code == 429;
+    }
+    [
+        "quota",
+        "rate limit",
+        "rate_limit",
+        "usage limit",
+        "usage_limit",
+        "capacity",
+        "cooldown",
+        "too many requests",
+        "额度",
+        "限额",
+        "冷却",
+    ]
+    .iter()
+    .any(|hint| message.contains(hint))
+}
+
+fn codex_spark_quota_fallback_reset_seconds(status_code: u16, response_text: Option<&str>) -> u64 {
+    let message = local_failover_error_message(response_text)
+        .or_else(|| response_text.map(str::to_string))
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if status_code == 429 && message.contains("5h") {
+        return 5 * 60 * 60;
+    }
+    if message.contains("weekly") || message.contains("week") || message.contains("周") {
+        return 7 * 24 * 60 * 60;
+    }
+    5 * 60
 }
 
 fn resolve_local_oauth_invalid_reason(

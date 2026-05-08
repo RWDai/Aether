@@ -8,6 +8,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::status as provider_status;
 
+const CODEX_SPARK_MODEL_ID: &str = super::quota::CODEX_SPARK_MODEL_ID;
+
 #[derive(Debug, Default, Clone, serde::Deserialize)]
 pub struct AdminPoolResolveSelectionRequest {
     #[serde(default)]
@@ -121,6 +123,21 @@ fn admin_pool_json_f64(value: Option<&Value>) -> Option<f64> {
         _ => None,
     }
     .filter(|value| value.is_finite())
+}
+
+fn admin_pool_json_u64(value: Option<&Value>) -> Option<u64> {
+    let mut parsed = match value {
+        Some(Value::Number(number)) => number.as_f64(),
+        Some(Value::String(value)) => value.trim().parse::<f64>().ok(),
+        _ => None,
+    }?;
+    if !parsed.is_finite() || parsed <= 0.0 {
+        return None;
+    }
+    if parsed > 1_000_000_000_000.0 {
+        parsed /= 1000.0;
+    }
+    Some(parsed.floor() as u64)
 }
 
 fn admin_pool_quota_snapshot_matches_provider(
@@ -266,6 +283,147 @@ pub fn admin_pool_key_account_quota_exhausted(
         }
         _ => false,
     }
+}
+
+fn admin_pool_model_matches_codex_spark(model: &str) -> bool {
+    model.trim().eq_ignore_ascii_case(CODEX_SPARK_MODEL_ID)
+}
+
+fn admin_pool_model_window_is_active(
+    quota_snapshot: Option<&serde_json::Map<String, Value>>,
+    window: &serde_json::Map<String, Value>,
+    now_unix_secs: u64,
+) -> bool {
+    if let Some(reset_at) = admin_pool_json_u64(window.get("reset_at")) {
+        return reset_at > now_unix_secs;
+    }
+    if let Some(reset_seconds) = admin_pool_json_u64(window.get("reset_seconds")) {
+        let observed_at = quota_snapshot
+            .and_then(|quota| admin_pool_json_u64(quota.get("observed_at")))
+            .or_else(|| {
+                quota_snapshot.and_then(|quota| admin_pool_json_u64(quota.get("updated_at")))
+            });
+        return observed_at
+            .map(|observed_at| observed_at.saturating_add(reset_seconds) > now_unix_secs)
+            .unwrap_or(reset_seconds > 0);
+    }
+    true
+}
+
+fn admin_pool_model_window_exhausted(
+    quota_snapshot: Option<&serde_json::Map<String, Value>>,
+    window: &serde_json::Map<String, Value>,
+    model: &str,
+    now_unix_secs: u64,
+) -> Option<bool> {
+    let scope_matches = window
+        .get("scope")
+        .and_then(Value::as_str)
+        .is_some_and(|scope| scope.eq_ignore_ascii_case("model"));
+    if !scope_matches {
+        return None;
+    }
+    let model_matches = window
+        .get("model")
+        .and_then(Value::as_str)
+        .is_some_and(|candidate| candidate.eq_ignore_ascii_case(model));
+    if !model_matches {
+        return None;
+    }
+
+    let exhausted = admin_pool_json_bool(window.get("is_exhausted"))
+        .or_else(|| admin_pool_json_f64(window.get("used_ratio")).map(|value| value >= 1.0 - 1e-6))
+        .unwrap_or(false);
+    Some(exhausted && admin_pool_model_window_is_active(quota_snapshot, window, now_unix_secs))
+}
+
+fn admin_pool_model_quota_exhausted_from_snapshot(
+    quota_snapshot: &serde_json::Map<String, Value>,
+    model: &str,
+    now_unix_secs: u64,
+) -> Option<bool> {
+    let windows = quota_snapshot.get("windows")?.as_array()?;
+    let mut found = false;
+    for window in windows.iter().filter_map(Value::as_object) {
+        let Some(exhausted) =
+            admin_pool_model_window_exhausted(Some(quota_snapshot), window, model, now_unix_secs)
+        else {
+            continue;
+        };
+        found = true;
+        if exhausted {
+            return Some(true);
+        }
+    }
+    found.then_some(false)
+}
+
+fn admin_pool_model_quota_exhausted_from_metadata(
+    metadata: &serde_json::Map<String, Value>,
+    model: &str,
+    now_unix_secs: u64,
+) -> Option<bool> {
+    let model_bucket = metadata
+        .get("quota_by_model")
+        .or_else(|| metadata.get("models"))
+        .and_then(Value::as_object)?;
+    let item = model_bucket.get(model)?.as_object()?;
+    let windows = item.get("windows").and_then(Value::as_array);
+    let mut found = false;
+    if let Some(windows) = windows {
+        for window in windows.iter().filter_map(Value::as_object) {
+            let Some(exhausted) =
+                admin_pool_model_window_exhausted(None, window, model, now_unix_secs)
+            else {
+                continue;
+            };
+            found = true;
+            if exhausted {
+                return Some(true);
+            }
+        }
+    }
+    if found {
+        return Some(false);
+    }
+    let exhausted = admin_pool_json_bool(item.get("is_exhausted"))
+        .or_else(|| admin_pool_json_f64(item.get("used_ratio")).map(|value| value >= 1.0 - 1e-6))
+        .or_else(|| {
+            admin_pool_json_f64(item.get("used_percent")).map(|value| value >= 100.0 - 1e-6)
+        })?;
+    Some(exhausted)
+}
+
+pub fn admin_pool_key_model_quota_exhausted(
+    key: &StoredProviderCatalogKey,
+    provider_type: &str,
+    requested_model: &str,
+    now_unix_secs: u64,
+) -> bool {
+    if !provider_type.trim().eq_ignore_ascii_case("codex") {
+        return false;
+    }
+    if !admin_pool_model_matches_codex_spark(requested_model) {
+        return false;
+    }
+
+    if let Some(exhausted) =
+        admin_pool_key_quota_snapshot(key, provider_type).and_then(|quota_snapshot| {
+            admin_pool_model_quota_exhausted_from_snapshot(
+                quota_snapshot,
+                CODEX_SPARK_MODEL_ID,
+                now_unix_secs,
+            )
+        })
+    {
+        return exhausted;
+    }
+
+    let Some(bucket) = admin_pool_metadata_bucket(key.upstream_metadata.as_ref(), "codex") else {
+        return false;
+    };
+    admin_pool_model_quota_exhausted_from_metadata(bucket, CODEX_SPARK_MODEL_ID, now_unix_secs)
+        .unwrap_or(false)
 }
 
 fn admin_pool_has_proxy(key: &StoredProviderCatalogKey) -> bool {
@@ -674,7 +832,8 @@ pub fn build_admin_pool_selection_payload(keys: &[StoredProviderCatalogKey]) -> 
 mod tests {
     use super::{
         admin_pool_key_account_quota_exhausted, admin_pool_key_is_known_banned,
-        build_admin_pool_key_payload, AdminPoolKeyPayloadContext,
+        admin_pool_key_model_quota_exhausted, build_admin_pool_key_payload,
+        AdminPoolKeyPayloadContext,
     };
     use aether_data_contracts::repository::provider_catalog::StoredProviderCatalogKey;
     use serde_json::json;
@@ -811,6 +970,70 @@ mod tests {
         }));
 
         assert!(!admin_pool_key_account_quota_exhausted(&key, "codex"));
+    }
+
+    #[test]
+    fn detects_codex_spark_model_quota_without_account_exhaustion() {
+        let mut key = sample_key(Some(json!({
+            "codex": {
+                "primary_used_percent": 10.0,
+                "secondary_used_percent": 20.0,
+                "quota_by_model": {
+                    "gpt-5.3-codex-spark": {
+                        "windows": [
+                            {
+                                "code": "spark",
+                                "scope": "model",
+                                "model": "gpt-5.3-codex-spark",
+                                "used_ratio": 1.0,
+                                "remaining_ratio": 0.0,
+                                "reset_at": 1_770_000_300u64,
+                                "is_exhausted": true
+                            }
+                        ]
+                    }
+                }
+            }
+        })));
+        key.status_snapshot = Some(json!({
+            "quota": {
+                "version": 2,
+                "provider_type": "codex",
+                "code": "ok",
+                "exhausted": false,
+                "windows": [
+                    {
+                        "code": "weekly",
+                        "scope": "account",
+                        "used_ratio": 0.1,
+                        "remaining_ratio": 0.9
+                    },
+                    {
+                        "code": "model:gpt-5.3-codex-spark",
+                        "scope": "model",
+                        "model": "gpt-5.3-codex-spark",
+                        "used_ratio": 1.0,
+                        "remaining_ratio": 0.0,
+                        "reset_at": 1_770_000_300u64,
+                        "is_exhausted": true
+                    }
+                ]
+            }
+        }));
+
+        assert!(!admin_pool_key_account_quota_exhausted(&key, "codex"));
+        assert!(admin_pool_key_model_quota_exhausted(
+            &key,
+            "codex",
+            "gpt-5.3-codex-spark",
+            1_770_000_000,
+        ));
+        assert!(!admin_pool_key_model_quota_exhausted(
+            &key,
+            "codex",
+            "gpt-5.3-codex",
+            1_770_000_000,
+        ));
     }
 
     #[test]

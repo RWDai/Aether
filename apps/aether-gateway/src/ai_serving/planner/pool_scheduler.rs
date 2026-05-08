@@ -381,6 +381,7 @@ async fn read_pool_catalog_key_contexts_by_id(
 ) -> BTreeMap<String, PoolCatalogKeyContext> {
     let mut key_ids = Vec::new();
     let mut provider_type_by_key_id = BTreeMap::<String, String>::new();
+    let mut requested_model_by_key_id = BTreeMap::<String, String>::new();
 
     for candidate in candidates {
         if pool_config_for_candidate(candidate).is_none() {
@@ -389,6 +390,10 @@ async fn read_pool_catalog_key_contexts_by_id(
         let key_id = candidate.candidate.key_id.clone();
         if let Entry::Vacant(entry) = provider_type_by_key_id.entry(key_id.clone()) {
             entry.insert(candidate.transport.provider.provider_type.clone());
+            requested_model_by_key_id.insert(
+                key_id.clone(),
+                pool_candidate_requested_model(&candidate.candidate).to_string(),
+            );
             key_ids.push(key_id);
         }
     }
@@ -419,18 +424,37 @@ async fn read_pool_catalog_key_contexts_by_id(
                 .get(&key.id)
                 .map(String::as_str)
                 .unwrap_or_default();
+            let requested_model = requested_model_by_key_id
+                .get(&key.id)
+                .map(String::as_str)
+                .unwrap_or_default();
             (
                 key.id.clone(),
-                build_pool_catalog_key_context(state, &key, provider_type),
+                build_pool_catalog_key_context(state, &key, provider_type, requested_model),
             )
         })
         .collect()
+}
+
+fn pool_candidate_requested_model(
+    candidate: &aether_scheduler_core::SchedulerMinimalCandidateSelectionCandidate,
+) -> &str {
+    let selected = candidate.selected_provider_model_name.trim();
+    if !selected.is_empty() {
+        return selected;
+    }
+    let global = candidate.global_model_name.trim();
+    if !global.is_empty() {
+        return global;
+    }
+    candidate.model_id.as_str()
 }
 
 fn build_pool_catalog_key_context(
     state: PlannerAppState<'_>,
     key: &StoredProviderCatalogKey,
     provider_type: &str,
+    requested_model: &str,
 ) -> PoolCatalogKeyContext {
     let status_snapshot = provider_key_status_snapshot_payload(key, provider_type);
     let quota_snapshot = status_snapshot
@@ -458,6 +482,17 @@ fn build_pool_catalog_key_context(
         })
         .filter(|value| value.is_finite() && *value >= 0.0);
 
+    let quota_exhausted = quota_snapshot
+        .and_then(|quota| quota.get("exhausted"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        || aether_admin::provider::pool::admin_pool_key_model_quota_exhausted(
+            key,
+            provider_type,
+            requested_model,
+            crate::clock::current_unix_secs(),
+        );
+
     PoolCatalogKeyContext {
         oauth_plan_type: quota_snapshot
             .and_then(|quota| quota.get("plan_type"))
@@ -476,10 +511,7 @@ fn build_pool_catalog_key_context(
             .and_then(|account| account.get("blocked"))
             .and_then(Value::as_bool)
             .unwrap_or(false),
-        quota_exhausted: quota_snapshot
-            .and_then(|quota| quota.get("exhausted"))
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
+        quota_exhausted,
         health_score,
         latency_avg_ms,
         catalog_lru_score: Some(key.last_used_at_unix_secs.unwrap_or(0) as f64),
@@ -1442,13 +1474,69 @@ mod tests {
                 )),
             ));
 
-        let context = build_pool_catalog_key_context(PlannerAppState::new(&app), &key, "codex");
+        let context =
+            build_pool_catalog_key_context(PlannerAppState::new(&app), &key, "codex", "gpt-5");
 
         assert_eq!(context.oauth_plan_type.as_deref(), Some("team"));
         assert_eq!(context.quota_usage_ratio, Some(0.25));
         assert_eq!(context.quota_reset_seconds, Some(3600.0));
         assert_eq!(context.latency_avg_ms, Some(50.0));
         assert_eq!(context.catalog_lru_score, Some(1_711_000_123.0));
+    }
+
+    #[test]
+    fn pool_catalog_context_marks_only_spark_model_quota_exhausted() {
+        let mut key = StoredProviderCatalogKey::new(
+            "key-1".to_string(),
+            "provider-1".to_string(),
+            "key-1".to_string(),
+            "oauth".to_string(),
+            None,
+            true,
+        )
+        .expect("key should build");
+        key.status_snapshot = Some(json!({
+            "account": {"blocked": false},
+            "quota": {
+                "version": 2,
+                "provider_type": "codex",
+                "exhausted": false,
+                "windows": [
+                    {
+                        "code": "weekly",
+                        "scope": "account",
+                        "used_ratio": 0.1,
+                        "remaining_ratio": 0.9
+                    },
+                    {
+                        "code": "model:gpt-5.3-codex-spark",
+                        "scope": "model",
+                        "model": "gpt-5.3-codex-spark",
+                        "used_ratio": 1.0,
+                        "remaining_ratio": 0.0,
+                        "reset_at": 4_000_000_000u64,
+                        "is_exhausted": true
+                    }
+                ]
+            }
+        }));
+        let app = AppState::new().expect("state should build");
+
+        let spark_context = build_pool_catalog_key_context(
+            PlannerAppState::new(&app),
+            &key,
+            "codex",
+            "gpt-5.3-codex-spark",
+        );
+        let regular_context = build_pool_catalog_key_context(
+            PlannerAppState::new(&app),
+            &key,
+            "codex",
+            "gpt-5.3-codex",
+        );
+
+        assert!(spark_context.quota_exhausted);
+        assert!(!regular_context.quota_exhausted);
     }
 
     fn sample_eligible_candidate(

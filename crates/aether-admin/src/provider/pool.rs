@@ -212,6 +212,12 @@ pub fn admin_pool_key_account_quota_exhausted(
                         windows
                             .iter()
                             .filter_map(Value::as_object)
+                            .filter(|window| {
+                                window
+                                    .get("scope")
+                                    .and_then(Value::as_str)
+                                    .is_none_or(|scope| scope.eq_ignore_ascii_case("account"))
+                            })
                             .filter_map(|w| w.get("used_ratio"))
                             .filter_map(Value::as_f64)
                             .max_by(f64::total_cmp)
@@ -970,6 +976,37 @@ mod tests {
         }));
 
         assert!(!admin_pool_key_account_quota_exhausted(&key, "codex"));
+    }
+
+    #[test]
+    fn ignores_model_windows_when_preserving_codex_account_exhaustion() {
+        let mut key = sample_key(None);
+        key.status_snapshot = Some(json!({
+            "quota": {
+                "version": 2,
+                "provider_type": "codex",
+                "code": "exhausted",
+                "exhausted": true,
+                "windows": [
+                    {
+                        "code": "weekly",
+                        "scope": "account",
+                        "used_ratio": 1.0,
+                        "remaining_ratio": 0.0
+                    },
+                    {
+                        "code": "model:gpt-5.3-codex-spark",
+                        "scope": "model",
+                        "model": "gpt-5.3-codex-spark",
+                        "used_ratio": 0.2,
+                        "remaining_ratio": 0.8,
+                        "is_exhausted": false
+                    }
+                ]
+            }
+        }));
+
+        assert!(admin_pool_key_account_quota_exhausted(&key, "codex"));
     }
 
     #[test]

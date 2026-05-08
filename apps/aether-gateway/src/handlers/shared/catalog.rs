@@ -462,18 +462,43 @@ fn model_quota_window_snapshot(
     observed_at_unix_secs: Option<u64>,
 ) -> Option<Value> {
     let used_ratio = item
-        .get("used_percent")
+        .get("used_ratio")
         .and_then(admin_provider_quota_pure::coerce_json_f64)
-        .map(|value| (value / 100.0).clamp(0.0, 1.0))
+        .map(|value| value.clamp(0.0, 1.0))
+        .or_else(|| {
+            item.get("remaining_ratio")
+                .and_then(admin_provider_quota_pure::coerce_json_f64)
+                .map(|value| (1.0 - value.clamp(0.0, 1.0)).clamp(0.0, 1.0))
+        })
+        .or_else(|| {
+            item.get("remaining_percent")
+                .and_then(admin_provider_quota_pure::coerce_json_f64)
+                .map(|value| (1.0 - (value / 100.0).clamp(0.0, 1.0)).clamp(0.0, 1.0))
+        })
+        .or_else(|| {
+            item.get("used_percent")
+                .and_then(admin_provider_quota_pure::coerce_json_f64)
+                .map(|value| (value / 100.0).clamp(0.0, 1.0))
+        })
         .or_else(|| {
             item.get("remaining_fraction")
                 .and_then(admin_provider_quota_pure::coerce_json_f64)
                 .map(|value| (1.0 - value.clamp(0.0, 1.0)).clamp(0.0, 1.0))
         });
     let remaining_ratio = item
-        .get("remaining_fraction")
+        .get("remaining_ratio")
         .and_then(admin_provider_quota_pure::coerce_json_f64)
         .map(|value| value.clamp(0.0, 1.0))
+        .or_else(|| {
+            item.get("remaining_percent")
+                .and_then(admin_provider_quota_pure::coerce_json_f64)
+                .map(|value| (value / 100.0).clamp(0.0, 1.0))
+        })
+        .or_else(|| {
+            item.get("remaining_fraction")
+                .and_then(admin_provider_quota_pure::coerce_json_f64)
+                .map(|value| value.clamp(0.0, 1.0))
+        })
         .or_else(|| used_ratio.map(|value| (1.0 - value).max(0.0)));
     let reset_at = provider_quota_timestamp_unix_secs(
         item.get("reset_at").or_else(|| item.get("next_reset_at")),
@@ -2414,6 +2439,53 @@ mod tests {
             quota.get("windows").and_then(Value::as_array).map(Vec::len),
             Some(2usize)
         );
+    }
+
+    #[test]
+    fn codex_quota_snapshot_preserves_model_ratio_windows() {
+        let upstream_metadata = json!({
+            "codex": {
+                "updated_at": 1_775_553_285u64,
+                "primary_used_percent": 10.0,
+                "quota_by_model": {
+                    "gpt-5.3-codex-spark": {
+                        "windows": [
+                            {
+                                "code": "spark",
+                                "scope": "model",
+                                "model": "gpt-5.3-codex-spark",
+                                "used_ratio": 0.6,
+                                "remaining_ratio": 0.4,
+                                "reset_seconds": 300,
+                                "is_exhausted": false
+                            }
+                        ]
+                    }
+                }
+            }
+        });
+
+        let payload = sync_provider_key_quota_status_snapshot(
+            None,
+            "codex",
+            Some(&upstream_metadata),
+            "refresh_api",
+        )
+        .expect("quota snapshot should sync");
+        let spark = payload["quota"]["windows"]
+            .as_array()
+            .expect("windows should exist")
+            .iter()
+            .filter_map(Value::as_object)
+            .find(|window| window.get("model") == Some(&json!("gpt-5.3-codex-spark")))
+            .expect("Spark window should exist");
+
+        assert_eq!(spark.get("code"), Some(&json!("spark")));
+        assert_eq!(spark.get("scope"), Some(&json!("model")));
+        assert_eq!(spark.get("used_ratio"), Some(&json!(0.6)));
+        assert_eq!(spark.get("remaining_ratio"), Some(&json!(0.4)));
+        assert_eq!(spark.get("reset_seconds"), Some(&json!(300u64)));
+        assert_eq!(payload["quota"]["exhausted"], json!(false));
     }
 
     #[test]

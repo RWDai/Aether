@@ -25,7 +25,7 @@ pub(super) struct CandidateRuntimeSelectionSnapshot {
     pub(super) provider_key_rpm_states: BTreeMap<String, StoredProviderCatalogKey>,
     pub(super) pool_provider_ids: BTreeSet<String>,
     provider_quota_blocks_requests: BTreeMap<String, bool>,
-    key_account_quota_exhausted: BTreeMap<String, bool>,
+    candidate_quota_exhausted: BTreeMap<String, bool>,
     key_oauth_invalid: BTreeMap<String, bool>,
     provider_key_rpm_reset_ats: BTreeMap<String, Option<u64>>,
 }
@@ -47,7 +47,7 @@ pub(super) async fn read_candidate_runtime_selection_snapshot(
         .filter_map(|(provider_id, state)| state.pool_enabled.then_some(provider_id.clone()))
         .collect::<BTreeSet<_>>();
     let provider_key_rpm_states = read_provider_key_rpm_states(state, candidates).await?;
-    let key_account_quota_exhausted = read_key_account_quota_exhaustion_map(
+    let candidate_quota_exhausted = read_candidate_quota_exhaustion_map(
         candidates,
         &provider_key_rpm_states,
         &provider_skip_exhausted_accounts,
@@ -65,7 +65,7 @@ pub(super) async fn read_candidate_runtime_selection_snapshot(
         provider_key_rpm_states,
         pool_provider_ids,
         provider_quota_blocks_requests,
-        key_account_quota_exhausted,
+        candidate_quota_exhausted,
         key_oauth_invalid,
         provider_key_rpm_reset_ats,
     })
@@ -118,8 +118,8 @@ pub(super) fn is_candidate_selectable(
             .unwrap_or(false),
         account_quota_exhausted: !pool_group
             && snapshot
-                .key_account_quota_exhausted
-                .get(candidate.key_id.as_str())
+                .candidate_quota_exhausted
+                .get(candidate_quota_state_key(candidate).as_str())
                 .copied()
                 .unwrap_or(false),
         oauth_invalid: !pool_group
@@ -172,8 +172,8 @@ pub(super) fn current_candidate_runtime_skip_reason(
         provider_quota_blocks_requests,
         account_quota_exhausted: !pool_group
             && snapshot
-                .key_account_quota_exhausted
-                .get(candidate.key_id.as_str())
+                .candidate_quota_exhausted
+                .get(candidate_quota_state_key(candidate).as_str())
                 .copied()
                 .unwrap_or(false),
         oauth_invalid: !pool_group
@@ -298,7 +298,7 @@ async fn read_provider_pool_state_map(
         .collect())
 }
 
-fn read_key_account_quota_exhaustion_map(
+fn read_candidate_quota_exhaustion_map(
     candidates: &[SchedulerMinimalCandidateSelectionCandidate],
     provider_key_rpm_states: &BTreeMap<String, StoredProviderCatalogKey>,
     provider_skip_exhausted_accounts: &BTreeMap<String, bool>,
@@ -328,9 +328,18 @@ fn read_key_account_quota_exhaustion_map(
                             now_unix_secs,
                         )
                     });
-            (candidate.key_id.clone(), exhausted)
+            (candidate_quota_state_key(candidate), exhausted)
         })
         .collect()
+}
+
+fn candidate_quota_state_key(candidate: &SchedulerMinimalCandidateSelectionCandidate) -> String {
+    format!(
+        "{}\u{1f}{}\u{1f}{}",
+        candidate.provider_id,
+        candidate.key_id,
+        candidate_selected_model(candidate)
+    )
 }
 
 fn candidate_selected_model(candidate: &SchedulerMinimalCandidateSelectionCandidate) -> &str {
@@ -454,6 +463,101 @@ fn oauth_account_state_code_is_hard_block(code: &str) -> bool {
             | "account_blocked"
             | "account_verification"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        candidate_quota_state_key, read_candidate_quota_exhaustion_map,
+        SchedulerMinimalCandidateSelectionCandidate, StoredProviderCatalogKey,
+    };
+    use serde_json::json;
+    use std::collections::BTreeMap;
+
+    fn candidate(
+        key_id: &str,
+        selected_model: &str,
+    ) -> SchedulerMinimalCandidateSelectionCandidate {
+        SchedulerMinimalCandidateSelectionCandidate {
+            provider_id: "provider-1".to_string(),
+            provider_name: "provider".to_string(),
+            provider_type: "codex".to_string(),
+            provider_priority: 10,
+            endpoint_id: "endpoint-1".to_string(),
+            endpoint_api_format: "openai:chat".to_string(),
+            key_id: key_id.to_string(),
+            key_name: key_id.to_string(),
+            key_auth_type: "oauth".to_string(),
+            key_internal_priority: 0,
+            key_global_priority_for_format: None,
+            key_capabilities: None,
+            model_id: selected_model.to_string(),
+            global_model_id: selected_model.to_string(),
+            global_model_name: selected_model.to_string(),
+            selected_provider_model_name: selected_model.to_string(),
+            mapping_matched_model: None,
+        }
+    }
+
+    #[test]
+    fn candidate_quota_exhaustion_is_model_scoped() {
+        let spark = candidate("key-1", "gpt-5.3-codex-spark");
+        let regular = candidate("key-1", "gpt-5.3-codex");
+        let mut key = StoredProviderCatalogKey::new(
+            "key-1".to_string(),
+            "provider-1".to_string(),
+            "key-1".to_string(),
+            "oauth".to_string(),
+            None,
+            true,
+        )
+        .expect("key should build");
+        key.status_snapshot = Some(json!({
+            "quota": {
+                "version": 2,
+                "provider_type": "codex",
+                "exhausted": false,
+                "windows": [
+                    {
+                        "code": "weekly",
+                        "scope": "account",
+                        "used_ratio": 0.1,
+                        "remaining_ratio": 0.9
+                    },
+                    {
+                        "code": "model:gpt-5.3-codex-spark",
+                        "scope": "model",
+                        "model": "gpt-5.3-codex-spark",
+                        "used_ratio": 1.0,
+                        "remaining_ratio": 0.0,
+                        "reset_at": 4_000_000_000u64,
+                        "is_exhausted": true
+                    }
+                ]
+            }
+        }));
+        let provider_keys = BTreeMap::from([("key-1".to_string(), key)]);
+        let skip_exhausted = BTreeMap::from([("provider-1".to_string(), true)]);
+
+        let result = read_candidate_quota_exhaustion_map(
+            &[spark.clone(), regular.clone()],
+            &provider_keys,
+            &skip_exhausted,
+        );
+
+        assert_eq!(
+            result
+                .get(candidate_quota_state_key(&spark).as_str())
+                .copied(),
+            Some(true)
+        );
+        assert_eq!(
+            result
+                .get(candidate_quota_state_key(&regular).as_str())
+                .copied(),
+            Some(false)
+        );
+    }
 }
 
 fn read_provider_key_rpm_reset_at_map(

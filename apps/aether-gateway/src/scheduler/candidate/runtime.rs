@@ -465,6 +465,22 @@ fn oauth_account_state_code_is_hard_block(code: &str) -> bool {
     )
 }
 
+fn read_provider_key_rpm_reset_at_map(
+    state: &(impl SchedulerRuntimeState + ?Sized),
+    candidates: &[SchedulerMinimalCandidateSelectionCandidate],
+    now_unix_secs: u64,
+) -> BTreeMap<String, Option<u64>> {
+    candidates
+        .iter()
+        .map(|candidate| {
+            (
+                candidate.key_id.clone(),
+                state.provider_key_rpm_reset_at(candidate.key_id.as_str(), now_unix_secs),
+            )
+        })
+        .collect::<BTreeMap<_, _>>()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -558,20 +574,4 @@ mod tests {
             Some(false)
         );
     }
-}
-
-fn read_provider_key_rpm_reset_at_map(
-    state: &(impl SchedulerRuntimeState + ?Sized),
-    candidates: &[SchedulerMinimalCandidateSelectionCandidate],
-    now_unix_secs: u64,
-) -> BTreeMap<String, Option<u64>> {
-    candidates
-        .iter()
-        .map(|candidate| {
-            (
-                candidate.key_id.clone(),
-                state.provider_key_rpm_reset_at(candidate.key_id.as_str(), now_unix_secs),
-            )
-        })
-        .collect::<BTreeMap<_, _>>()
 }

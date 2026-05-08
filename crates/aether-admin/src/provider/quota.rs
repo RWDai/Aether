@@ -222,9 +222,9 @@ fn codex_model_id_matches_spark(value: &str) -> bool {
     value.trim().eq_ignore_ascii_case(CODEX_SPARK_MODEL_ID)
 }
 
-fn codex_model_source<'a>(
-    root: &'a serde_json::Map<String, serde_json::Value>,
-) -> Option<&'a serde_json::Value> {
+fn codex_model_source(
+    root: &serde_json::Map<String, serde_json::Value>,
+) -> Option<&serde_json::Value> {
     for bucket_name in ["quota_by_model", "model_quotas", "model_usage", "models"] {
         let Some(bucket) = root.get(bucket_name) else {
             continue;

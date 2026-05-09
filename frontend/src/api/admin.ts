@@ -236,6 +236,28 @@ export interface EmailTemplateResetResponse {
   }
 }
 
+export interface CleanupRunRecord {
+  id: string
+  kind: string
+  trigger: string
+  status: 'processing' | 'completed' | 'failed'
+  message: string
+  started_at_unix_secs: number
+  completed_at_unix_secs: number | null
+  duration_ms: number | null
+  summary: Record<string, unknown>
+  error: string | null
+}
+
+export interface CleanupRunListResponse {
+  items: CleanupRunRecord[]
+}
+
+export interface CleanupTaskResponse {
+  message: string
+  task: CleanupRunRecord
+}
+
 // 检查更新响应
 export interface CheckUpdateResponse {
   current_version: string
@@ -1051,12 +1073,29 @@ export const adminApi = {
   },
 
   // 数据清空
-  purgeConfig: () => purge<{ message: string; deleted: Record<string, number> }>('config'),
-  purgeUsers: () => purge<{ message: string; deleted: Record<string, number> }>('users'),
-  purgeUsage: () => purge<{ message: string; deleted: Record<string, number> }>('usage'),
-  purgeAuditLogs: () => purge<{ message: string; deleted: Record<string, number> }>('audit-logs'),
-  purgeRequestBodies: () => purge<{ message: string; cleaned: Record<string, number> }>('request-bodies'),
-  purgeStats: () => purge<{ message: string }>('stats'),
+  purgeConfig: () => purge<CleanupTaskResponse>('config'),
+  purgeUsers: () => purge<CleanupTaskResponse>('users'),
+  async purgeUsage(): Promise<CleanupTaskResponse> {
+    const response = await apiClient.post<CleanupTaskResponse>('/api/admin/system/purge/usage')
+    return response.data
+  },
+  async purgeAuditLogs(): Promise<CleanupTaskResponse> {
+    const response = await apiClient.post<CleanupTaskResponse>('/api/admin/system/purge/audit-logs')
+    return response.data
+  },
+  purgeRequestBodies: () => purge<CleanupTaskResponse>('request-bodies'),
+  async purgeRequestBodiesAsync(): Promise<CleanupTaskResponse> {
+    const response = await apiClient.post<CleanupTaskResponse>('/api/admin/system/purge/request-bodies/task')
+    return response.data
+  },
+  async purgeStats(): Promise<CleanupTaskResponse> {
+    const response = await apiClient.post<CleanupTaskResponse>('/api/admin/system/purge/stats')
+    return response.data
+  },
+  async getCleanupRuns(): Promise<CleanupRunListResponse> {
+    const response = await apiClient.get<CleanupRunListResponse>('/api/admin/system/cleanup/runs')
+    return response.data
+  },
 
   async getTimeSeries(params?: {
     start_date?: string

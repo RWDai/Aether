@@ -351,7 +351,8 @@ CREATE TABLE IF NOT EXISTS public.management_tokens (
     token_prefix character varying(12),
     name character varying(100) NOT NULL,
     description text,
-    allowed_ips json,
+    allowed_ips jsonb,
+    permissions jsonb,
     expires_at timestamp with time zone,
     last_used_at timestamp with time zone,
     last_used_ip character varying(45),
@@ -359,7 +360,7 @@ CREATE TABLE IF NOT EXISTS public.management_tokens (
     is_active boolean DEFAULT true NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT check_allowed_ips_not_empty CHECK (((allowed_ips IS NULL) OR ((allowed_ips)::text = 'null'::text) OR (json_array_length(allowed_ips) > 0)))
+    CONSTRAINT check_allowed_ips_not_empty CHECK (CASE WHEN ((allowed_ips IS NULL) OR (allowed_ips = 'null'::jsonb)) THEN true WHEN (jsonb_typeof(allowed_ips) = 'array'::text) THEN (jsonb_array_length(allowed_ips) > 0) ELSE false END)
 );
 
 

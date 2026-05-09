@@ -123,8 +123,8 @@ VALUES (
   $4,
   $5,
   $6,
-  $7,
-  $8,
+  $7::jsonb,
+  $8::jsonb,
   CASE
     WHEN $9::bigint IS NULL THEN NULL
     ELSE to_timestamp($9::double precision)
@@ -158,10 +158,10 @@ SET name = COALESCE($2, name),
     END,
     allowed_ips = CASE
       WHEN $5 THEN NULL
-      WHEN $6::json IS NULL THEN allowed_ips
-      ELSE $6
+      WHEN $6::jsonb IS NULL THEN allowed_ips
+      ELSE $6::jsonb
     END,
-    permissions = COALESCE($7::json, permissions),
+    permissions = COALESCE($7::jsonb, permissions),
     expires_at = CASE
       WHEN $8 THEN NULL
       WHEN $9::bigint IS NULL THEN expires_at

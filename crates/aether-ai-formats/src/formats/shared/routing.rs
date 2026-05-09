@@ -1,4 +1,5 @@
 use http::Method;
+use url::form_urlencoded;
 
 use crate::contracts::{
     CLAUDE_CHAT_STREAM_PLAN_KIND, CLAUDE_CHAT_SYNC_PLAN_KIND, CLAUDE_CLI_STREAM_PLAN_KIND,
@@ -304,6 +305,67 @@ fn resolve_gemini_generate_content_plan_kind(
     }
 }
 
+pub fn request_path_implies_stream_request(path: &str) -> bool {
+    let trimmed = path.trim();
+    let path = trimmed
+        .split_once('?')
+        .map(|(path, _)| path)
+        .unwrap_or(trimmed);
+    path.ends_with(":streamGenerateContent")
+}
+
+pub fn sanitize_request_path(path: &str) -> Option<String> {
+    let path = path
+        .trim()
+        .split_once('?')
+        .map(|(path, _)| path)
+        .unwrap_or_else(|| path.trim())
+        .trim();
+    (!path.is_empty()).then(|| path.to_string())
+}
+
+pub fn sanitize_request_query_string(query: &str) -> Option<String> {
+    let query = query.trim().trim_start_matches('?').trim();
+    if query.is_empty() {
+        return None;
+    }
+
+    let mut serializer = form_urlencoded::Serializer::new(String::new());
+    for (key, value) in form_urlencoded::parse(query.as_bytes()) {
+        if request_query_key_is_safe_to_trace(key.as_ref()) {
+            serializer.append_pair(key.as_ref(), value.as_ref());
+        }
+    }
+    let sanitized = serializer.finish();
+    (!sanitized.is_empty()).then_some(sanitized)
+}
+
+pub fn sanitize_request_path_and_query(path: &str, query: Option<&str>) -> Option<String> {
+    let trimmed = path.trim();
+    let (path, embedded_query) = trimmed
+        .split_once('?')
+        .map(|(path, query)| (path.trim(), Some(query)))
+        .unwrap_or((trimmed, None));
+    if path.is_empty() {
+        return None;
+    }
+
+    let sanitized_query = query
+        .and_then(sanitize_request_query_string)
+        .or_else(|| embedded_query.and_then(sanitize_request_query_string));
+    Some(match sanitized_query {
+        Some(query) => format!("{path}?{query}"),
+        None => path.to_string(),
+    })
+}
+
+fn request_query_key_is_safe_to_trace(key: &str) -> bool {
+    matches!(
+        key.to_ascii_lowercase().as_str(),
+        "alt" | "view" | "pagesize" | "page_size" | "limit" | "offset"
+    )
+}
+
 pub fn is_matching_stream_request(
     plan_kind: &str,
     path: &str,
@@ -320,7 +382,7 @@ pub fn is_matching_stream_request(
             .and_then(|value| value.as_bool())
             .unwrap_or(false),
         GEMINI_CHAT_STREAM_PLAN_KIND | GEMINI_CLI_STREAM_PLAN_KIND => {
-            path.ends_with(":streamGenerateContent")
+            request_path_implies_stream_request(path)
         }
         _ => true,
     }
@@ -388,7 +450,9 @@ mod tests {
 
     use super::{
         is_matching_stream_http_request, is_matching_stream_request,
-        resolve_execution_runtime_stream_plan_kind, resolve_execution_runtime_sync_plan_kind,
+        request_path_implies_stream_request, resolve_execution_runtime_stream_plan_kind,
+        resolve_execution_runtime_sync_plan_kind, sanitize_request_path,
+        sanitize_request_path_and_query, sanitize_request_query_string,
         supports_stream_execution_decision_kind, supports_sync_execution_decision_kind,
     };
     use crate::contracts::{
@@ -606,6 +670,41 @@ mod tests {
                 "/v1beta/models/gemini-2.5-pro:streamGenerateContent",
             ),
             Some(GEMINI_CLI_STREAM_PLAN_KIND)
+        );
+    }
+
+    #[test]
+    fn stream_path_detection_handles_gemini_method_paths_with_query() {
+        assert!(request_path_implies_stream_request(
+            "/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse"
+        ));
+        assert!(request_path_implies_stream_request(
+            " /v1internal:streamGenerateContent?alt=sse "
+        ));
+        assert!(!request_path_implies_stream_request(
+            "/v1beta/models/gemini-2.5-pro:generateContent?alt=sse"
+        ));
+    }
+
+    #[test]
+    fn request_path_metadata_sanitizer_drops_sensitive_query_parameters() {
+        assert_eq!(
+            sanitize_request_path("/v1beta/models/gemini-2.5-pro:generateContent?key=secret")
+                .as_deref(),
+            Some("/v1beta/models/gemini-2.5-pro:generateContent")
+        );
+        assert_eq!(
+            sanitize_request_query_string("?key=secret&alt=sse&pageSize=10&token=hidden")
+                .as_deref(),
+            Some("alt=sse&pageSize=10")
+        );
+        assert_eq!(
+            sanitize_request_path_and_query(
+                "/v1beta/models/gemini-2.5-pro:streamGenerateContent?key=secret&alt=sse",
+                None
+            )
+            .as_deref(),
+            Some("/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse")
         );
     }
 

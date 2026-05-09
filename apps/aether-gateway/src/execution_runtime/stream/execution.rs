@@ -27,7 +27,7 @@ use axum::http::Response;
 use base64::Engine as _;
 use futures_util::stream::BoxStream;
 use futures_util::{StreamExt, TryStreamExt};
-use serde_json::Value;
+use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tokio::time::MissedTickBehavior;
 use tokio_util::codec::{FramedRead, LinesCodec};
@@ -35,8 +35,11 @@ use tokio_util::io::StreamReader;
 use tracing::{debug, info, warn};
 
 use super::error::{
-    build_execution_runtime_error_response, collect_error_body, decode_stream_error_body,
-    inspect_prefetched_stream_body, read_next_frame, StreamPrefetchInspection,
+    build_synthetic_non_success_stream_error_body, collect_error_body, decode_stream_error_body,
+    inspect_prefetched_stream_body, read_next_frame,
+    should_synthesize_non_success_stream_error_body,
+    stream_client_error_status_code_for_upstream_status, synthetic_error_response_headers,
+    StreamPrefetchInspection,
 };
 #[path = "execution_failures.rs"]
 mod execution_failures;
@@ -81,9 +84,10 @@ use crate::execution_runtime::{MAX_STREAM_PREFETCH_BYTES, MAX_STREAM_PREFETCH_FR
 use crate::log_ids::short_request_id;
 use crate::orchestration::{
     apply_local_execution_effect, build_local_error_flow_metadata, with_error_flow_report_context,
-    LocalAdaptiveRateLimitEffect, LocalAdaptiveSuccessEffect, LocalAttemptFailureEffect,
-    LocalExecutionEffect, LocalExecutionEffectContext, LocalHealthFailureEffect,
-    LocalHealthSuccessEffect, LocalOAuthInvalidationEffect, LocalPoolErrorEffect,
+    with_upstream_response_report_context, LocalAdaptiveRateLimitEffect,
+    LocalAdaptiveSuccessEffect, LocalAttemptFailureEffect, LocalExecutionEffect,
+    LocalExecutionEffectContext, LocalHealthFailureEffect, LocalHealthSuccessEffect,
+    LocalOAuthInvalidationEffect, LocalPoolErrorEffect,
 };
 use crate::request_candidate_runtime::{
     ensure_execution_request_candidate_slot, record_local_request_candidate_status,
@@ -91,7 +95,9 @@ use crate::request_candidate_runtime::{
 };
 use crate::usage::submit_stream_report;
 use crate::usage::{GatewayStreamReportRequest, GatewaySyncReportRequest};
-use crate::{AppState, GatewayError};
+use crate::{
+    AppState, GatewayError, GEMINI_FILES_DOWNLOAD_PLAN_KIND, OPENAI_VIDEO_CONTENT_PLAN_KIND,
+};
 
 const OPENAI_IMAGE_STREAM_PLAN_KIND: &str = "openai_image_stream";
 const SSE_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
@@ -137,6 +143,52 @@ fn build_stream_sync_payload(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn build_stream_error_sync_payload(
+    trace_id: &str,
+    report_kind: String,
+    report_context: Option<Value>,
+    upstream_status_code: u16,
+    provider_headers: BTreeMap<String, String>,
+    provider_body_json: Option<Value>,
+    provider_body_base64: Option<String>,
+    client_headers: BTreeMap<String, String>,
+    client_body_json: Option<Value>,
+    telemetry: Option<ExecutionTelemetry>,
+) -> GatewaySyncReportRequest {
+    let client_status_code =
+        stream_client_error_status_code_for_upstream_status(upstream_status_code);
+    let mut report_context = report_context;
+    if client_status_code != upstream_status_code || client_headers != provider_headers {
+        let mut object = match report_context {
+            Some(Value::Object(object)) => object,
+            Some(other) => serde_json::Map::from_iter([("seed".to_string(), other)]),
+            None => serde_json::Map::new(),
+        };
+        object.insert(
+            "client_response_status_code".to_string(),
+            Value::from(client_status_code),
+        );
+        object.insert(
+            "client_response_headers".to_string(),
+            serde_json::to_value(client_headers).unwrap_or(Value::Null),
+        );
+        report_context = Some(Value::Object(object));
+    }
+
+    GatewaySyncReportRequest {
+        trace_id: trace_id.to_string(),
+        report_kind,
+        report_context,
+        status_code: upstream_status_code,
+        headers: provider_headers,
+        body_json: provider_body_json,
+        client_body_json,
+        body_base64: provider_body_base64,
+        telemetry,
+    }
+}
+
 fn record_stream_terminal_usage(
     state: &AppState,
     plan: &ExecutionPlan,
@@ -168,6 +220,55 @@ fn build_stream_body_capture(
         UsageBodyCaptureState::Inline
     });
     (body_base64, body_state)
+}
+
+fn wrap_non_json_binary_stream_error_for_client(
+    plan_kind: &str,
+    headers: &BTreeMap<String, String>,
+    error_body: &[u8],
+) -> Result<Option<Value>, GatewayError> {
+    let content_type = headers
+        .get("content-type")
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_default();
+    if content_type.starts_with("application/json") {
+        return Ok(None);
+    }
+
+    let body = match plan_kind {
+        GEMINI_FILES_DOWNLOAD_PLAN_KIND => json!({
+            "error": String::from_utf8_lossy(error_body).to_string(),
+        }),
+        OPENAI_VIDEO_CONTENT_PLAN_KIND => json!({
+            "error": {
+                "type": "upstream_error",
+                "message": "Video not available",
+            }
+        }),
+        _ => return Ok(None),
+    };
+    Ok(Some(body))
+}
+
+fn with_stream_error_trace_context(
+    report_context: Option<&Value>,
+    status_code: u16,
+    headers: &BTreeMap<String, String>,
+    response_text: Option<&str>,
+    local_failover_analysis: crate::orchestration::LocalFailoverAnalysis,
+) -> Option<Value> {
+    let upstream_context = with_upstream_response_report_context(
+        report_context,
+        status_code,
+        Some(headers),
+        None,
+        None,
+        None,
+    );
+    with_error_flow_report_context(
+        upstream_context.as_ref().or(report_context),
+        build_local_error_flow_metadata(status_code, response_text, local_failover_analysis),
+    )
 }
 
 #[allow(clippy::too_many_arguments)] // stream report payload assembly mirrors runtime state
@@ -1069,11 +1170,29 @@ async fn execute_stream_from_frame_stream(
     let stream_error_finalize_kind =
         resolve_core_stream_error_finalize_report_kind(plan_kind, status_code);
 
-    if status_code >= 400 {
-        let error_body = collect_error_body(&mut lines).await?;
-        let (body_json, body_base64) = decode_stream_error_body(&headers, &error_body);
+    if !(200..300).contains(&status_code) {
+        let provider_error_body = collect_error_body(&mut lines).await?;
+        let synthetic_body_json =
+            should_synthesize_non_success_stream_error_body(status_code, &provider_error_body)
+                .then(|| build_synthetic_non_success_stream_error_body(status_code, &headers));
+        let (provider_body_json, provider_body_base64) =
+            decode_stream_error_body(&headers, &provider_error_body);
+        let client_status_code = stream_client_error_status_code_for_upstream_status(status_code);
+        let wrapped_binary_body_json = wrap_non_json_binary_stream_error_for_client(
+            plan_kind,
+            &headers,
+            &provider_error_body,
+        )?;
+        let (client_body_json, client_error_body) =
+            if let Some(body_json) = synthetic_body_json.or(wrapped_binary_body_json) {
+                let body_bytes = serde_json::to_vec(&body_json)
+                    .map_err(|err| GatewayError::Internal(err.to_string()))?;
+                (Some(body_json), body_bytes)
+            } else {
+                (provider_body_json.clone(), provider_error_body.clone())
+            };
         let error_response_text =
-            local_failover_response_text(body_json.as_ref(), &error_body, None);
+            local_failover_response_text(client_body_json.as_ref(), &client_error_body, None);
         let failover_analysis = resolve_local_candidate_failover_analysis_stream(
             state,
             &plan,
@@ -1164,18 +1283,17 @@ async fn execute_stream_from_frame_stream(
         );
         if matches!(failover_decision, LocalFailoverDecision::RetryNextCandidate) {
             let terminal_unix_secs = current_request_candidate_unix_ms();
-            let error_flow_report_context = with_error_flow_report_context(
+            let error_trace_report_context = with_stream_error_trace_context(
                 report_context.as_ref(),
-                build_local_error_flow_metadata(
-                    status_code,
-                    error_response_text.as_deref(),
-                    failover_analysis,
-                ),
+                status_code,
+                &headers,
+                error_response_text.as_deref(),
+                failover_analysis,
             );
             record_local_request_candidate_status(
                 state,
                 &plan,
-                error_flow_report_context
+                error_trace_report_context
                     .as_ref()
                     .or(report_context.as_ref()),
                 SchedulerRequestCandidateStatusUpdate {
@@ -1215,18 +1333,17 @@ async fn execute_stream_from_frame_stream(
             )
         {
             let terminal_unix_secs = current_request_candidate_unix_ms();
-            let error_flow_report_context = with_error_flow_report_context(
+            let error_trace_report_context = with_stream_error_trace_context(
                 report_context.as_ref(),
-                build_local_error_flow_metadata(
-                    status_code,
-                    error_response_text.as_deref(),
-                    failover_analysis,
-                ),
+                status_code,
+                &headers,
+                error_response_text.as_deref(),
+                failover_analysis,
             );
             record_local_request_candidate_status(
                 state,
                 &plan,
-                error_flow_report_context
+                error_trace_report_context
                     .as_ref()
                     .or(report_context.as_ref()),
                 SchedulerRequestCandidateStatusUpdate {
@@ -1245,46 +1362,60 @@ async fn execute_stream_from_frame_stream(
             return Ok(None);
         }
 
-        let mut client_headers = headers.clone();
-        apply_endpoint_response_header_rules(state, &plan, &mut client_headers, body_json.as_ref())
-            .await?;
+        let mut client_headers = if (300..400).contains(&status_code) {
+            let mut headers = synthetic_error_response_headers(headers.clone());
+            headers.insert(
+                "x-aether-upstream-status".to_string(),
+                status_code.to_string(),
+            );
+            headers
+        } else {
+            headers.clone()
+        };
+        apply_endpoint_response_header_rules(
+            state,
+            &plan,
+            &mut client_headers,
+            client_body_json.as_ref(),
+        )
+        .await?;
 
-        let payload = build_stream_sync_payload(
+        let client_response_headers = client_headers.clone();
+        let error_trace_report_context = with_stream_error_trace_context(
+            report_context.as_ref(),
+            status_code,
+            &headers,
+            error_response_text.as_deref(),
+            failover_analysis,
+        );
+        let payload = build_stream_error_sync_payload(
             trace_id,
             stream_error_finalize_kind
                 .as_deref()
                 .or(report_kind.as_deref())
                 .unwrap_or_default()
                 .to_string(),
-            report_context,
+            error_trace_report_context.or(report_context),
             status_code,
+            headers.clone(),
+            provider_body_json,
+            provider_body_base64,
             client_headers,
-            body_json,
-            body_base64,
+            client_body_json,
             None,
         );
         record_sync_terminal_usage(state, &plan, payload.report_context.as_ref(), &payload);
         let terminal_unix_secs = current_request_candidate_unix_ms();
-        let error_flow_report_context = with_error_flow_report_context(
-            payload.report_context.as_ref(),
-            build_local_error_flow_metadata(
-                status_code,
-                error_response_text.as_deref(),
-                failover_analysis,
-            ),
-        );
         record_local_request_candidate_status(
             state,
             &plan,
-            error_flow_report_context
-                .as_ref()
-                .or(payload.report_context.as_ref()),
+            payload.report_context.as_ref(),
             SchedulerRequestCandidateStatusUpdate {
                 status: RequestCandidateStatus::Failed,
                 status_code: Some(status_code),
-                error_type: Some("execution_runtime_stream_error".to_string()),
+                error_type: Some("execution_runtime_stream_non_success_status".to_string()),
                 error_message: Some(format!(
-                    "execution runtime stream returned error status {status_code}"
+                    "execution runtime stream returned non-success status {status_code}"
                 )),
                 latency_ms: None,
                 started_at_unix_ms: Some(candidate_started_unix_secs),
@@ -1303,13 +1434,12 @@ async fn execute_stream_from_frame_stream(
             )?));
         }
         return Ok(Some(attach_control_metadata_headers(
-            build_execution_runtime_error_response(
+            build_client_response_from_parts(
+                client_status_code,
+                &client_response_headers,
+                Body::from(client_error_body),
                 trace_id,
-                decision,
-                plan_kind,
-                status_code,
-                payload.headers,
-                error_body,
+                Some(decision),
             )?,
             Some(request_id),
             candidate_id,
@@ -2746,7 +2876,9 @@ mod tests {
         ExecutionPlan, ExecutionStreamTerminalSummary, ExecutionTimeouts, RequestBody,
         StandardizedUsage,
     };
+    use aether_data::repository::candidates::InMemoryRequestCandidateRepository;
     use aether_data::repository::usage::InMemoryUsageReadRepository;
+    use aether_data_contracts::repository::candidates::RequestCandidateReadRepository;
     use aether_data_contracts::repository::usage::UsageReadRepository;
     use aether_usage_runtime::UsageRuntimeConfig;
     use async_stream::stream;
@@ -3063,9 +3195,15 @@ mod tests {
         });
 
         let usage_repository = Arc::new(InMemoryUsageReadRepository::default());
+        let request_candidate_repository = Arc::new(InMemoryRequestCandidateRepository::default());
         let state = AppState::new()
             .expect("app state should build")
-            .with_usage_data_repository_for_tests(Arc::clone(&usage_repository))
+            .with_data_state_for_tests(
+                crate::data::GatewayDataState::with_request_candidate_and_usage_repository_for_tests(
+                    Arc::clone(&request_candidate_repository),
+                    Arc::clone(&usage_repository),
+                ),
+            )
             .with_usage_runtime_for_tests(UsageRuntimeConfig {
                 enabled: true,
                 ..UsageRuntimeConfig::default()
@@ -3263,6 +3401,213 @@ mod tests {
         assert!(text.contains("event: response.output_text.delta"));
         assert!(text.contains("Hello from remote runtime sync json"));
         assert!(text.contains("event: response.completed"));
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn execute_execution_runtime_stream_rewrites_redirect_to_structured_failure() {
+        let listener = crate::test_support::bind_loopback_listener()
+            .await
+            .expect("listener should bind");
+        let addr = listener.local_addr().expect("local addr should resolve");
+        let server = tokio::spawn(async move {
+            let app = Router::new().route(
+                "/v1/execute/stream",
+                any(|_request: Request| async move {
+                    let frames = concat!(
+                        "{\"type\":\"headers\",\"payload\":{\"kind\":\"headers\",\"status_code\":302,\"headers\":{\"location\":\"/\",\"content-type\":\"text/html\",\"content-length\":\"0\"}}}\n",
+                        "{\"type\":\"eof\",\"payload\":{\"kind\":\"eof\"}}\n"
+                    );
+                    let mut response = axum::http::Response::new(Body::from(frames));
+                    response.headers_mut().insert(
+                        header::CONTENT_TYPE,
+                        HeaderValue::from_static("application/x-ndjson"),
+                    );
+                    response
+                }),
+            );
+            axum::serve(listener, app)
+                .await
+                .expect("server should start");
+        });
+
+        let usage_repository = Arc::new(InMemoryUsageReadRepository::default());
+        let request_candidate_repository = Arc::new(InMemoryRequestCandidateRepository::default());
+        let state = AppState::new()
+            .expect("app state should build")
+            .with_data_state_for_tests(
+                crate::data::GatewayDataState::with_request_candidate_and_usage_repository_for_tests(
+                    Arc::clone(&request_candidate_repository),
+                    Arc::clone(&usage_repository),
+                ),
+            )
+            .with_usage_runtime_for_tests(UsageRuntimeConfig {
+                enabled: true,
+                ..UsageRuntimeConfig::default()
+            })
+            .with_execution_runtime_override_base_url(format!("http://{addr}"));
+        let plan = ExecutionPlan {
+            request_id: "req-remote-runtime-stream-redirect".into(),
+            candidate_id: Some("cand-remote-runtime-stream-redirect".into()),
+            provider_name: Some("ChatGPTWeb".into()),
+            provider_id: "prov-redirect".into(),
+            endpoint_id: "ep-redirect".into(),
+            key_id: "key-redirect".into(),
+            method: "POST".into(),
+            url: "https://chatgpt.com/backend-api/codex/responses".into(),
+            headers: BTreeMap::from([
+                ("content-type".into(), "application/json".into()),
+                ("accept".into(), "text/event-stream".into()),
+            ]),
+            content_type: Some("application/json".into()),
+            content_encoding: None,
+            body: RequestBody::from_json(json!({
+                "model": "gpt-5.4",
+                "input": "hello",
+                "stream": true
+            })),
+            stream: true,
+            client_api_format: "gemini:generate_content".into(),
+            provider_api_format: "openai:responses".into(),
+            model_name: Some("gemini-3.1-flash-image-preview".into()),
+            proxy: None,
+            transport_profile: None,
+            timeouts: Some(ExecutionTimeouts {
+                connect_ms: Some(5_000),
+                total_ms: Some(5_000),
+                ..ExecutionTimeouts::default()
+            }),
+        };
+        let decision = GatewayControlDecision::synthetic(
+            "/v1beta/models/gemini-3.1-flash-image-preview:streamGenerateContent",
+            Some("ai_public".to_string()),
+            Some("gemini".to_string()),
+            Some("generate_content".to_string()),
+            Some("gemini:generate_content".to_string()),
+        )
+        .with_execution_runtime_candidate(true);
+
+        let response = execute_execution_runtime_stream(
+            &state,
+            plan,
+            "trace-remote-runtime-stream-redirect",
+            &decision,
+            "gemini_chat_stream",
+            None,
+            Some(json!({
+                "request_id": "req-remote-runtime-stream-redirect",
+                "candidate_id": "cand-remote-runtime-stream-redirect",
+                "candidate_index": 0,
+                "retry_index": 0,
+                "provider_api_format": "openai:responses",
+                "client_api_format": "gemini:generate_content",
+                "needs_conversion": true
+            })),
+        )
+        .await
+        .expect("execution should succeed")
+        .expect("execution should return a client response");
+
+        assert_eq!(response.status(), axum::http::StatusCode::BAD_GATEWAY);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-aether-upstream-status")
+                .and_then(|value| value.to_str().ok()),
+            Some("302")
+        );
+        assert!(
+            response.headers().get(header::LOCATION).is_none(),
+            "redirect location should not be forwarded to AI clients"
+        );
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should read");
+        let body_json: Value =
+            serde_json::from_slice(&body).expect("response body should decode as json");
+        assert_eq!(
+            body_json["error"]["type"],
+            json!("execution_runtime_non_success_status")
+        );
+        assert_eq!(body_json["error"]["upstream_status"], json!(302));
+        assert_eq!(body_json["error"]["location"], json!("/"));
+        assert!(body_json["error"]["message"]
+            .as_str()
+            .is_some_and(|value| value.contains("non-success status 302")));
+
+        let usage = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Some(usage) = usage_repository
+                    .find_by_request_id("req-remote-runtime-stream-redirect")
+                    .await
+                    .expect("usage should read")
+                    .filter(|usage| usage.status == "failed")
+                {
+                    break usage;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("usage should be written");
+
+        assert_eq!(usage.status_code, Some(302));
+        assert_eq!(usage.error_category.as_deref(), Some("redirect"));
+        assert!(usage
+            .error_message
+            .as_deref()
+            .is_some_and(|value| value.contains("non-success status 302")));
+        assert_eq!(
+            usage
+                .client_response_headers
+                .as_ref()
+                .and_then(|headers| headers.get("x-aether-upstream-status")),
+            Some(&json!("302"))
+        );
+        assert_eq!(
+            usage
+                .response_headers
+                .as_ref()
+                .and_then(|headers| headers.get("location")),
+            Some(&json!("/"))
+        );
+        assert!(
+            usage.response_body.is_none(),
+            "upstream redirect did not include a body"
+        );
+        assert_eq!(
+            usage
+                .client_response_body
+                .as_ref()
+                .and_then(|body| body.pointer("/error/upstream_status")),
+            Some(&json!(302))
+        );
+        let candidates = request_candidate_repository
+            .list_by_request_id("req-remote-runtime-stream-redirect")
+            .await
+            .expect("candidate trace should read");
+        let candidate_extra = candidates
+            .first()
+            .and_then(|candidate| candidate.extra_data.as_ref())
+            .expect("failed candidate extra_data should exist");
+        assert_eq!(
+            candidate_extra["upstream_response"]["status_code"],
+            json!(302)
+        );
+        assert_eq!(
+            candidate_extra["upstream_response"]["headers"]["location"],
+            json!("/")
+        );
+        assert!(candidate_extra["upstream_response"].get("body").is_none());
+        assert!(candidate_extra.get("client_response").is_none());
 
         server.abort();
     }

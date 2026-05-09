@@ -231,9 +231,7 @@ async fn gateway_background_video_task_poller_refreshes_due_openai_task_from_rep
         }]
     );
 
-    for handle in background_tasks {
-        handle.abort();
-    }
+    background_tasks.shutdown().await;
     execution_runtime_handle.abort();
 }
 
@@ -321,8 +319,6 @@ async fn gateway_background_video_task_poller_refreshes_due_openai_task_from_rep
         }]
     );
 
-    for handle in background_tasks {
-        handle.abort();
-    }
+    background_tasks.shutdown().await;
     upstream_handle.abort();
 }

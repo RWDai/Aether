@@ -9,7 +9,11 @@ use aether_ai_serving::{
 use aether_scheduler_core::{ClientSessionAffinity, SchedulerRankingOutcome};
 use serde_json::{Map, Value};
 
-use crate::ai_serving::{request_origin_from_headers, ExecutionRuntimeAuthContext, RequestOrigin};
+use crate::ai_serving::{
+    request_origin_from_headers, request_path_implies_stream_request, sanitize_request_path,
+    sanitize_request_path_and_query, sanitize_request_query_string, ExecutionRuntimeAuthContext,
+    RequestOrigin,
+};
 use crate::client_session_affinity::{
     client_session_affinity_report_context_value, CLIENT_SESSION_AFFINITY_REPORT_CONTEXT_FIELD,
 };
@@ -40,6 +44,8 @@ pub(crate) struct LocalExecutionReportContextParts<'a> {
     pub(crate) provider_request_method: Option<Value>,
     pub(crate) provider_request_headers: Option<&'a BTreeMap<String, String>>,
     pub(crate) original_headers: &'a http::HeaderMap,
+    pub(crate) request_path: Option<&'a str>,
+    pub(crate) request_query_string: Option<&'a str>,
     pub(crate) request_origin: Option<RequestOrigin>,
     pub(crate) original_request_body_json: Option<&'a Value>,
     pub(crate) original_request_body_base64: Option<&'a str>,
@@ -80,6 +86,15 @@ pub(crate) fn build_local_execution_report_context(
     {
         merge_incoming_tls_fingerprint(&mut extra_fields, incoming_tls);
     }
+    insert_request_path_fields(
+        &mut extra_fields,
+        parts.request_path,
+        parts.request_query_string,
+    );
+    let client_requested_stream = parts.client_requested_stream
+        || parts
+            .request_path
+            .is_some_and(request_path_implies_stream_request);
 
     build_ai_execution_report_context(AiExecutionReportContextParts {
         auth_context: parts.auth_context,
@@ -113,12 +128,36 @@ pub(crate) fn build_local_execution_report_context(
             client_ip,
             user_agent,
         },
-        client_requested_stream: parts.client_requested_stream,
+        client_requested_stream,
         upstream_is_stream: parts.upstream_is_stream,
         has_envelope: parts.has_envelope,
         needs_conversion: parts.needs_conversion,
         extra_fields,
     })
+}
+
+fn insert_request_path_fields(
+    extra_fields: &mut Map<String, Value>,
+    request_path: Option<&str>,
+    request_query_string: Option<&str>,
+) {
+    let Some(path) = request_path.and_then(sanitize_request_path) else {
+        return;
+    };
+    let query = request_query_string.and_then(sanitize_request_query_string);
+    let path_and_query = sanitize_request_path_and_query(path.as_str(), query.as_deref())
+        .unwrap_or_else(|| path.clone());
+    extra_fields
+        .entry("request_path".to_string())
+        .or_insert_with(|| Value::String(path.clone()));
+    if let Some(query) = query.clone() {
+        extra_fields
+            .entry("request_query_string".to_string())
+            .or_insert_with(|| Value::String(query.to_string()));
+    }
+    extra_fields
+        .entry("request_path_and_query".to_string())
+        .or_insert_with(|| Value::String(path_and_query));
 }
 
 pub(crate) fn provider_stream_event_api_format_for_provider_type(
@@ -226,6 +265,8 @@ mod tests {
                 provider_request_method: None,
                 provider_request_headers: Some(&provider_request_headers),
                 original_headers: &original_headers,
+                request_path: Some("/v1/chat/completions"),
+                request_query_string: Some("debug=true&limit=10"),
                 request_origin: Some(RequestOrigin {
                     client_ip: Some("203.0.113.8".to_string()),
                     user_agent: Some("Claude-Code/1.0".to_string()),
@@ -254,6 +295,77 @@ mod tests {
                 "client_family": "codex",
                 "session_key": "account=account-1;session=session-1"
             })
+        );
+        assert_eq!(report_context["request_path"], "/v1/chat/completions");
+        assert_eq!(report_context["request_query_string"], "limit=10");
+        assert_eq!(
+            report_context["request_path_and_query"],
+            "/v1/chat/completions?limit=10"
+        );
+    }
+
+    #[test]
+    fn local_execution_report_context_treats_stream_generate_content_path_as_client_stream() {
+        let auth_context = ExecutionRuntimeAuthContext {
+            user_id: "user-1".to_string(),
+            api_key_id: "api-key-1".to_string(),
+            username: None,
+            api_key_name: None,
+            balance_remaining: None,
+            access_allowed: true,
+            api_key_is_standalone: false,
+        };
+        let original_headers = http::HeaderMap::new();
+        let provider_request_headers = BTreeMap::new();
+
+        let report_context =
+            build_local_execution_report_context(LocalExecutionReportContextParts {
+                auth_context: &auth_context,
+                request_id: "trace-1",
+                candidate_id: "candidate-1",
+                attempt_identity: ExecutionAttemptIdentity::new(0, 0),
+                model: "gemini-3.1-flash-image-preview",
+                provider_name: "Gemini",
+                provider_id: "provider-1",
+                endpoint_id: "endpoint-1",
+                key_id: "key-1",
+                key_name: None,
+                model_id: None,
+                global_model_id: None,
+                global_model_name: None,
+                provider_api_format: "gemini:generate_content",
+                client_api_format: "gemini:generate_content",
+                mapped_model: None,
+                candidate_group_id: None,
+                ranking: None,
+                upstream_url: None,
+                header_rules: None,
+                body_rules: None,
+                provider_request_method: None,
+                provider_request_headers: Some(&provider_request_headers),
+                original_headers: &original_headers,
+                request_path: Some(
+                    "/v1beta/models/gemini-3.1-flash-image-preview:streamGenerateContent",
+                ),
+                request_query_string: Some("key=secret&alt=sse"),
+                request_origin: None,
+                original_request_body_json: Some(&json!({
+                    "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
+                })),
+                original_request_body_base64: None,
+                client_session_affinity: None,
+                client_requested_stream: false,
+                upstream_is_stream: true,
+                has_envelope: false,
+                needs_conversion: false,
+                extra_fields: Map::new(),
+            });
+
+        assert_eq!(report_context["client_requested_stream"], true);
+        assert_eq!(report_context["request_query_string"], "alt=sse");
+        assert_eq!(
+            report_context["request_path_and_query"],
+            "/v1beta/models/gemini-3.1-flash-image-preview:streamGenerateContent?alt=sse"
         );
     }
 
@@ -300,6 +412,8 @@ mod tests {
                 provider_request_method: None,
                 provider_request_headers: Some(&provider_request_headers),
                 original_headers: &original_headers,
+                request_path: None,
+                request_query_string: None,
                 request_origin: None,
                 original_request_body_json: Some(&json!({"model": "gpt-5"})),
                 original_request_body_base64: None,

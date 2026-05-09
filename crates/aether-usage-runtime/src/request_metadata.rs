@@ -1,3 +1,6 @@
+use aether_ai_formats::api::{
+    sanitize_request_path, sanitize_request_path_and_query, sanitize_request_query_string,
+};
 use aether_contracts::ExecutionPlan;
 use serde_json::{json, Map, Value};
 
@@ -72,9 +75,13 @@ fn copy_allowed_metadata_fields(source: &Map<String, Value>, target: &mut Map<St
     copy_bool(source, target, "client_requested_stream");
     copy_bool(source, target, "upstream_is_stream");
     copy_bool(source, target, "api_key_is_standalone");
+    copy_non_empty_string(source, target, "request_path");
+    copy_non_empty_string(source, target, "request_query_string");
+    copy_non_empty_string(source, target, "request_path_and_query");
     copy_number(source, target, "provider_request_body_base64_bytes");
     copy_number(source, target, "provider_response_body_base64_bytes");
     copy_number(source, target, "client_response_body_base64_bytes");
+    copy_number(source, target, "client_response_status_code");
     copy_non_null_value(source, target, "billing_snapshot");
     copy_non_empty_string(source, target, "billing_snapshot_schema_version");
     copy_non_empty_string(source, target, "billing_snapshot_status");
@@ -96,6 +103,7 @@ fn copy_allowed_metadata_fields(source: &Map<String, Value>, target: &mut Map<St
     copy_number(source, target, "cache_read_price_per_1m");
     copy_number(source, target, "price_per_request");
     copy_non_null_value(source, target, "proxy");
+    sanitize_request_path_metadata_fields(target);
 }
 
 fn move_allowed_metadata_fields(mut source: Map<String, Value>, target: &mut Map<String, Value>) {
@@ -105,9 +113,13 @@ fn move_allowed_metadata_fields(mut source: Map<String, Value>, target: &mut Map
     remove_bool(&mut source, target, "client_requested_stream");
     remove_bool(&mut source, target, "upstream_is_stream");
     remove_bool(&mut source, target, "api_key_is_standalone");
+    remove_non_empty_string(&mut source, target, "request_path");
+    remove_non_empty_string(&mut source, target, "request_query_string");
+    remove_non_empty_string(&mut source, target, "request_path_and_query");
     remove_number(&mut source, target, "provider_request_body_base64_bytes");
     remove_number(&mut source, target, "provider_response_body_base64_bytes");
     remove_number(&mut source, target, "client_response_body_base64_bytes");
+    remove_number(&mut source, target, "client_response_status_code");
     remove_non_null_value(&mut source, target, "billing_snapshot");
     remove_non_empty_string(&mut source, target, "billing_snapshot_schema_version");
     remove_non_empty_string(&mut source, target, "billing_snapshot_status");
@@ -129,6 +141,38 @@ fn move_allowed_metadata_fields(mut source: Map<String, Value>, target: &mut Map
     remove_number(&mut source, target, "cache_read_price_per_1m");
     remove_number(&mut source, target, "price_per_request");
     remove_non_null_value(&mut source, target, "proxy");
+    sanitize_request_path_metadata_fields(target);
+}
+
+fn sanitize_request_path_metadata_fields(target: &mut Map<String, Value>) {
+    let path = target
+        .get("request_path")
+        .and_then(Value::as_str)
+        .and_then(sanitize_request_path);
+    let query = target
+        .get("request_query_string")
+        .and_then(Value::as_str)
+        .and_then(sanitize_request_query_string);
+    let path_and_query = target
+        .get("request_path_and_query")
+        .and_then(Value::as_str)
+        .and_then(|value| sanitize_request_path_and_query(value, None))
+        .or_else(|| {
+            path.as_deref()
+                .and_then(|path| sanitize_request_path_and_query(path, query.as_deref()))
+        });
+
+    apply_optional_string_field(target, "request_path", path.as_deref());
+    apply_optional_string_field(target, "request_query_string", query.as_deref());
+    apply_optional_string_field(target, "request_path_and_query", path_and_query.as_deref());
+}
+
+fn apply_optional_string_field(target: &mut Map<String, Value>, key: &str, value: Option<&str>) {
+    if let Some(value) = value {
+        target.insert(key.to_string(), Value::String(value.to_string()));
+    } else {
+        target.remove(key);
+    }
 }
 
 fn copy_non_empty_string(source: &Map<String, Value>, target: &mut Map<String, Value>, key: &str) {
@@ -447,6 +491,25 @@ mod tests {
                 "cache_creation_price_per_1m": 3.75,
                 "cache_read_price_per_1m": 0.3,
                 "price_per_request": 0.02
+            })
+        );
+    }
+
+    #[test]
+    fn sanitizes_request_path_query_metadata() {
+        let metadata = sanitize_usage_request_metadata(Some(json!({
+            "request_path": "/v1beta/models/gemini-2.5-pro:streamGenerateContent?key=secret",
+            "request_query_string": "key=secret&alt=sse&pageSize=10&token=hidden",
+            "request_path_and_query": "/v1beta/models/gemini-2.5-pro:streamGenerateContent?key=secret&alt=sse&pageSize=10&token=hidden",
+        })))
+        .expect("metadata should remain");
+
+        assert_eq!(
+            metadata,
+            json!({
+                "request_path": "/v1beta/models/gemini-2.5-pro:streamGenerateContent",
+                "request_query_string": "alt=sse&pageSize=10",
+                "request_path_and_query": "/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse&pageSize=10",
             })
         );
     }

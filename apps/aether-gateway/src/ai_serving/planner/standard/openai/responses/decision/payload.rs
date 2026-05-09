@@ -105,6 +105,8 @@ pub(crate) async fn maybe_build_local_openai_responses_decision_payload_for_cand
                 provider_request_method: Some(serde_json::Value::Null),
                 provider_request_headers: Some(&resolved.provider_request_headers),
                 original_headers: &parts.headers,
+                request_path: Some(parts.uri.path()),
+                request_query_string: parts.uri.query(),
                 request_origin: Some(crate::ai_serving::request_origin_from_parts(parts)),
                 original_request_body_json: Some(body_json),
                 original_request_body_base64: None,

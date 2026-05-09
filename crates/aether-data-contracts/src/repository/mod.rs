@@ -1,3 +1,4 @@
+pub mod background_tasks;
 pub mod billing;
 pub mod candidate_selection;
 pub mod candidates;

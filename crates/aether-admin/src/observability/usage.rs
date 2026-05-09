@@ -1,4 +1,5 @@
 use crate::observability::stats::{aggregate_usage_stats, parse_bounded_u32, round_to};
+use aether_ai_formats::api::request_path_implies_stream_request;
 use aether_billing::{
     normalize_input_tokens_for_billing, normalize_total_input_context_for_cache_hit_rate,
 };
@@ -227,7 +228,9 @@ pub fn admin_usage_matches_api_format(
 }
 
 pub fn admin_usage_is_failed(item: &StoredRequestUsageAudit) -> bool {
-    let has_failure_signal = item.status_code.is_some_and(|value| value >= 400)
+    let has_failure_signal = item
+        .status_code
+        .is_some_and(|value| !(200..300).contains(&value))
         || item
             .error_message
             .as_deref()
@@ -256,7 +259,9 @@ pub fn admin_usage_matches_status(item: &StoredRequestUsageAudit, status: Option
         "stream" => item.is_stream,
         "standard" => !item.is_stream,
         "error" => {
-            item.status_code.is_some_and(|value| value >= 400) || item.error_message.is_some()
+            item.status_code
+                .is_some_and(|value| !(200..300).contains(&value))
+                || item.error_message.is_some()
         }
         "pending" | "streaming" | "completed" | "cancelled" => item.status == status,
         "failed" => admin_usage_is_failed(item),
@@ -955,12 +960,26 @@ fn admin_usage_infer_upstream_stream_from_captured_bodies(
     }
 }
 
+fn admin_usage_request_path_implies_client_stream(item: &StoredRequestUsageAudit) -> bool {
+    let Some(metadata) = item.request_metadata.as_ref().and_then(Value::as_object) else {
+        return false;
+    };
+    ["request_path", "request_path_and_query"]
+        .into_iter()
+        .filter_map(|field| metadata.get(field).and_then(Value::as_str))
+        .any(request_path_implies_stream_request)
+}
+
 pub fn admin_usage_client_is_stream(item: &StoredRequestUsageAudit) -> bool {
-    item.request_metadata
-        .as_ref()
-        .and_then(Value::as_object)
-        .and_then(|metadata| metadata.get("client_requested_stream"))
-        .and_then(Value::as_bool)
+    admin_usage_request_path_implies_client_stream(item)
+        .then_some(true)
+        .or_else(|| {
+            item.request_metadata
+                .as_ref()
+                .and_then(Value::as_object)
+                .and_then(|metadata| metadata.get("client_requested_stream"))
+                .and_then(Value::as_bool)
+        })
         .or_else(|| admin_usage_request_body_stream_flag(item))
         .or_else(|| admin_usage_headers_stream_flag(item.client_response_headers.as_ref()))
         .or_else(|| admin_usage_request_body_implies_default_non_stream(item).then_some(false))
@@ -1669,7 +1688,9 @@ pub fn admin_usage_is_success(item: &StoredRequestUsageAudit) -> bool {
     matches!(
         item.status.as_str(),
         "completed" | "success" | "ok" | "billed" | "settled"
-    ) && item.status_code.is_none_or(|code| code < 400)
+    ) && item
+        .status_code
+        .is_none_or(|code| (200..300).contains(&code))
 }
 
 pub fn admin_usage_matches_optional_id(value: Option<&str>, expected: Option<&str>) -> bool {
@@ -2268,10 +2289,10 @@ mod tests {
 
     use super::{
         admin_usage_active_request_json, admin_usage_client_is_stream, admin_usage_has_body_value,
-        admin_usage_has_fallback, admin_usage_is_failed, admin_usage_matches_search,
-        admin_usage_matches_status, admin_usage_matches_username, admin_usage_record_json,
-        admin_usage_resolve_request_capture_body, admin_usage_upstream_is_stream,
-        build_admin_usage_detail_payload,
+        admin_usage_has_fallback, admin_usage_is_failed, admin_usage_is_success,
+        admin_usage_matches_search, admin_usage_matches_status, admin_usage_matches_username,
+        admin_usage_record_json, admin_usage_resolve_request_capture_body,
+        admin_usage_upstream_is_stream, build_admin_usage_detail_payload,
     };
     use aether_data_contracts::repository::usage::{StoredRequestUsageAudit, UsageBodyField};
 
@@ -2357,6 +2378,33 @@ mod tests {
         assert_eq!(record["upstream_is_stream"], true);
         assert_eq!(record["client_requested_stream"], false);
         assert_eq!(record["client_is_stream"], false);
+    }
+
+    #[test]
+    fn client_requested_stream_uses_stream_generate_content_path_over_stale_metadata_flag() {
+        let item = StoredRequestUsageAudit {
+            is_stream: true,
+            request_metadata: Some(json!({
+                "client_requested_stream": false,
+                "request_path": "/v1beta/models/gemini-3.1-flash-image-preview:streamGenerateContent",
+                "request_path_and_query": "/v1beta/models/gemini-3.1-flash-image-preview:streamGenerateContent?alt=sse"
+            })),
+            ..sample_usage("completed", Some(200), None)
+        };
+
+        assert!(admin_usage_client_is_stream(&item));
+
+        let record = admin_usage_record_json(
+            &item,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            false,
+            false,
+            None,
+        );
+        assert_eq!(record["upstream_is_stream"], true);
+        assert_eq!(record["client_requested_stream"], true);
+        assert_eq!(record["client_is_stream"], true);
     }
 
     #[test]
@@ -2536,6 +2584,30 @@ mod tests {
         };
         assert!(admin_usage_is_failed(&item));
         assert!(admin_usage_matches_status(&item, Some("failed")));
+    }
+
+    #[test]
+    fn redirect_status_is_not_admin_usage_success() {
+        let item = sample_usage("completed", Some(302), None);
+
+        assert!(!admin_usage_is_success(&item));
+        assert!(!admin_usage_is_failed(&item));
+        assert!(admin_usage_matches_status(&item, Some("error")));
+        assert!(admin_usage_matches_status(&item, Some("completed")));
+    }
+
+    #[test]
+    fn failed_redirect_status_counts_as_admin_usage_failed() {
+        let item = sample_usage(
+            "failed",
+            Some(302),
+            Some("execution runtime stream returned non-success status 302"),
+        );
+
+        assert!(admin_usage_is_failed(&item));
+        assert!(admin_usage_matches_status(&item, Some("failed")));
+        assert!(admin_usage_matches_status(&item, Some("error")));
+        assert!(!admin_usage_is_success(&item));
     }
 
     #[test]

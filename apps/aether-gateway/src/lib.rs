@@ -58,6 +58,7 @@ mod router;
 mod scheduler;
 mod state;
 mod system_features;
+mod task_runtime;
 mod tunnel;
 mod usage;
 mod video_tasks;

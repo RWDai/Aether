@@ -34,6 +34,8 @@ impl GatewayDataState {
                 proxy_node_reader: None,
                 proxy_node_writer: None,
                 billing_reader: None,
+                background_task_reader: None,
+                background_task_writer: None,
                 gemini_file_mapping_reader: None,
                 gemini_file_mapping_writer: None,
                 global_model_reader: None,
@@ -73,6 +75,8 @@ impl GatewayDataState {
         let proxy_node_reader = backends.read().proxy_nodes();
         let proxy_node_writer = backends.write().proxy_nodes();
         let billing_reader = backends.read().billing();
+        let background_task_reader = backends.read().background_tasks();
+        let background_task_writer = backends.write().background_tasks();
         let gemini_file_mapping_reader = backends.read().gemini_file_mappings();
         let global_model_reader = backends.read().global_models();
         let global_model_writer = backends.write().global_models();
@@ -110,6 +114,8 @@ impl GatewayDataState {
             proxy_node_reader,
             proxy_node_writer,
             billing_reader,
+            background_task_reader,
+            background_task_writer,
             gemini_file_mapping_reader,
             gemini_file_mapping_writer,
             global_model_reader,
@@ -195,6 +201,14 @@ impl GatewayDataState {
 
     pub(crate) fn has_announcement_writer(&self) -> bool {
         self.announcement_writer.is_some()
+    }
+
+    pub(crate) fn has_background_task_reader(&self) -> bool {
+        self.background_task_reader.is_some()
+    }
+
+    pub(crate) fn has_background_task_writer(&self) -> bool {
+        self.background_task_writer.is_some()
     }
 
     pub(crate) fn has_audit_log_reader(&self) -> bool {
@@ -444,6 +458,16 @@ impl GatewayDataState {
         }
         match self.backends.as_ref() {
             Some(backends) => backends.purge_admin_system_data(target).await,
+            None => Ok(aether_data::repository::system::AdminSystemPurgeSummary::default()),
+        }
+    }
+
+    pub(crate) async fn purge_admin_request_bodies_batch(
+        &self,
+        batch_size: usize,
+    ) -> Result<aether_data::repository::system::AdminSystemPurgeSummary, DataLayerError> {
+        match self.backends.as_ref() {
+            Some(backends) => backends.purge_admin_request_bodies_batch(batch_size).await,
             None => Ok(aether_data::repository::system::AdminSystemPurgeSummary::default()),
         }
     }

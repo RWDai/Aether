@@ -69,15 +69,47 @@ pub fn build_gemini_content_url(
     } else {
         "generateContent"
     };
-    let mut url = if trimmed_base_url.ends_with("/v1beta") {
+    let mut url = if trimmed_base_url.ends_with("/v1") || trimmed_base_url.ends_with("/v1beta") {
         format!("{trimmed_base_url}/models/{trimmed_model}:{operation}")
-    } else if trimmed_base_url.contains("/v1beta/models/") {
+    } else if gemini_content_base_url_contains_model_path(trimmed_base_url) {
+        let trimmed_base_url = strip_gemini_content_action(trimmed_base_url);
         format!("{trimmed_base_url}:{operation}")
     } else {
         format!("{trimmed_base_url}/v1beta/models/{trimmed_model}:{operation}")
     };
     append_merged_query(&mut url, base_query, None, query, &["key"]);
     Some(url)
+}
+
+pub fn normalize_gemini_content_action_path(path: &str, stream: bool) -> String {
+    let trimmed = path.trim();
+    let (path, query) = split_path_query(trimmed);
+    let action = if stream {
+        "streamGenerateContent"
+    } else {
+        "generateContent"
+    };
+    let normalized = strip_gemini_content_action(path);
+    let normalized = if normalized.len() == path.len() {
+        path.to_string()
+    } else {
+        format!("{normalized}:{action}")
+    };
+    match query {
+        Some(query) => format!("{normalized}?{query}"),
+        None => normalized,
+    }
+}
+
+fn strip_gemini_content_action(value: &str) -> &str {
+    value
+        .strip_suffix(":streamGenerateContent")
+        .or_else(|| value.strip_suffix(":generateContent"))
+        .unwrap_or(value)
+}
+
+fn gemini_content_base_url_contains_model_path(value: &str) -> bool {
+    value.contains("/v1/models/") || value.contains("/v1beta/models/")
 }
 
 pub fn build_gemini_video_predict_long_running_url(
@@ -92,9 +124,9 @@ pub fn build_gemini_video_predict_long_running_url(
         return None;
     }
 
-    let mut url = if trimmed_base_url.ends_with("/v1beta") {
+    let mut url = if trimmed_base_url.ends_with("/v1") || trimmed_base_url.ends_with("/v1beta") {
         format!("{trimmed_base_url}/models/{trimmed_model}:predictLongRunning")
-    } else if trimmed_base_url.contains("/v1beta/models/") {
+    } else if gemini_content_base_url_contains_model_path(trimmed_base_url) {
         format!("{trimmed_base_url}:predictLongRunning")
     } else {
         format!("{trimmed_base_url}/v1beta/models/{trimmed_model}:predictLongRunning")
@@ -248,6 +280,7 @@ mod tests {
         build_gemini_content_url, build_gemini_files_passthrough_url,
         build_gemini_video_predict_long_running_url, build_openai_chat_url,
         build_openai_responses_url, build_passthrough_path_url,
+        normalize_gemini_content_action_path,
     };
 
     #[test]
@@ -286,6 +319,64 @@ mod tests {
             Some(
                 "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse&foo=bar"
             )
+        );
+    }
+
+    #[test]
+    fn gemini_content_urls_rewrite_existing_base_action_for_stream_mode() {
+        assert_eq!(
+            build_gemini_content_url(
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent",
+                "ignored-model",
+                true,
+                Some("foo=bar")
+            )
+            .as_deref(),
+            Some(
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:streamGenerateContent?foo=bar"
+            )
+        );
+        assert_eq!(
+            build_gemini_content_url(
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:streamGenerateContent",
+                "ignored-model",
+                false,
+                Some("foo=bar")
+            )
+            .as_deref(),
+            Some(
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?foo=bar"
+            )
+        );
+        assert_eq!(
+            build_gemini_content_url(
+                "https://generativelanguage.googleapis.com/v1/models/gemini-2.5-pro:generateContent",
+                "ignored-model",
+                true,
+                Some("foo=bar")
+            )
+            .as_deref(),
+            Some(
+                "https://generativelanguage.googleapis.com/v1/models/gemini-2.5-pro:streamGenerateContent?foo=bar"
+            )
+        );
+    }
+
+    #[test]
+    fn normalizes_gemini_content_action_in_custom_paths() {
+        assert_eq!(
+            normalize_gemini_content_action_path(
+                "/v1beta/models/gemini-2.5-pro:generateContent?alt=sse",
+                true
+            ),
+            "/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse"
+        );
+        assert_eq!(
+            normalize_gemini_content_action_path(
+                "/v1beta/models/gemini-2.5-pro:streamGenerateContent",
+                false
+            ),
+            "/v1beta/models/gemini-2.5-pro:generateContent"
         );
     }
 

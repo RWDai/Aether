@@ -539,8 +539,6 @@ async fn gateway_background_model_fetch_updates_key_and_syncs_provider_model_whi
         .expect("execution runtime plan should be captured");
     assert_eq!(seen_plan.url, "https://api.openai.example/v1/models");
 
-    for handle in background_tasks {
-        handle.abort();
-    }
+    background_tasks.shutdown().await;
     execution_runtime_handle.abort();
 }

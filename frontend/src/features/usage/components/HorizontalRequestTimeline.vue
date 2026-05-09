@@ -492,38 +492,42 @@
                   </span>
                 </div>
 
-                <!-- 真实请求错误：节点级调试原因，和对客户端返回的摘要分开 -->
+                <!-- 错误信息：真实上游响应合并在此处展示 -->
                 <div
                   v-if="currentAttempt.status === 'failed' && currentAttemptRequestError"
                   class="error-block"
                 >
-                  <div class="error-type">
-                    真实请求错误
+                  <div class="error-heading">
+                    <span class="error-type">错误信息</span>
+                    <span
+                      v-if="currentAttemptRequestError.statusCode != null"
+                      class="error-status-badge"
+                      :class="currentAttemptRequestError.statusCode >= 400 ? 'is-error' : currentAttemptRequestError.statusCode >= 300 ? 'is-warning' : 'is-success'"
+                    >
+                      HTTP {{ currentAttemptRequestError.statusCode }}
+                    </span>
                   </div>
-                  <div class="error-msg">
+                  <div
+                    v-if="currentAttemptRequestError.message"
+                    class="error-msg"
+                  >
                     {{ currentAttemptRequestError.message }}
                   </div>
                   <div
-                    v-if="currentAttemptRequestError.meta.length > 0"
-                    class="error-flow-meta"
+                    v-if="currentAttemptRequestError.upstreamResponse"
+                    class="error-json"
                   >
-                    <span
-                      v-for="item in currentAttemptRequestError.meta"
-                      :key="item"
-                      class="error-flow-chip"
-                    >{{ item }}</span>
-                  </div>
-                  <div
-                    v-if="currentAttemptRequestError.safetyHint"
-                    class="error-flow-safety"
-                  >
-                    {{ currentAttemptRequestError.safetyHint }}
+                    <JsonContentPanel
+                      :data="currentAttemptRequestError.upstreamResponse"
+                      :is-dark="isDark"
+                      empty-message="无上游响应信息"
+                    />
                   </div>
                 </div>
 
                 <!-- 额外数据 -->
                 <details
-                  v-if="currentAttempt.extra_data && Object.keys(currentAttempt.extra_data).length > 0"
+                  v-if="currentAttemptExtraDataDisplay"
                   class="extra-block"
                 >
                   <summary class="extra-toggle">
@@ -531,7 +535,7 @@
                   </summary>
                   <JsonContentPanel
                     class="extra-json-panel"
-                    :data="currentAttempt.extra_data"
+                    :data="currentAttemptExtraDataDisplay"
                     :is-dark="isDark"
                     empty-message="无额外信息"
                   />
@@ -569,6 +573,7 @@ import { requestTraceApi, type RequestTrace, type CandidateRecord, type ImagePro
 import { log } from '@/utils/logger'
 import { parseApiError } from '@/utils/errorParser'
 import { formatApiFormat } from '@/api/endpoints/types/api-format'
+import { useDarkMode } from '@/composables/useDarkMode'
 import { resolveTimelineFinalStatus } from '../utils/status'
 import {
   buildPoolGroupVisibleAttempts,
@@ -618,17 +623,6 @@ interface UsageData {
     cache_read?: number
     per_request?: number
   }
-}
-
-interface AttemptErrorFlow {
-  source?: string
-  statusCode?: number
-  classification?: string
-  decision?: string
-  retryable?: boolean
-  safeToExpose?: boolean
-  propagation?: string
-  message?: string
 }
 
 const props = defineProps<{
@@ -710,7 +704,7 @@ const getFinalStatusBadgeVariant = (status: string): BadgeVariant => {
 const loading = ref(false)
 const error = ref<string | null>(null)
 const internalTrace = ref<RequestTrace | null>(null)
-const isDark = computed(() => document.documentElement.classList.contains('dark'))
+const { isDark } = useDarkMode()
 const trace = computed(() => props.traceData ?? internalTrace.value)
 const selectedGroupIndex = ref(0)
 const selectedAttemptIndex = ref(0)
@@ -1133,9 +1127,11 @@ const readNumberField = (obj: Record<string, unknown>, key: string): number | un
   return undefined
 }
 
-const readBooleanField = (obj: Record<string, unknown>, key: string): boolean | undefined => {
-  const value = obj[key]
-  return typeof value === 'boolean' ? value : undefined
+const hasRenderableValue = (value: unknown): boolean => {
+  if (value == null) return false
+  if (typeof value === 'string') return value.trim().length > 0
+  if (typeof value === 'object') return Object.keys(value as Record<string, unknown>).length > 0
+  return true
 }
 
 const normalizeImageProgress = (value: unknown): ImageProgress | null => {
@@ -1244,59 +1240,34 @@ watch(
   { immediate: true },
 )
 
-const normalizeAttemptErrorFlow = (value: unknown): AttemptErrorFlow | null => {
+const normalizeUpstreamResponseDisplay = (value: unknown): Record<string, unknown> | null => {
   const raw = extractObject(value)
   if (!raw) return null
+  const statusCode = readNumberField(raw, 'status_code') ?? readNumberField(raw, 'statusCode')
+  const headers = raw.headers
+  const body = raw.body
+  const bodyRef = readStringField(raw, 'body_ref') ?? readStringField(raw, 'bodyRef')
+  const bodyState = readStringField(raw, 'body_state') ?? readStringField(raw, 'bodyState')
 
-  const flow: AttemptErrorFlow = {
-    source: readStringField(raw, 'source'),
-    statusCode: readNumberField(raw, 'status_code') ?? readNumberField(raw, 'statusCode'),
-    classification: readStringField(raw, 'classification'),
-    decision: readStringField(raw, 'decision'),
-    retryable: readBooleanField(raw, 'retryable'),
-    safeToExpose: readBooleanField(raw, 'safe_to_expose') ?? readBooleanField(raw, 'safeToExpose'),
-    propagation: readStringField(raw, 'propagation'),
-    message: readStringField(raw, 'message'),
+  if (
+    statusCode == null &&
+    !hasRenderableValue(headers) &&
+    !hasRenderableValue(body) &&
+    !bodyRef &&
+    !bodyState
+  ) {
+    return null
   }
 
-  return Object.values(flow).some(value => value !== undefined) ? flow : null
+  const data: Record<string, unknown> = {}
+  if (statusCode != null) data.status_code = statusCode
+  if (hasRenderableValue(headers)) data.headers = headers
+  if (hasRenderableValue(body)) data.body = body
+  if (bodyRef) data.body_ref = bodyRef
+  if (bodyState) data.body_state = bodyState
+
+  return data
 }
-
-const labelFromMap = (value: string | undefined, labels: Record<string, string>): string | undefined => {
-  if (!value) return undefined
-  return labels[value] || value
-}
-
-const formatErrorFlowSource = (value?: string): string | undefined => labelFromMap(value, {
-  upstream_response: '上游响应',
-  request_validation: '请求校验',
-  gateway: '网关处理',
-  transport: '传输层',
-  scheduler: '调度层',
-})
-
-const formatErrorFlowDecision = (value?: string): string | undefined => labelFromMap(value, {
-  retry_next_candidate: '重试下一个候选',
-  stop_local_failover: '停止本地转移',
-  use_default: '默认处理',
-  return_to_client: '返回客户端',
-})
-
-const formatErrorFlowPropagation = (value?: string): string | undefined => labelFromMap(value, {
-  suppressed: '已抑制',
-  converted: '已转换',
-  passthrough: '直接透传',
-  local: '本地生成',
-  captured: '仅采集',
-})
-
-const formatErrorFlowClassification = (value?: string): string | undefined => labelFromMap(value, {
-  retryable: '可重试',
-  terminal: '终止',
-  provider_auth: '上游认证',
-  provider_quota: '上游额度',
-  invalid_request: '请求无效',
-})
 
 const extractStringList = (value: unknown): string[] => {
   if (Array.isArray(value)) {
@@ -1390,6 +1361,9 @@ const currentAttemptRequestPathDisplay = computed(() => {
   const fromAttempt = resolveRequestPathFromObject(attempt?.extra_data)
   if (fromAttempt) return fromAttempt
 
+  const fromTrace = resolveRequestPathFromObject(trace.value)
+  if (fromTrace) return fromTrace
+
   const fromRequestMetadata = resolveRequestPathFromObject(props.requestMetadata)
   if (fromRequestMetadata) return fromRequestMetadata
 
@@ -1456,43 +1430,62 @@ const currentAttemptFailureDiagnostic = computed<{
   }
 })
 
+const formatAttemptErrorMessage = (message: string, statusCode?: number): string => {
+  const normalized = message.trim()
+  if (!normalized) return ''
+  if (/execution runtime (stream )?returned non-success status \d+/i.test(normalized)) {
+    return statusCode != null ? `上游返回非成功状态 ${statusCode}` : '上游返回非成功状态'
+  }
+  return normalized
+}
+
 const currentAttemptRequestError = computed<{
   message: string
-  meta: string[]
-  safetyHint: string
+  statusCode?: number
+  upstreamResponse: Record<string, unknown> | null
 } | null>(() => {
   const attempt = currentAttempt.value
   if (!attempt || attempt.status !== 'failed') return null
 
   const extra = extractObject(attempt.extra_data)
-  const flow = normalizeAttemptErrorFlow(extra?.error_flow)
+  const upstreamResponse = extractObject(extra?.upstream_response)
+  const errorFlow = extractObject(extra?.error_flow)
+  const statusCode = readNumberField(upstreamResponse ?? {}, 'status_code')
+    ?? readNumberField(upstreamResponse ?? {}, 'statusCode')
+    ?? readNumberField(errorFlow ?? {}, 'status_code')
+    ?? readNumberField(errorFlow ?? {}, 'statusCode')
+    ?? attempt.status_code
+  const flowMessage = errorFlow
+    ? readStringField(errorFlow, 'message')
+    : ''
   const fallbackMessage = typeof attempt.error_message === 'string' && attempt.error_message.trim()
     ? attempt.error_message.trim()
     : ''
   const fallbackType = typeof attempt.error_type === 'string' && attempt.error_type.trim()
     ? attempt.error_type.trim()
     : ''
-  const message = flow?.message || fallbackMessage
-  if (!message && !fallbackType && !flow) return null
-
-  const meta = [
-    flow?.statusCode != null ? `HTTP ${flow.statusCode}` : (attempt.status_code ? `HTTP ${attempt.status_code}` : ''),
-    formatErrorFlowSource(flow?.source),
-    formatErrorFlowClassification(flow?.classification) || fallbackType,
-    formatErrorFlowDecision(flow?.decision),
-    formatErrorFlowPropagation(flow?.propagation),
-    flow?.retryable != null ? (flow.retryable ? '会继续重试' : '不再重试') : '',
-  ].filter((item): item is string => Boolean(item))
-
-  const safetyHint = flow?.safeToExpose === false
-    ? '该错误被标记为敏感上游错误：仅在链路节点展示，不应完整返回给客户端。'
-    : ''
+  const message = formatAttemptErrorMessage(flowMessage || fallbackMessage, statusCode) || fallbackType
+  const upstreamResponseDisplay = normalizeUpstreamResponseDisplay(extra?.upstream_response)
+  if (!message && statusCode == null && !upstreamResponseDisplay) return null
 
   return {
-    message: message || fallbackType || '未知错误',
-    meta,
-    safetyHint,
+    message: upstreamResponseDisplay ? '' : (message || '未知错误'),
+    statusCode,
+    upstreamResponse: upstreamResponseDisplay,
   }
+})
+
+const currentAttemptExtraDataDisplay = computed<Record<string, unknown> | null>(() => {
+  const extra = extractObject(currentAttempt.value?.extra_data)
+  if (!extra) return null
+
+  const display = { ...extra }
+  delete display.upstream_response
+  delete display.error_flow
+  delete display.client_response
+  delete display.provider_response
+
+  return Object.keys(display).length > 0 ? display : null
 })
 
 // 计算当前尝试启用的能力标签（请求需要的能力）
@@ -2830,13 +2823,45 @@ function getDisplayStatus(attempt: CandidateRecord | null | undefined): string {
   border-radius: 8px;
 }
 
+.error-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.25rem;
+}
+
 .error-type {
   font-size: 0.75rem;
   font-weight: 600;
   color: #ef4444;
-  margin-bottom: 0.25rem;
   text-transform: uppercase;
   letter-spacing: 0.025em;
+}
+
+.error-status-badge {
+  flex-shrink: 0;
+  padding: 0.125rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-family: ui-monospace, monospace;
+  background: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+}
+
+.error-status-badge.is-success {
+  color: #166534;
+  background: #22c55e18;
+}
+
+.error-status-badge.is-warning {
+  color: #92400e;
+  background: #f59e0b1f;
+}
+
+.error-status-badge.is-error {
+  color: #991b1b;
+  background: #ef44441f;
 }
 
 .error-msg {
@@ -2845,35 +2870,19 @@ function getDisplayStatus(attempt: CandidateRecord | null | undefined): string {
   word-break: break-word;
 }
 
-.error-flow-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.375rem;
-  margin-top: 0.625rem;
+.error-json {
+  margin-top: 0.75rem;
 }
 
-.error-flow-chip {
-  padding: 0.125rem 0.45rem;
-  border-radius: 999px;
-  background: #ef444414;
-  border: 1px solid #ef44442e;
-  color: #991b1b;
-  font-size: 0.72rem;
-  line-height: 1.35;
+.dark .error-status-badge.is-success {
+  color: #bbf7d0;
 }
 
-.error-flow-safety {
-  margin-top: 0.625rem;
-  color: #991b1b;
-  font-size: 0.78rem;
-  line-height: 1.5;
+.dark .error-status-badge.is-warning {
+  color: #fde68a;
 }
 
-.dark .error-flow-chip {
-  color: #fecaca;
-}
-
-.dark .error-flow-safety {
+.dark .error-status-badge.is-error {
   color: #fecaca;
 }
 

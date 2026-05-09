@@ -19,7 +19,6 @@ use aether_runtime_state::{
     RuntimeSemaphoreSnapshot, RuntimeState,
 };
 use aether_scheduler_core::PROVIDER_KEY_RPM_WINDOW_SECS;
-use tokio::task::JoinHandle;
 
 use super::{AppState, FrontdoorCorsConfig, LocalExecutionRuntimeMissDiagnostic};
 
@@ -997,71 +996,112 @@ impl AppState {
         Ok(self)
     }
 
-    pub fn spawn_background_tasks(&self) -> Vec<JoinHandle<()>> {
-        let mut tasks = Vec::new();
-        if let Some(handle) = self.usage_runtime.spawn_worker(self.data.clone()) {
-            tasks.push(handle);
-        }
-        if let Some(handle) =
-            crate::wallet_runtime::spawn_provider_quota_reset_worker(self.data.clone())
-        {
-            tasks.push(handle);
-        }
-        if let Some(handle) = spawn_audit_cleanup_worker(self.data.clone()) {
-            tasks.push(handle);
-        }
-        if let Some(handle) = spawn_db_maintenance_worker(self.data.clone()) {
-            tasks.push(handle);
-        }
-        if let Some(handle) = spawn_wallet_daily_usage_aggregation_worker(self.data.clone()) {
-            tasks.push(handle);
-        }
-        if let Some(handle) = spawn_stats_aggregation_worker(self.data.clone()) {
-            tasks.push(handle);
-        }
-        if let Some(handle) = spawn_usage_cleanup_worker(self.data.clone()) {
-            tasks.push(handle);
-        }
-        if let Some(handle) = spawn_pool_monitor_worker(self.data.clone()) {
-            tasks.push(handle);
-        }
-        if let Some(handle) = spawn_pool_quota_probe_worker(self.clone()) {
-            tasks.push(handle);
-        }
-        if let Some(handle) = spawn_stats_hourly_aggregation_worker(self.data.clone()) {
-            tasks.push(handle);
-        }
-        if let Some(handle) = spawn_pending_cleanup_worker(self.data.clone()) {
-            tasks.push(handle);
-        }
-        if let Some(handle) = spawn_proxy_node_stale_cleanup_worker(self.data.clone()) {
-            tasks.push(handle);
-        }
-        if let Some(handle) = spawn_proxy_node_metrics_cleanup_worker(self.data.clone()) {
-            tasks.push(handle);
-        }
-        if let Some(handle) = spawn_proxy_upgrade_rollout_worker(self.clone()) {
-            tasks.push(handle);
-        }
-        if let Some(handle) = spawn_provider_checkin_worker(self.clone()) {
-            tasks.push(handle);
-        }
-        if let Some(handle) = spawn_oauth_token_refresh_worker(self.clone()) {
-            tasks.push(handle);
-        }
-        if let Some(handle) = spawn_request_candidate_cleanup_worker(self.data.clone()) {
-            tasks.push(handle);
-        }
-        if let Some(handle) = spawn_gemini_file_mapping_cleanup_worker(self.data.clone()) {
-            tasks.push(handle);
-        }
-        if let Some(handle) = spawn_model_fetch_worker(self.clone()) {
-            tasks.push(handle);
-        }
-        if let Some(handle) = spawn_video_task_poller(self.clone()) {
-            tasks.push(handle);
-        }
-        tasks
+    pub fn spawn_background_tasks(&self) -> crate::task_runtime::TaskSupervisor {
+        let mut supervisor = crate::task_runtime::TaskSupervisor::new();
+        let record_boot = |task_key: &'static str| {
+            if !self.has_background_task_data_writer() {
+                return;
+            }
+            let Some(definition) = crate::task_runtime::task_definition(task_key) else {
+                return;
+            };
+            std::mem::drop(crate::task_runtime::spawn_record_worker_boot(
+                self.clone(),
+                task_key,
+                crate::task_runtime::background_task_kind(definition.kind),
+                definition.trigger,
+            ));
+        };
+        let mut supervise_worker =
+            |task_key: &'static str, handle: Option<tokio::task::JoinHandle<()>>| {
+                if let Some(handle) = handle {
+                    supervisor.supervise_handle(task_key, handle);
+                    record_boot(task_key);
+                }
+            };
+
+        supervise_worker(
+            crate::task_runtime::TASK_KEY_USAGE_QUEUE_WORKER,
+            self.usage_runtime.spawn_worker(self.data.clone()),
+        );
+        supervise_worker(
+            crate::task_runtime::TASK_KEY_PROVIDER_QUOTA_RESET,
+            crate::wallet_runtime::spawn_provider_quota_reset_worker(self.data.clone()),
+        );
+        supervise_worker(
+            crate::task_runtime::TASK_KEY_AUDIT_CLEANUP,
+            spawn_audit_cleanup_worker(self.data.clone()),
+        );
+        supervise_worker(
+            crate::task_runtime::TASK_KEY_DB_MAINTENANCE,
+            spawn_db_maintenance_worker(self.data.clone()),
+        );
+        supervise_worker(
+            crate::task_runtime::TASK_KEY_WALLET_DAILY_USAGE_AGG,
+            spawn_wallet_daily_usage_aggregation_worker(self.data.clone()),
+        );
+        supervise_worker(
+            crate::task_runtime::TASK_KEY_STATS_DAILY_AGG,
+            spawn_stats_aggregation_worker(self.data.clone()),
+        );
+        supervise_worker(
+            crate::task_runtime::TASK_KEY_USAGE_CLEANUP,
+            spawn_usage_cleanup_worker(self.data.clone()),
+        );
+        supervise_worker(
+            crate::task_runtime::TASK_KEY_POOL_MONITOR,
+            spawn_pool_monitor_worker(self.data.clone()),
+        );
+        supervise_worker(
+            crate::task_runtime::TASK_KEY_POOL_QUOTA_PROBE,
+            spawn_pool_quota_probe_worker(self.clone()),
+        );
+        supervise_worker(
+            crate::task_runtime::TASK_KEY_STATS_HOURLY_AGG,
+            spawn_stats_hourly_aggregation_worker(self.data.clone()),
+        );
+        supervise_worker(
+            crate::task_runtime::TASK_KEY_PENDING_CLEANUP,
+            spawn_pending_cleanup_worker(self.data.clone()),
+        );
+        supervise_worker(
+            crate::task_runtime::TASK_KEY_PROXY_NODE_STALE_CLEANUP,
+            spawn_proxy_node_stale_cleanup_worker(self.data.clone()),
+        );
+        supervise_worker(
+            crate::task_runtime::TASK_KEY_PROXY_NODE_METRICS_CLEANUP,
+            spawn_proxy_node_metrics_cleanup_worker(self.data.clone()),
+        );
+        supervise_worker(
+            crate::task_runtime::TASK_KEY_PROXY_UPGRADE_ROLLOUT,
+            spawn_proxy_upgrade_rollout_worker(self.clone()),
+        );
+        supervise_worker(
+            crate::task_runtime::TASK_KEY_PROVIDER_CHECKIN,
+            spawn_provider_checkin_worker(self.clone()),
+        );
+        supervise_worker(
+            crate::task_runtime::TASK_KEY_OAUTH_TOKEN_REFRESH,
+            spawn_oauth_token_refresh_worker(self.clone()),
+        );
+        supervise_worker(
+            crate::task_runtime::TASK_KEY_REQUEST_CANDIDATE_CLEANUP,
+            spawn_request_candidate_cleanup_worker(self.data.clone()),
+        );
+        supervise_worker(
+            crate::task_runtime::TASK_KEY_GEMINI_FILES_CLEANUP,
+            spawn_gemini_file_mapping_cleanup_worker(self.data.clone()),
+        );
+        supervise_worker(
+            crate::task_runtime::TASK_KEY_MODEL_FETCH_WORKER,
+            spawn_model_fetch_worker(self.clone()),
+        );
+        supervise_worker(
+            crate::task_runtime::TASK_KEY_VIDEO_TASK_POLLER,
+            spawn_video_task_poller(self.clone()),
+        );
+
+        supervisor
     }
 }
 

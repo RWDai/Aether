@@ -90,6 +90,20 @@ impl PostgresBackend {
         Ok(summary)
     }
 
+    pub async fn purge_admin_request_bodies_batch(
+        &self,
+        batch_size: usize,
+    ) -> Result<AdminSystemPurgeSummary, DataLayerError> {
+        if batch_size == 0 {
+            return Ok(AdminSystemPurgeSummary::default());
+        }
+        let mut tx = self.pool().begin().await.map_postgres_err()?;
+        let mut summary = AdminSystemPurgeSummary::default();
+        purge_postgres_request_bodies_batch(&mut tx, batch_size, &mut summary).await?;
+        tx.commit().await.map_postgres_err()?;
+        Ok(summary)
+    }
+
     pub async fn find_system_config_value(
         &self,
         key: &str,
@@ -191,6 +205,20 @@ impl MysqlBackend {
         let mut tx = self.pool().begin().await.map_sql_err()?;
         let mut summary = AdminSystemPurgeSummary::default();
         purge_mysql_admin_system_data(&mut tx, target, &mut summary).await?;
+        tx.commit().await.map_sql_err()?;
+        Ok(summary)
+    }
+
+    pub async fn purge_admin_request_bodies_batch(
+        &self,
+        batch_size: usize,
+    ) -> Result<AdminSystemPurgeSummary, DataLayerError> {
+        if batch_size == 0 {
+            return Ok(AdminSystemPurgeSummary::default());
+        }
+        let mut tx = self.pool().begin().await.map_sql_err()?;
+        let mut summary = AdminSystemPurgeSummary::default();
+        purge_mysql_request_bodies_batch(&mut tx, batch_size, &mut summary).await?;
         tx.commit().await.map_sql_err()?;
         Ok(summary)
     }
@@ -331,6 +359,20 @@ impl SqliteBackend {
         let mut tx = self.pool().begin().await.map_sql_err()?;
         let mut summary = AdminSystemPurgeSummary::default();
         purge_sqlite_admin_system_data(&mut tx, target, &mut summary).await?;
+        tx.commit().await.map_sql_err()?;
+        Ok(summary)
+    }
+
+    pub async fn purge_admin_request_bodies_batch(
+        &self,
+        batch_size: usize,
+    ) -> Result<AdminSystemPurgeSummary, DataLayerError> {
+        if batch_size == 0 {
+            return Ok(AdminSystemPurgeSummary::default());
+        }
+        let mut tx = self.pool().begin().await.map_sql_err()?;
+        let mut summary = AdminSystemPurgeSummary::default();
+        purge_sqlite_request_bodies_batch(&mut tx, batch_size, &mut summary).await?;
         tx.commit().await.map_sql_err()?;
         Ok(summary)
     }
@@ -519,6 +561,17 @@ const ADMIN_USAGE_CHILD_TABLES: &[&str] = &[
     "usage_settlement_snapshots",
 ];
 
+const USAGE_BODY_FIELD_COLUMNS: &[&str] = &[
+    "request_body",
+    "response_body",
+    "provider_request_body",
+    "client_response_body",
+    "request_body_compressed",
+    "response_body_compressed",
+    "provider_request_body_compressed",
+    "client_response_body_compressed",
+];
+
 const ADMIN_USER_SCOPED_TABLES: &[&str] = &[
     "stats_user_daily_cost_savings_model_provider",
     "stats_user_daily_cost_savings_model",
@@ -678,9 +731,10 @@ WHERE request_count <> 0
         }
         AdminSystemPurgeTarget::RequestBodies => {
             pg_delete_table(tx, "usage_body_blobs", summary).await?;
-            pg_execute_if_table(
+            pg_execute_if_table_has_columns(
                 tx,
                 "usage",
+                USAGE_BODY_FIELD_COLUMNS,
                 "usage_body_fields_cleaned",
                 r#"
 UPDATE public.usage
@@ -1038,6 +1092,33 @@ WHERE request_count <> 0
         }
         AdminSystemPurgeTarget::RequestBodies => {
             mysql_delete_table(tx, "usage_body_blobs", summary).await?;
+            mysql_execute_if_table_has_columns(
+                tx,
+                "usage",
+                USAGE_BODY_FIELD_COLUMNS,
+                "usage_body_fields_cleaned",
+                r#"
+UPDATE `usage`
+SET request_body = NULL,
+    response_body = NULL,
+    provider_request_body = NULL,
+    client_response_body = NULL,
+    request_body_compressed = NULL,
+    response_body_compressed = NULL,
+    provider_request_body_compressed = NULL,
+    client_response_body_compressed = NULL
+WHERE request_body IS NOT NULL
+   OR response_body IS NOT NULL
+   OR provider_request_body IS NOT NULL
+   OR client_response_body IS NOT NULL
+   OR request_body_compressed IS NOT NULL
+   OR response_body_compressed IS NOT NULL
+   OR provider_request_body_compressed IS NOT NULL
+   OR client_response_body_compressed IS NOT NULL
+"#,
+                summary,
+            )
+            .await?;
             mysql_execute_if_table(
                 tx,
                 "usage_http_audits",
@@ -1333,6 +1414,33 @@ WHERE request_count <> 0
         }
         AdminSystemPurgeTarget::RequestBodies => {
             sqlite_delete_table(tx, "usage_body_blobs", summary).await?;
+            sqlite_execute_if_table_has_columns(
+                tx,
+                "usage",
+                USAGE_BODY_FIELD_COLUMNS,
+                "usage_body_fields_cleaned",
+                r#"
+UPDATE "usage"
+SET request_body = NULL,
+    response_body = NULL,
+    provider_request_body = NULL,
+    client_response_body = NULL,
+    request_body_compressed = NULL,
+    response_body_compressed = NULL,
+    provider_request_body_compressed = NULL,
+    client_response_body_compressed = NULL
+WHERE request_body IS NOT NULL
+   OR response_body IS NOT NULL
+   OR provider_request_body IS NOT NULL
+   OR client_response_body IS NOT NULL
+   OR request_body_compressed IS NOT NULL
+   OR response_body_compressed IS NOT NULL
+   OR provider_request_body_compressed IS NOT NULL
+   OR client_response_body_compressed IS NOT NULL
+"#,
+                summary,
+            )
+            .await?;
             sqlite_execute_if_table(
                 tx,
                 "usage_http_audits",
@@ -1506,6 +1614,304 @@ WHERE user_id IN ({non_admin_users})
     Ok(())
 }
 
+async fn purge_postgres_request_bodies_batch(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    batch_size: usize,
+    summary: &mut AdminSystemPurgeSummary,
+) -> Result<(), DataLayerError> {
+    let limit = i64::try_from(batch_size).unwrap_or(i64::MAX);
+    pg_execute_batch_if_table(
+        tx,
+        "usage_body_blobs",
+        "usage_body_blobs",
+        r#"
+WITH doomed AS (
+    SELECT body_ref
+    FROM public.usage_body_blobs
+    ORDER BY body_ref ASC
+    LIMIT $1
+)
+DELETE FROM public.usage_body_blobs AS blobs
+USING doomed
+WHERE blobs.body_ref = doomed.body_ref
+"#,
+        summary,
+        limit,
+    )
+    .await?;
+    pg_execute_batch_if_table_has_columns(
+        tx,
+        "usage",
+        USAGE_BODY_FIELD_COLUMNS,
+        "usage_body_fields_cleaned",
+        r#"
+WITH batch AS (
+    SELECT request_id
+    FROM public.usage
+    WHERE request_body IS NOT NULL
+       OR response_body IS NOT NULL
+       OR provider_request_body IS NOT NULL
+       OR client_response_body IS NOT NULL
+       OR request_body_compressed IS NOT NULL
+       OR response_body_compressed IS NOT NULL
+       OR provider_request_body_compressed IS NOT NULL
+       OR client_response_body_compressed IS NOT NULL
+    ORDER BY created_at_unix_ms ASC, request_id ASC
+    LIMIT $1
+)
+UPDATE public.usage AS usage_rows
+SET request_body = NULL,
+    response_body = NULL,
+    provider_request_body = NULL,
+    client_response_body = NULL,
+    request_body_compressed = NULL,
+    response_body_compressed = NULL,
+    provider_request_body_compressed = NULL,
+    client_response_body_compressed = NULL
+FROM batch
+WHERE usage_rows.request_id = batch.request_id
+"#,
+        summary,
+        limit,
+    )
+    .await?;
+    pg_execute_batch_if_table(
+        tx,
+        "usage_http_audits",
+        "usage_http_audit_body_refs_cleaned",
+        r#"
+WITH batch AS (
+    SELECT request_id
+    FROM public.usage_http_audits
+    WHERE request_body_ref IS NOT NULL
+       OR provider_request_body_ref IS NOT NULL
+       OR response_body_ref IS NOT NULL
+       OR client_response_body_ref IS NOT NULL
+       OR request_body_state IS NOT NULL
+       OR provider_request_body_state IS NOT NULL
+       OR response_body_state IS NOT NULL
+       OR client_response_body_state IS NOT NULL
+       OR body_capture_mode <> 'none'
+    ORDER BY request_id ASC
+    LIMIT $1
+)
+UPDATE public.usage_http_audits AS audits
+SET request_body_ref = NULL,
+    provider_request_body_ref = NULL,
+    response_body_ref = NULL,
+    client_response_body_ref = NULL,
+    request_body_state = NULL,
+    provider_request_body_state = NULL,
+    response_body_state = NULL,
+    client_response_body_state = NULL,
+    body_capture_mode = 'none',
+    updated_at = NOW()
+FROM batch
+WHERE audits.request_id = batch.request_id
+"#,
+        summary,
+        limit,
+    )
+    .await?;
+    Ok(())
+}
+
+async fn purge_mysql_request_bodies_batch(
+    tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
+    batch_size: usize,
+    summary: &mut AdminSystemPurgeSummary,
+) -> Result<(), DataLayerError> {
+    let limit = i64::try_from(batch_size).unwrap_or(i64::MAX);
+    mysql_execute_batch_if_table(
+        tx,
+        "usage_body_blobs",
+        "usage_body_blobs",
+        r#"
+DELETE FROM usage_body_blobs
+WHERE body_ref IN (
+    SELECT body_ref FROM (
+        SELECT body_ref
+        FROM usage_body_blobs
+        ORDER BY body_ref ASC
+        LIMIT ?
+    ) AS doomed
+)
+"#,
+        summary,
+        limit,
+    )
+    .await?;
+    mysql_execute_batch_if_table_has_columns(
+        tx,
+        "usage",
+        USAGE_BODY_FIELD_COLUMNS,
+        "usage_body_fields_cleaned",
+        r#"
+UPDATE `usage`
+SET request_body = NULL,
+    response_body = NULL,
+    provider_request_body = NULL,
+    client_response_body = NULL,
+    request_body_compressed = NULL,
+    response_body_compressed = NULL,
+    provider_request_body_compressed = NULL,
+    client_response_body_compressed = NULL
+WHERE request_id IN (
+    SELECT request_id FROM (
+        SELECT request_id
+        FROM `usage`
+        WHERE request_body IS NOT NULL
+           OR response_body IS NOT NULL
+           OR provider_request_body IS NOT NULL
+           OR client_response_body IS NOT NULL
+           OR request_body_compressed IS NOT NULL
+           OR response_body_compressed IS NOT NULL
+           OR provider_request_body_compressed IS NOT NULL
+           OR client_response_body_compressed IS NOT NULL
+        ORDER BY created_at_unix_ms ASC, request_id ASC
+        LIMIT ?
+    ) AS batch
+)
+"#,
+        summary,
+        limit,
+    )
+    .await?;
+    mysql_execute_batch_if_table(
+        tx,
+        "usage_http_audits",
+        "usage_http_audit_body_refs_cleaned",
+        r#"
+UPDATE usage_http_audits
+SET request_body_ref = NULL,
+    provider_request_body_ref = NULL,
+    response_body_ref = NULL,
+    client_response_body_ref = NULL,
+    request_body_state = NULL,
+    provider_request_body_state = NULL,
+    response_body_state = NULL,
+    client_response_body_state = NULL,
+    body_capture_mode = 'none'
+WHERE request_id IN (
+    SELECT request_id FROM (
+        SELECT request_id
+        FROM usage_http_audits
+        WHERE request_body_ref IS NOT NULL
+           OR provider_request_body_ref IS NOT NULL
+           OR response_body_ref IS NOT NULL
+           OR client_response_body_ref IS NOT NULL
+           OR request_body_state IS NOT NULL
+           OR provider_request_body_state IS NOT NULL
+           OR response_body_state IS NOT NULL
+           OR client_response_body_state IS NOT NULL
+           OR body_capture_mode <> 'none'
+        ORDER BY request_id ASC
+        LIMIT ?
+    ) AS batch
+)
+"#,
+        summary,
+        limit,
+    )
+    .await?;
+    Ok(())
+}
+
+async fn purge_sqlite_request_bodies_batch(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    batch_size: usize,
+    summary: &mut AdminSystemPurgeSummary,
+) -> Result<(), DataLayerError> {
+    let limit = i64::try_from(batch_size).unwrap_or(i64::MAX);
+    sqlite_execute_batch_if_table(
+        tx,
+        "usage_body_blobs",
+        "usage_body_blobs",
+        r#"
+DELETE FROM usage_body_blobs
+WHERE body_ref IN (
+    SELECT body_ref
+    FROM usage_body_blobs
+    ORDER BY body_ref ASC
+    LIMIT ?
+)
+"#,
+        summary,
+        limit,
+    )
+    .await?;
+    sqlite_execute_batch_if_table_has_columns(
+        tx,
+        "usage",
+        USAGE_BODY_FIELD_COLUMNS,
+        "usage_body_fields_cleaned",
+        r#"
+UPDATE "usage"
+SET request_body = NULL,
+    response_body = NULL,
+    provider_request_body = NULL,
+    client_response_body = NULL,
+    request_body_compressed = NULL,
+    response_body_compressed = NULL,
+    provider_request_body_compressed = NULL,
+    client_response_body_compressed = NULL
+WHERE request_id IN (
+    SELECT request_id
+    FROM "usage"
+    WHERE request_body IS NOT NULL
+       OR response_body IS NOT NULL
+       OR provider_request_body IS NOT NULL
+       OR client_response_body IS NOT NULL
+       OR request_body_compressed IS NOT NULL
+       OR response_body_compressed IS NOT NULL
+       OR provider_request_body_compressed IS NOT NULL
+       OR client_response_body_compressed IS NOT NULL
+    ORDER BY created_at_unix_ms ASC, request_id ASC
+    LIMIT ?
+)
+"#,
+        summary,
+        limit,
+    )
+    .await?;
+    sqlite_execute_batch_if_table(
+        tx,
+        "usage_http_audits",
+        "usage_http_audit_body_refs_cleaned",
+        r#"
+UPDATE usage_http_audits
+SET request_body_ref = NULL,
+    provider_request_body_ref = NULL,
+    response_body_ref = NULL,
+    client_response_body_ref = NULL,
+    request_body_state = NULL,
+    provider_request_body_state = NULL,
+    response_body_state = NULL,
+    client_response_body_state = NULL,
+    body_capture_mode = 'none'
+WHERE request_id IN (
+    SELECT request_id
+    FROM usage_http_audits
+    WHERE request_body_ref IS NOT NULL
+       OR provider_request_body_ref IS NOT NULL
+       OR response_body_ref IS NOT NULL
+       OR client_response_body_ref IS NOT NULL
+       OR request_body_state IS NOT NULL
+       OR provider_request_body_state IS NOT NULL
+       OR response_body_state IS NOT NULL
+       OR client_response_body_state IS NOT NULL
+       OR body_capture_mode <> 'none'
+    ORDER BY request_id ASC
+    LIMIT ?
+)
+"#,
+        summary,
+        limit,
+    )
+    .await?;
+    Ok(())
+}
+
 async fn pg_delete_table(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     table: &str,
@@ -1586,6 +1992,69 @@ async fn pg_execute_if_table(
     Ok(())
 }
 
+async fn pg_execute_if_table_has_columns(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    table: &str,
+    columns: &[&str],
+    key: &str,
+    sql: &str,
+    summary: &mut AdminSystemPurgeSummary,
+) -> Result<(), DataLayerError> {
+    if !pg_table_has_columns(tx, checked_sql_identifier(table)?, columns).await? {
+        return Ok(());
+    }
+    let rows = sqlx::query(sql)
+        .execute(&mut **tx)
+        .await
+        .map_postgres_err()?
+        .rows_affected();
+    summary.add(key, rows);
+    Ok(())
+}
+
+async fn pg_execute_batch_if_table(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    table: &str,
+    key: &str,
+    sql: &str,
+    summary: &mut AdminSystemPurgeSummary,
+    limit: i64,
+) -> Result<(), DataLayerError> {
+    if !pg_table_exists(tx, checked_sql_identifier(table)?).await? {
+        return Ok(());
+    }
+    let rows = sqlx::query(sql)
+        .bind(limit)
+        .execute(&mut **tx)
+        .await
+        .map_postgres_err()?
+        .rows_affected();
+    summary.add(key, rows);
+    Ok(())
+}
+
+async fn pg_execute_batch_if_table_has_columns(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    table: &str,
+    columns: &[&str],
+    key: &str,
+    sql: &str,
+    summary: &mut AdminSystemPurgeSummary,
+    limit: i64,
+) -> Result<(), DataLayerError> {
+    if !pg_table_has_columns(tx, checked_sql_identifier(table)?, columns).await? {
+        return Ok(());
+    }
+    let rows = sqlx::query(sql)
+        .bind(limit)
+        .execute(&mut **tx)
+        .await
+        .map_postgres_err()?
+        .rows_affected();
+    summary.add(key, rows);
+    Ok(())
+}
+
 async fn pg_table_exists(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     table: &str,
@@ -1596,6 +2065,38 @@ async fn pg_table_exists(
         .fetch_one(&mut **tx)
         .await
         .map_postgres_err()
+}
+
+async fn pg_table_has_columns(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    table: &str,
+    columns: &[&str],
+) -> Result<bool, DataLayerError> {
+    let table = checked_sql_identifier(table)?;
+    if !pg_table_exists(tx, table).await? {
+        return Ok(false);
+    }
+    for column in columns {
+        let column = checked_sql_identifier(column)?;
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = $1
+                  AND column_name = $2
+            )",
+        )
+        .bind(table)
+        .bind(column)
+        .fetch_one(&mut **tx)
+        .await
+        .map_postgres_err()?;
+        if !exists {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 async fn mysql_delete_table(
@@ -1678,6 +2179,69 @@ async fn mysql_execute_if_table(
     Ok(())
 }
 
+async fn mysql_execute_if_table_has_columns(
+    tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
+    table: &str,
+    columns: &[&str],
+    key: &str,
+    sql: &str,
+    summary: &mut AdminSystemPurgeSummary,
+) -> Result<(), DataLayerError> {
+    if !mysql_table_has_columns(tx, checked_sql_identifier(table)?, columns).await? {
+        return Ok(());
+    }
+    let rows = sqlx::query(sql)
+        .execute(&mut **tx)
+        .await
+        .map_sql_err()?
+        .rows_affected();
+    summary.add(key, rows);
+    Ok(())
+}
+
+async fn mysql_execute_batch_if_table(
+    tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
+    table: &str,
+    key: &str,
+    sql: &str,
+    summary: &mut AdminSystemPurgeSummary,
+    limit: i64,
+) -> Result<(), DataLayerError> {
+    if !mysql_table_exists(tx, checked_sql_identifier(table)?).await? {
+        return Ok(());
+    }
+    let rows = sqlx::query(sql)
+        .bind(limit)
+        .execute(&mut **tx)
+        .await
+        .map_sql_err()?
+        .rows_affected();
+    summary.add(key, rows);
+    Ok(())
+}
+
+async fn mysql_execute_batch_if_table_has_columns(
+    tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
+    table: &str,
+    columns: &[&str],
+    key: &str,
+    sql: &str,
+    summary: &mut AdminSystemPurgeSummary,
+    limit: i64,
+) -> Result<(), DataLayerError> {
+    if !mysql_table_has_columns(tx, checked_sql_identifier(table)?, columns).await? {
+        return Ok(());
+    }
+    let rows = sqlx::query(sql)
+        .bind(limit)
+        .execute(&mut **tx)
+        .await
+        .map_sql_err()?
+        .rows_affected();
+    summary.add(key, rows);
+    Ok(())
+}
+
 async fn mysql_table_exists(
     tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
     table: &str,
@@ -1691,6 +2255,36 @@ async fn mysql_table_exists(
     .await
     .map_sql_err()?;
     Ok(total > 0)
+}
+
+async fn mysql_table_has_columns(
+    tx: &mut sqlx::Transaction<'_, sqlx::MySql>,
+    table: &str,
+    columns: &[&str],
+) -> Result<bool, DataLayerError> {
+    let table = checked_sql_identifier(table)?;
+    if !mysql_table_exists(tx, table).await? {
+        return Ok(false);
+    }
+    for column in columns {
+        let column = checked_sql_identifier(column)?;
+        let total: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)
+             FROM information_schema.columns
+             WHERE table_schema = DATABASE()
+               AND table_name = ?
+               AND column_name = ?",
+        )
+        .bind(table)
+        .bind(column)
+        .fetch_one(&mut **tx)
+        .await
+        .map_sql_err()?;
+        if total == 0 {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 async fn sqlite_delete_table(
@@ -1773,6 +2367,69 @@ async fn sqlite_execute_if_table(
     Ok(())
 }
 
+async fn sqlite_execute_if_table_has_columns(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    table: &str,
+    columns: &[&str],
+    key: &str,
+    sql: &str,
+    summary: &mut AdminSystemPurgeSummary,
+) -> Result<(), DataLayerError> {
+    if !sqlite_table_has_columns(tx, checked_sql_identifier(table)?, columns).await? {
+        return Ok(());
+    }
+    let rows = sqlx::query(sql)
+        .execute(&mut **tx)
+        .await
+        .map_sql_err()?
+        .rows_affected();
+    summary.add(key, rows);
+    Ok(())
+}
+
+async fn sqlite_execute_batch_if_table(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    table: &str,
+    key: &str,
+    sql: &str,
+    summary: &mut AdminSystemPurgeSummary,
+    limit: i64,
+) -> Result<(), DataLayerError> {
+    if !sqlite_table_exists(tx, checked_sql_identifier(table)?).await? {
+        return Ok(());
+    }
+    let rows = sqlx::query(sql)
+        .bind(limit)
+        .execute(&mut **tx)
+        .await
+        .map_sql_err()?
+        .rows_affected();
+    summary.add(key, rows);
+    Ok(())
+}
+
+async fn sqlite_execute_batch_if_table_has_columns(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    table: &str,
+    columns: &[&str],
+    key: &str,
+    sql: &str,
+    summary: &mut AdminSystemPurgeSummary,
+    limit: i64,
+) -> Result<(), DataLayerError> {
+    if !sqlite_table_has_columns(tx, checked_sql_identifier(table)?, columns).await? {
+        return Ok(());
+    }
+    let rows = sqlx::query(sql)
+        .bind(limit)
+        .execute(&mut **tx)
+        .await
+        .map_sql_err()?
+        .rows_affected();
+    summary.add(key, rows);
+    Ok(())
+}
+
 async fn sqlite_table_exists(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     table: &str,
@@ -1785,6 +2442,31 @@ async fn sqlite_table_exists(
             .await
             .map_sql_err()?;
     Ok(total > 0)
+}
+
+async fn sqlite_table_has_columns(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    table: &str,
+    columns: &[&str],
+) -> Result<bool, DataLayerError> {
+    let table = checked_sql_identifier(table)?;
+    if !sqlite_table_exists(tx, table).await? {
+        return Ok(false);
+    }
+    for column in columns {
+        let column = checked_sql_identifier(column)?;
+        let total: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?")
+                .bind(table)
+                .bind(column)
+                .fetch_one(&mut **tx)
+                .await
+                .map_sql_err()?;
+        if total == 0 {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn current_unix_secs() -> u64 {

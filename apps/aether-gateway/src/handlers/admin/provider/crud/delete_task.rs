@@ -1,11 +1,10 @@
-use crate::handlers::admin::provider::delete_task::run_admin_provider_delete_task;
 use crate::handlers::admin::provider::shared::paths::{
     admin_provider_delete_task_parts, admin_provider_id_for_manage_path,
 };
 use crate::handlers::admin::provider::shared::support::build_admin_provider_delete_task_payload;
 use crate::handlers::admin::request::{AdminAppState, AdminRequestContext};
 use crate::handlers::admin::shared::attach_admin_audit_response;
-use crate::{GatewayError, LocalProviderDeleteTaskState};
+use crate::GatewayError;
 use axum::{
     body::Body,
     http,
@@ -13,8 +12,6 @@ use axum::{
     Json,
 };
 use serde_json::json;
-use tracing::warn;
-use uuid::Uuid;
 
 fn build_admin_provider_not_found_response(detail: impl Into<String>) -> Response<Body> {
     (
@@ -60,52 +57,18 @@ pub(crate) async fn maybe_build_local_admin_provider_delete_task_response(
                 "Provider 不存在",
             )));
         };
-        let Some(provider) = state
-            .read_provider_catalog_providers_by_ids(std::slice::from_ref(&provider_id))
-            .await?
-            .into_iter()
-            .next()
+        let Some(task_id) =
+            crate::task_runtime::submit_provider_delete_task(state, &provider_id, Some("admin"))
+                .await?
         else {
             return Ok(Some(build_admin_provider_not_found_response(
                 "提供商不存在",
             )));
         };
-        let task_id = Uuid::new_v4().simple().to_string()[..16].to_string();
-        let pending_task = LocalProviderDeleteTaskState {
-            task_id: task_id.clone(),
-            provider_id: provider.id.clone(),
-            status: "pending".to_string(),
-            stage: "queued".to_string(),
-            total_keys: 0,
-            deleted_keys: 0,
-            total_endpoints: 0,
-            deleted_endpoints: 0,
-            message: "delete task submitted".to_string(),
-        };
-        state.put_provider_delete_task(pending_task.clone());
-        if let Err(err) = state
-            .run_admin_provider_delete_task(&provider.id, &task_id)
-            .await
-        {
-            warn!(
-                "gateway admin provider delete task failed for provider {}: {:?}",
-                provider.id, err
-            );
-            state.put_provider_delete_task(LocalProviderDeleteTaskState {
-                task_id: task_id.clone(),
-                provider_id: provider.id.clone(),
-                status: "failed".to_string(),
-                stage: "failed".to_string(),
-                total_keys: 0,
-                deleted_keys: 0,
-                total_endpoints: 0,
-                deleted_endpoints: 0,
-                message: format!("provider delete failed: {err:?}"),
-            });
-        }
         return Ok(Some(attach_admin_audit_response(
             Json(json!({
                 "task_id": task_id,
+                "run_id": task_id,
                 "status": "pending",
                 "message": "删除任务已提交，提供商已进入后台删除队列",
             }))
@@ -113,7 +76,7 @@ pub(crate) async fn maybe_build_local_admin_provider_delete_task_response(
             "admin_provider_delete_queued",
             "delete_provider",
             "provider",
-            &provider.id,
+            &provider_id,
         )));
     }
 

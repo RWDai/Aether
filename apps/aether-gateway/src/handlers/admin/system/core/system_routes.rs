@@ -18,7 +18,6 @@ use crate::handlers::admin::system::shared::settings::{
 };
 use crate::handlers::admin::system::shared::smtp::build_admin_smtp_test_payload;
 use crate::GatewayError;
-use aether_data::repository::system::AdminSystemPurgeTarget;
 use axum::{
     body::{Body, Bytes},
     http,
@@ -26,6 +25,7 @@ use axum::{
     Json,
 };
 use serde_json::json;
+use std::time::Instant;
 
 pub(super) async fn maybe_build_local_admin_core_system_response(
     state: &AdminAppState<'_>,
@@ -194,15 +194,31 @@ pub(super) async fn maybe_build_local_admin_core_system_response(
         )));
     }
 
-    if let Some((target, action, object_type, object_id)) =
-        admin_system_purge_target_for_route_kind(decision.route_kind.as_deref())
+    if decision.route_kind.as_deref() == Some("cleanup_runs")
+        && request_method == http::Method::GET
+        && request_path == "/api/admin/system/cleanup/runs"
+    {
+        let records = crate::maintenance::list_admin_cleanup_run_records(&state.app().data)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))?;
+        return Ok(Some(Json(json!({ "items": records })).into_response()));
+    }
+
+    if let Some((task_kind, action, object_type, object_id)) =
+        admin_system_purge_task_for_route_kind(decision.route_kind.as_deref())
     {
         if request_method != http::Method::POST {
             return Ok(None);
         }
+        let task = crate::maintenance::start_admin_system_purge_task(state.cloned_app(), task_kind)
+            .await?;
         return Ok(Some(attach_admin_audit_response(
-            Json(build_admin_system_purge_payload(state, target).await?).into_response(),
-            "admin_system_data_purged",
+            Json(json!({
+                "message": task.message.clone(),
+                "task": task,
+            }))
+            .into_response(),
+            "admin_system_purge_task_started",
             action,
             object_type,
             object_id,
@@ -435,100 +451,60 @@ pub(super) async fn maybe_build_local_admin_core_system_response(
     Ok(None)
 }
 
-fn admin_system_purge_target_for_route_kind(
+fn admin_system_purge_task_for_route_kind(
     route_kind: Option<&str>,
 ) -> Option<(
-    AdminSystemPurgeTarget,
+    crate::maintenance::AdminCleanupTaskKind,
     &'static str,
     &'static str,
     &'static str,
 )> {
     match route_kind {
         Some("purge_config") => Some((
-            AdminSystemPurgeTarget::Config,
-            "purge_system_config",
+            crate::maintenance::AdminCleanupTaskKind::Config,
+            "purge_system_config_async",
             "system_config",
             "global",
         )),
         Some("purge_users") => Some((
-            AdminSystemPurgeTarget::Users,
-            "purge_non_admin_users",
+            crate::maintenance::AdminCleanupTaskKind::Users,
+            "purge_non_admin_users_async",
             "users",
             "non_admin",
         )),
         Some("purge_usage") => Some((
-            AdminSystemPurgeTarget::Usage,
-            "purge_usage_records",
+            crate::maintenance::AdminCleanupTaskKind::Usage,
+            "purge_usage_records_async",
             "usage",
             "all",
         )),
         Some("purge_audit_logs") => Some((
-            AdminSystemPurgeTarget::AuditLogs,
-            "purge_audit_logs",
+            crate::maintenance::AdminCleanupTaskKind::AuditLogs,
+            "purge_audit_logs_async",
             "audit_logs",
             "all",
         )),
-        Some("purge_request_bodies") => Some((
-            AdminSystemPurgeTarget::RequestBodies,
-            "purge_request_bodies",
+        Some("purge_request_bodies") | Some("purge_request_bodies_task") => Some((
+            crate::maintenance::AdminCleanupTaskKind::RequestBodies,
+            "purge_request_bodies_async",
             "request_bodies",
             "all",
         )),
-        Some("purge_stats") => Some((AdminSystemPurgeTarget::Stats, "purge_stats", "stats", "all")),
+        Some("purge_stats") => Some((
+            crate::maintenance::AdminCleanupTaskKind::Stats,
+            "purge_stats_async",
+            "stats",
+            "all",
+        )),
         _ => None,
     }
-}
-
-async fn build_admin_system_purge_payload(
-    state: &AdminAppState<'_>,
-    target: AdminSystemPurgeTarget,
-) -> Result<serde_json::Value, GatewayError> {
-    let summary = state.purge_admin_system_data(target).await?;
-    let total = summary.total();
-    let affected = summary.affected.clone();
-
-    if target == AdminSystemPurgeTarget::Stats {
-        let rebuild = state.rebuild_admin_stats_once().await?;
-        let message = if rebuild.capped {
-            format!(
-                "统计聚合已清空，已重建 {} 个小时桶和 {} 个日桶，仍有历史统计待后台任务继续重建",
-                rebuild.hourly_buckets, rebuild.daily_buckets
-            )
-        } else {
-            format!(
-                "统计聚合已清空并重建，删除 {} 行，重建 {} 个小时桶和 {} 个日桶",
-                total, rebuild.hourly_buckets, rebuild.daily_buckets
-            )
-        };
-        return Ok(json!({
-            "message": message,
-            "deleted": affected,
-            "rebuilt": {
-                "hourly_buckets": rebuild.hourly_buckets,
-                "daily_buckets": rebuild.daily_buckets,
-                "capped": rebuild.capped,
-            },
-        }));
-    }
-
-    let (message, count_key) = match target {
-        AdminSystemPurgeTarget::Config => ("系统配置已清空", "deleted"),
-        AdminSystemPurgeTarget::Users => ("非管理员用户已清空", "deleted"),
-        AdminSystemPurgeTarget::Usage => ("使用记录已清空", "deleted"),
-        AdminSystemPurgeTarget::AuditLogs => ("审计日志已清空", "deleted"),
-        AdminSystemPurgeTarget::RequestBodies => ("请求/响应体已清空", "cleaned"),
-        AdminSystemPurgeTarget::Stats => unreachable!("stats handled above"),
-    };
-
-    Ok(json!({
-        "message": format!("{message}，影响 {} 行", total),
-        count_key: affected,
-    }))
 }
 
 async fn build_admin_system_cleanup_payload(
     state: &AdminAppState<'_>,
 ) -> Result<serde_json::Value, GatewayError> {
+    let started_at_unix_secs = chrono::Utc::now().timestamp().max(0) as u64;
+    let started_at = Instant::now();
     let summary = state.run_admin_system_cleanup_once().await?;
     let cleaned = json!({
         "audit_logs": summary.audit_logs_deleted,
@@ -557,6 +533,17 @@ async fn build_admin_system_cleanup_payload(
         .saturating_add(summary.usage.header_cleaned)
         .saturating_add(summary.usage.keys_cleaned)
         .saturating_add(summary.usage.records_deleted);
+
+    crate::maintenance::record_completed_cleanup_run(
+        &state.app().data,
+        "system_cleanup",
+        "manual",
+        started_at_unix_secs,
+        started_at,
+        cleaned.clone(),
+        format!("系统清理已执行，影响 {total} 项"),
+    )
+    .await;
 
     Ok(json!({
         "message": format!("系统清理已执行，影响 {} 项", total),

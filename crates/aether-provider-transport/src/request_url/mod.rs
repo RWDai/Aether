@@ -12,7 +12,7 @@ use crate::claude_code::build_claude_code_messages_url;
 use crate::snapshot::GatewayProviderTransportSnapshot;
 use crate::url::{
     build_claude_messages_url, build_gemini_content_url, build_openai_chat_url,
-    build_openai_responses_url, build_passthrough_path_url,
+    build_openai_responses_url, build_passthrough_path_url, normalize_gemini_content_action_path,
 };
 use crate::vertex::{
     build_vertex_api_key_gemini_content_url, resolve_local_vertex_api_key_query_auth,
@@ -36,6 +36,8 @@ pub fn build_transport_request_url(
     }
 
     let provider_api_format = params.provider_api_format.trim().to_ascii_lowercase();
+    let normalized_provider_api_format =
+        aether_ai_formats::normalize_api_format_alias(&provider_api_format);
     let custom_path = transport
         .endpoint
         .custom_path
@@ -45,14 +47,19 @@ pub fn build_transport_request_url(
         .map(|path| expand_custom_path_template(path, build_path_params(params)));
 
     if let Some(path) = custom_path.as_deref() {
-        let blocked_keys = if provider_api_format.starts_with("gemini:") {
+        let blocked_keys = if normalized_provider_api_format.starts_with("gemini:") {
             &["key"][..]
         } else {
             &[][..]
         };
+        let normalized_path = if normalized_provider_api_format == "gemini:generate_content" {
+            normalize_gemini_content_action_path(path, params.upstream_is_stream)
+        } else {
+            path.to_string()
+        };
         let url = build_passthrough_path_url(
             &transport.endpoint.base_url,
-            path,
+            normalized_path.as_str(),
             params.request_query,
             blocked_keys,
         )?;
@@ -63,7 +70,7 @@ pub fn build_transport_request_url(
         ));
     }
 
-    let url = match aether_ai_formats::normalize_api_format_alias(&provider_api_format).as_str() {
+    let url = match normalized_provider_api_format.as_str() {
         "openai:chat" => Some(build_openai_chat_url(
             &transport.endpoint.base_url,
             params.request_query,
@@ -567,6 +574,81 @@ mod tests {
         assert_eq!(
             url,
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?foo=bar"
+        );
+    }
+
+    #[test]
+    fn rewrites_hardcoded_gemini_custom_path_action_to_match_stream_mode() {
+        let stream_transport = sample_transport(
+            "custom",
+            "gemini:generate_content",
+            "https://generativelanguage.googleapis.com",
+            Some("/v1beta/models/{model}:generateContent"),
+        );
+
+        let stream_url = build_transport_request_url(
+            &stream_transport,
+            TransportRequestUrlParams {
+                provider_api_format: "gemini:generate_content",
+                mapped_model: Some("gemini-2.5-pro"),
+                upstream_is_stream: true,
+                request_query: Some("key=client-key&foo=bar"),
+                kiro_api_region: None,
+            },
+        )
+        .expect("stream custom path url");
+
+        assert_eq!(
+            stream_url,
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:streamGenerateContent?foo=bar&alt=sse"
+        );
+
+        let sync_transport = sample_transport(
+            "custom",
+            "gemini:generate_content",
+            "https://generativelanguage.googleapis.com",
+            Some("/v1beta/models/{model}:streamGenerateContent"),
+        );
+
+        let sync_url = build_transport_request_url(
+            &sync_transport,
+            TransportRequestUrlParams {
+                provider_api_format: "gemini:generate_content",
+                mapped_model: Some("gemini-2.5-pro"),
+                upstream_is_stream: false,
+                request_query: Some("foo=bar"),
+                kiro_api_region: None,
+            },
+        )
+        .expect("sync custom path url");
+
+        assert_eq!(
+            sync_url,
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?foo=bar"
+        );
+
+        let v1_transport = sample_transport(
+            "custom",
+            "gemini:generate_content",
+            "https://generativelanguage.googleapis.com",
+            Some("/v1/models/{model}:generateContent"),
+        );
+
+        let v1_stream_url = build_transport_request_url(
+            &v1_transport,
+            TransportRequestUrlParams {
+                provider_api_format: "gemini:generate_content",
+                mapped_model: Some("gemini-2.5-pro"),
+                upstream_is_stream: true,
+                request_query: None,
+                kiro_api_region: None,
+            },
+        )
+        .expect("v1 stream custom path url");
+
+        assert_eq!(
+            v1_stream_url,
+            "https://generativelanguage.googleapis.com/v1/models/gemini-2.5-pro:streamGenerateContent?alt=sse"
         );
     }
 

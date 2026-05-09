@@ -10,6 +10,7 @@ use super::{
 mod announcements;
 mod api_key_exports;
 mod auth;
+mod background_tasks;
 mod billing;
 mod candidate_queries;
 mod gemini_files;
@@ -27,6 +28,14 @@ impl AppState {
 
     pub fn has_announcement_data_writer(&self) -> bool {
         self.data.has_announcement_writer()
+    }
+
+    pub fn has_background_task_data_reader(&self) -> bool {
+        self.data.has_background_task_reader()
+    }
+
+    pub fn has_background_task_data_writer(&self) -> bool {
+        self.data.has_background_task_writer()
     }
 
     pub fn has_video_task_data_reader(&self) -> bool {

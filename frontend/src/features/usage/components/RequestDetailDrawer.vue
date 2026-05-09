@@ -459,55 +459,6 @@
                 />
               </div>
 
-              <!-- 错误域卡片：保持上游响应与客户端响应两个边界可对照 -->
-              <div
-                v-if="hasVisibleErrorCards"
-                class="space-y-3"
-              >
-                <div
-                  class="grid gap-3"
-                  :class="visibleErrorCardCount > 1 ? 'lg:grid-cols-2' : 'grid-cols-1'"
-                >
-                  <Card
-                    v-if="displayClientErrorMessage"
-                    class="border-amber-200 dark:border-amber-800"
-                  >
-                    <div class="p-4">
-                      <h4 class="text-sm font-semibold text-amber-700 dark:text-amber-300 mb-2">
-                        返回客户端错误
-                      </h4>
-                      <div class="bg-amber-50 dark:bg-amber-900/20 rounded-lg p-3 space-y-1">
-                        <p class="text-sm text-amber-900 dark:text-amber-200">
-                          {{ displayClientErrorMessage }}
-                        </p>
-                      </div>
-                    </div>
-                  </Card>
-
-                  <Card
-                    v-if="normalizedUpstreamError"
-                    class="border-orange-200 dark:border-orange-800"
-                  >
-                    <div class="p-4">
-                      <h4 class="text-sm font-semibold text-orange-700 dark:text-orange-300 mb-2">
-                        上游响应错误
-                      </h4>
-                      <div class="bg-orange-50 dark:bg-orange-900/20 rounded-lg p-3 space-y-1">
-                        <p class="text-sm text-orange-900 dark:text-orange-200">
-                          {{ normalizedUpstreamError.message }}
-                        </p>
-                        <p
-                          v-if="formatErrorDomainMeta(normalizedUpstreamError)"
-                          class="text-xs text-orange-800/70 dark:text-orange-200/70 font-mono"
-                        >
-                          {{ formatErrorDomainMeta(normalizedUpstreamError) }}
-                        </p>
-                      </div>
-                    </div>
-                  </Card>
-                </div>
-              </div>
-
               <!-- Tabs 区域 -->
               <Card>
                 <div class="p-3 sm:p-4">
@@ -743,6 +694,7 @@ import { ref, watch, computed, onMounted, onBeforeUnmount } from 'vue'
 import Button from '@/components/ui/button.vue'
 import { useEscapeKey } from '@/composables/useEscapeKey'
 import { useClipboard } from '@/composables/useClipboard'
+import { useDarkMode } from '@/composables/useDarkMode'
 import Card from '@/components/ui/card.vue'
 import Badge from '@/components/ui/badge.vue'
 import Separator from '@/components/ui/separator.vue'
@@ -1040,10 +992,7 @@ watch(activeTab, (newTab) => {
   }
 })
 
-// 检测暗色模式
-const isDark = computed(() => {
-  return document.documentElement.classList.contains('dark')
-})
+const { isDark } = useDarkMode()
 
 const traceRequestMetadata = computed<Record<string, unknown> | null>(() => {
   const meta = detail.value?.metadata
@@ -1073,27 +1022,6 @@ const metadataPanelData = computed<Record<string, unknown> | null>(() => {
 
   return Object.keys(merged).length > 0 ? merged : null
 })
-
-const normalizedClientError = computed(() =>
-  normalizeErrorDomain(detail.value?.errors?.client_error ?? detail.value?.client_error),
-)
-
-const normalizedUpstreamError = computed(() =>
-  normalizeErrorDomain(detail.value?.errors?.upstream_error ?? detail.value?.upstream_error),
-)
-
-const displayClientErrorMessage = computed(() =>
-  normalizedClientError.value?.message ?? '',
-)
-
-const hasVisibleErrorCards = computed(() =>
-  Boolean(displayClientErrorMessage.value || normalizedUpstreamError.value),
-)
-
-const visibleErrorCardCount = computed(() =>
-  (displayClientErrorMessage.value ? 1 : 0)
-    + (normalizedUpstreamError.value ? 1 : 0),
-)
 
 const settlementInfo = computed<JsonRecord | null>(() =>
   asRecord(detail.value?.settlement ?? null),

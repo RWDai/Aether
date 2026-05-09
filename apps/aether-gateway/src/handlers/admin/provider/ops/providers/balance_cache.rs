@@ -1,5 +1,6 @@
 use super::actions::admin_provider_ops_local_action_response;
 use crate::handlers::admin::request::AdminAppState;
+use crate::task_runtime::{spawn_fire_and_forget, TASK_KEY_PROVIDER_BALANCE_REFRESH};
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::time::Duration;
@@ -130,7 +131,7 @@ pub(super) async fn spawn_admin_provider_ops_balance_refresh(
 
     let app = state.cloned_app();
     let provider_id = provider_id.to_string();
-    tokio::spawn(async move {
+    spawn_fire_and_forget(TASK_KEY_PROVIDER_BALANCE_REFRESH, async move {
         let permit = match tokio::time::timeout(
             Duration::from_secs(5),
             ADMIN_PROVIDER_OPS_BALANCE_REFRESH_SEMAPHORE.acquire(),

@@ -54,9 +54,10 @@ use crate::execution_runtime::{
 use crate::log_ids::short_request_id;
 use crate::orchestration::{
     apply_local_execution_effect, build_local_error_flow_metadata, with_error_flow_report_context,
-    LocalAdaptiveRateLimitEffect, LocalAdaptiveSuccessEffect, LocalAttemptFailureEffect,
-    LocalExecutionEffect, LocalExecutionEffectContext, LocalHealthFailureEffect,
-    LocalHealthSuccessEffect, LocalOAuthInvalidationEffect, LocalPoolErrorEffect,
+    with_upstream_response_report_context, LocalAdaptiveRateLimitEffect,
+    LocalAdaptiveSuccessEffect, LocalAttemptFailureEffect, LocalExecutionEffect,
+    LocalExecutionEffectContext, LocalHealthFailureEffect, LocalHealthSuccessEffect,
+    LocalOAuthInvalidationEffect, LocalPoolErrorEffect,
 };
 use crate::request_candidate_runtime::{
     ensure_execution_request_candidate_slot, record_local_request_candidate_extra_data,
@@ -132,6 +133,27 @@ fn record_sync_terminal_usage(
     state
         .usage_runtime
         .record_sync_terminal(state.data.as_ref(), context_seed, payload_seed);
+}
+
+fn with_sync_error_trace_context(
+    report_context: Option<&serde_json::Value>,
+    status_code: u16,
+    headers: &BTreeMap<String, String>,
+    response_text: Option<&str>,
+    local_failover_analysis: crate::orchestration::LocalFailoverAnalysis,
+) -> Option<serde_json::Value> {
+    let upstream_context = with_upstream_response_report_context(
+        report_context,
+        status_code,
+        Some(headers),
+        None,
+        None,
+        None,
+    );
+    with_error_flow_report_context(
+        upstream_context.as_ref().or(report_context),
+        build_local_error_flow_metadata(status_code, response_text, local_failover_analysis),
+    )
 }
 
 fn build_sync_report_payload(
@@ -383,11 +405,11 @@ impl<'a> OpenAiImageSyncProgressRecorder<'a> {
         .await;
     }
 
-    async fn fail(&mut self, elapsed_ms: u64) {
+    async fn fail(&mut self, status_code: Option<u16>, elapsed_ms: u64) {
         self.snapshot.lock().await.phase = "failed";
         self.persist(
             RequestCandidateStatus::Failed,
-            Some(StatusCode::GATEWAY_TIMEOUT.as_u16()),
+            status_code,
             Some(elapsed_ms),
             true,
         )
@@ -574,10 +596,12 @@ async fn execute_direct_sync_runtime_candidate(
                     Ok(result) => return Ok(result),
                     Err(err) => {
                         let elapsed_ms = started_at.elapsed().as_millis() as u64;
+                        let status_code = err.status_code;
                         record_openai_image_sync_failed_progress(
                             state,
                             plan,
                             report_context,
+                            status_code,
                             elapsed_ms,
                             progress_snapshot.clone(),
                         )
@@ -609,6 +633,7 @@ async fn execute_direct_sync_runtime_candidate(
                     state,
                     plan,
                     report_context,
+                    Some(StatusCode::GATEWAY_TIMEOUT.as_u16()),
                     elapsed_ms,
                     progress_snapshot.clone(),
                 )
@@ -719,12 +744,13 @@ async fn record_openai_image_sync_failed_progress(
     state: &AppState,
     plan: &ExecutionPlan,
     report_context: Option<&Value>,
+    status_code: Option<u16>,
     elapsed_ms: u64,
     progress_snapshot: Option<Arc<Mutex<OpenAiImageSyncProgressSnapshot>>>,
 ) {
     let mut progress =
         OpenAiImageSyncProgressRecorder::new(state, plan, report_context, progress_snapshot);
-    progress.fail(elapsed_ms).await;
+    progress.fail(status_code, elapsed_ms).await;
 }
 
 fn resolve_openai_image_sync_total_timeout_ms(plan: &ExecutionPlan) -> u64 {
@@ -752,11 +778,11 @@ fn should_track_openai_image_sync_upstream_sse(
 }
 
 fn should_enable_openai_image_sync_json_heartbeat(
-    plan_kind: &str,
-    plan: &ExecutionPlan,
-    report_context: Option<&Value>,
+    _plan_kind: &str,
+    _plan: &ExecutionPlan,
+    _report_context: Option<&Value>,
 ) -> bool {
-    should_track_openai_image_sync_upstream_sse(plan_kind, plan, report_context)
+    false
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1445,18 +1471,17 @@ async fn execute_execution_runtime_sync_impl(
         LocalFailoverDecision::RetryNextCandidate
     ) {
         let terminal_unix_secs = current_request_candidate_unix_ms();
-        let error_flow_report_context = with_error_flow_report_context(
+        let error_trace_report_context = with_sync_error_trace_context(
             report_context.as_ref(),
-            build_local_error_flow_metadata(
-                result.status_code,
-                local_failover_response_text.as_deref(),
-                local_failover_analysis,
-            ),
+            result.status_code,
+            &headers,
+            local_failover_response_text.as_deref(),
+            local_failover_analysis,
         );
         record_local_request_candidate_status(
             state,
             &plan,
-            error_flow_report_context
+            error_trace_report_context
                 .as_ref()
                 .or(report_context.as_ref()),
             SchedulerRequestCandidateStatusUpdate {
@@ -1522,18 +1547,17 @@ async fn execute_execution_runtime_sync_impl(
         mapped_error_finalize_kind.is_some(),
     ) {
         let terminal_unix_secs = current_request_candidate_unix_ms();
-        let error_flow_report_context = with_error_flow_report_context(
+        let error_trace_report_context = with_sync_error_trace_context(
             report_context.as_ref(),
-            build_local_error_flow_metadata(
-                result.status_code,
-                local_failover_response_text.as_deref(),
-                local_failover_analysis,
-            ),
+            result.status_code,
+            &headers,
+            local_failover_response_text.as_deref(),
+            local_failover_analysis,
         );
         record_local_request_candidate_status(
             state,
             &plan,
-            error_flow_report_context
+            error_trace_report_context
                 .as_ref()
                 .or(report_context.as_ref()),
             SchedulerRequestCandidateStatusUpdate {
@@ -1553,13 +1577,12 @@ async fn execute_execution_runtime_sync_impl(
     let terminal_unix_secs = current_request_candidate_unix_ms();
     let error_flow_report_context = (result.status_code >= 400)
         .then(|| {
-            with_error_flow_report_context(
+            with_sync_error_trace_context(
                 report_context.as_ref(),
-                build_local_error_flow_metadata(
-                    result.status_code,
-                    local_failover_response_text.as_deref(),
-                    local_failover_analysis,
-                ),
+                result.status_code,
+                &headers,
+                local_failover_response_text.as_deref(),
+                local_failover_analysis,
             )
         })
         .flatten();
@@ -2103,7 +2126,7 @@ mod tests {
     }
 
     #[test]
-    fn openai_image_sync_progress_uses_report_context_upstream_stream_flag() {
+    fn openai_image_sync_progress_tracks_upstream_stream_without_json_heartbeat_wrapper() {
         let plan = test_openai_image_plan(false);
         let report_context = json!({"upstream_is_stream": true});
 
@@ -2112,7 +2135,7 @@ mod tests {
             &plan,
             Some(&report_context),
         ));
-        assert!(should_enable_openai_image_sync_json_heartbeat(
+        assert!(!should_enable_openai_image_sync_json_heartbeat(
             OPENAI_IMAGE_SYNC_PLAN_KIND,
             &plan,
             Some(&report_context),

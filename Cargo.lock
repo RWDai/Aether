@@ -53,6 +53,7 @@ dependencies = [
  "serde_json",
  "sha1",
  "sha2",
+ "url",
  "uuid",
 ]
 
@@ -179,6 +180,7 @@ dependencies = [
  "aether-runtime",
  "aether-runtime-state",
  "aether-scheduler-core",
+ "aether-task-runtime",
  "aether-testkit",
  "aether-usage-runtime",
  "aether-video-tasks-core",
@@ -381,6 +383,18 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+]
+
+[[package]]
+name = "aether-task-runtime"
+version = "0.1.0"
+dependencies = [
+ "aether-runtime",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]

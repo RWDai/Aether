@@ -13,6 +13,9 @@ use crate::repository::auth_modules::{
     AuthModuleReadRepository, AuthModuleWriteRepository, SqliteAuthModuleReadRepository,
     SqliteAuthModuleRepository,
 };
+use crate::repository::background_tasks::{
+    BackgroundTaskReadRepository, BackgroundTaskWriteRepository, SqliteBackgroundTaskRepository,
+};
 use crate::repository::billing::{BillingReadRepository, SqliteBillingReadRepository};
 use crate::repository::candidate_selection::{
     MinimalCandidateSelectionReadRepository, SqliteMinimalCandidateSelectionReadRepository,
@@ -122,6 +125,14 @@ impl SqliteBackend {
 
     pub fn billing_read_repository(&self) -> Arc<dyn BillingReadRepository> {
         Arc::new(SqliteBillingReadRepository::new(self.pool_clone()))
+    }
+
+    pub fn background_task_read_repository(&self) -> Arc<dyn BackgroundTaskReadRepository> {
+        Arc::new(SqliteBackgroundTaskRepository::new(self.pool_clone()))
+    }
+
+    pub fn background_task_write_repository(&self) -> Arc<dyn BackgroundTaskWriteRepository> {
+        Arc::new(SqliteBackgroundTaskRepository::new(self.pool_clone()))
     }
 
     pub fn request_candidate_read_repository(&self) -> Arc<dyn RequestCandidateReadRepository> {

@@ -6,6 +6,7 @@ use crate::repository::announcements::AnnouncementReadRepository;
 use crate::repository::audit::AuditLogReadRepository;
 use crate::repository::auth::AuthApiKeyReadRepository;
 use crate::repository::auth_modules::AuthModuleReadRepository;
+use crate::repository::background_tasks::BackgroundTaskReadRepository;
 use crate::repository::billing::BillingReadRepository;
 use crate::repository::candidate_selection::MinimalCandidateSelectionReadRepository;
 use crate::repository::candidates::RequestCandidateReadRepository;
@@ -27,6 +28,7 @@ pub struct DataReadRepositories {
     audit_logs: Option<Arc<dyn AuditLogReadRepository>>,
     auth_api_keys: Option<Arc<dyn AuthApiKeyReadRepository>>,
     auth_modules: Option<Arc<dyn AuthModuleReadRepository>>,
+    background_tasks: Option<Arc<dyn BackgroundTaskReadRepository>>,
     billing: Option<Arc<dyn BillingReadRepository>>,
     gemini_file_mappings: Option<Arc<dyn GeminiFileMappingReadRepository>>,
     global_models: Option<Arc<dyn GlobalModelReadRepository>>,
@@ -50,6 +52,7 @@ impl fmt::Debug for DataReadRepositories {
             .field("has_announcements", &self.announcements.is_some())
             .field("has_audit_logs", &self.audit_logs.is_some())
             .field("has_auth_modules", &self.auth_modules.is_some())
+            .field("has_background_tasks", &self.background_tasks.is_some())
             .field("has_billing", &self.billing.is_some())
             .field(
                 "has_gemini_file_mappings",
@@ -97,6 +100,10 @@ impl DataReadRepositories {
                 .map(PostgresBackend::auth_module_read_repository)
                 .or_else(|| mysql.map(MysqlBackend::auth_module_read_repository))
                 .or_else(|| sqlite.map(SqliteBackend::auth_module_read_repository)),
+            background_tasks: postgres
+                .map(PostgresBackend::background_task_read_repository)
+                .or_else(|| mysql.map(MysqlBackend::background_task_read_repository))
+                .or_else(|| sqlite.map(SqliteBackend::background_task_read_repository)),
             billing: postgres
                 .map(PostgresBackend::billing_read_repository)
                 .or_else(|| mysql.map(MysqlBackend::billing_read_repository))
@@ -177,6 +184,10 @@ impl DataReadRepositories {
         self.auth_modules.clone()
     }
 
+    pub fn background_tasks(&self) -> Option<Arc<dyn BackgroundTaskReadRepository>> {
+        self.background_tasks.clone()
+    }
+
     pub fn billing(&self) -> Option<Arc<dyn BillingReadRepository>> {
         self.billing.clone()
     }
@@ -240,6 +251,7 @@ impl DataReadRepositories {
             || self.announcements.is_some()
             || self.audit_logs.is_some()
             || self.auth_modules.is_some()
+            || self.background_tasks.is_some()
             || self.billing.is_some()
             || self.gemini_file_mappings.is_some()
             || self.global_models.is_some()

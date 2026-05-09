@@ -1,5 +1,5 @@
 use aether_contracts::ExecutionPlan;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use crate::AppState;
 
@@ -119,4 +119,67 @@ pub(crate) fn with_error_flow_report_context(
     let mut object = report_context?.as_object()?.clone();
     object.insert("error_flow".to_string(), error_flow);
     Some(Value::Object(object))
+}
+
+pub(crate) fn with_upstream_response_report_context(
+    report_context: Option<&Value>,
+    status_code: u16,
+    headers: Option<&std::collections::BTreeMap<String, String>>,
+    body: Option<&Value>,
+    body_ref: Option<&str>,
+    body_state: Option<&str>,
+) -> Option<Value> {
+    let mut object = report_context?.as_object()?.clone();
+    let mut upstream_response = serde_json::Map::new();
+    upstream_response.insert("status_code".to_string(), json!(status_code));
+    if let Some(headers) = headers {
+        upstream_response.insert("headers".to_string(), trace_headers_to_json(headers));
+    }
+    if let Some(body) = body {
+        upstream_response.insert("body".to_string(), body.clone());
+    }
+    if let Some(body_ref) = body_ref {
+        upstream_response.insert("body_ref".to_string(), json!(body_ref));
+    }
+    if let Some(body_state) = body_state {
+        upstream_response.insert("body_state".to_string(), json!(body_state));
+    }
+    object.insert(
+        "upstream_response".to_string(),
+        Value::Object(upstream_response),
+    );
+    Some(Value::Object(object))
+}
+
+fn trace_headers_to_json(headers: &std::collections::BTreeMap<String, String>) -> Value {
+    Value::Object(Map::from_iter(headers.iter().map(|(key, value)| {
+        (
+            key.clone(),
+            Value::String(mask_trace_header_value(key, value)),
+        )
+    })))
+}
+
+fn mask_trace_header_value(name: &str, value: &str) -> String {
+    if !trace_header_is_sensitive(name) {
+        return value.to_string();
+    }
+    if value.len() <= 8 {
+        return "****".to_string();
+    }
+    format!("{}****{}", &value[..4], &value[value.len() - 4..])
+}
+
+fn trace_header_is_sensitive(name: &str) -> bool {
+    [
+        "authorization",
+        "x-api-key",
+        "api-key",
+        "x-goog-api-key",
+        "cookie",
+        "set-cookie",
+        "proxy-authorization",
+    ]
+    .iter()
+    .any(|candidate| name.trim().eq_ignore_ascii_case(candidate))
 }

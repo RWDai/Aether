@@ -9,14 +9,17 @@ use crate::ai_serving::planner::candidate_preparation::{
 use crate::ai_serving::planner::spec_metadata::local_openai_image_spec_metadata;
 use crate::ai_serving::transport::{
     build_openai_image_headers, build_openai_image_upstream_url,
-    openai_image_transport_unsupported_reason, resolve_openai_image_auth,
-    ProviderOpenAiImageHeadersInput,
+    build_standard_provider_request_headers, openai_image_transport_unsupported_reason,
+    resolve_openai_image_auth, ProviderOpenAiImageHeadersInput,
+    StandardProviderRequestHeadersInput,
 };
 use crate::ai_serving::{
     apply_codex_openai_responses_special_body_edits, apply_codex_openai_responses_special_headers,
-    build_chatgpt_web_image_request_body, build_openai_image_provider_request_body,
-    default_model_for_openai_image_operation, normalize_openai_image_request,
-    CandidateFailureDiagnostic, GatewayProviderTransportSnapshot, PlannerAppState,
+    build_chatgpt_web_image_request_body,
+    build_gemini_image_request_body_from_openai_image_request,
+    build_openai_image_provider_request_body, default_model_for_openai_image_operation,
+    normalize_openai_image_request, request_conversion_direct_auth, CandidateFailureDiagnostic,
+    GatewayProviderTransportSnapshot, PlannerAppState, RequestConversionKind,
 };
 use crate::AppState;
 
@@ -35,6 +38,7 @@ pub(super) struct LocalOpenAiImageCandidatePayloadParts {
     pub(super) auth_value: String,
     pub(super) requested_model: String,
     pub(super) mapped_model: String,
+    pub(super) provider_api_format: String,
     pub(super) provider_request_headers: BTreeMap<String, String>,
     pub(super) provider_request_body: Value,
     pub(super) upstream_url: String,
@@ -54,6 +58,21 @@ pub(super) async fn resolve_local_openai_image_candidate_payload_parts(
     let spec_metadata = local_openai_image_spec_metadata(spec);
     let candidate = &attempt.eligible.candidate;
     let transport = &attempt.eligible.transport;
+    let provider_api_format = attempt.eligible.provider_api_format.as_str();
+
+    if provider_api_format == "gemini:generate_content" {
+        return resolve_local_openai_image_to_gemini_candidate_payload_parts(
+            state,
+            parts,
+            body_json,
+            body_base64,
+            trace_id,
+            input,
+            attempt,
+            spec,
+        )
+        .await;
+    }
 
     if let Some(skip_reason) =
         openai_image_transport_unsupported_reason(transport, spec_metadata.api_format)
@@ -70,7 +89,6 @@ pub(super) async fn resolve_local_openai_image_candidate_payload_parts(
         .await;
         return None;
     }
-
     let prepared_candidate = match prepare_header_authenticated_candidate(
         PlannerAppState::new(state),
         transport,
@@ -216,10 +234,195 @@ pub(super) async fn resolve_local_openai_image_candidate_payload_parts(
         auth_value,
         requested_model,
         mapped_model,
+        provider_api_format: spec_metadata.api_format.to_string(),
         provider_request_headers,
         provider_request_body,
         upstream_url,
         input_summary,
+    })
+}
+
+async fn resolve_local_openai_image_to_gemini_candidate_payload_parts(
+    state: &AppState,
+    parts: &http::request::Parts,
+    body_json: &Value,
+    body_base64: Option<&str>,
+    trace_id: &str,
+    input: &LocalOpenAiImageDecisionInput,
+    attempt: &LocalOpenAiImageCandidateAttempt,
+    spec: LocalOpenAiImageSpec,
+) -> Option<LocalOpenAiImageCandidatePayloadParts> {
+    let spec_metadata = local_openai_image_spec_metadata(spec);
+    let candidate = &attempt.eligible.candidate;
+    let transport = &attempt.eligible.transport;
+    let provider_api_format = "gemini:generate_content";
+
+    let prepared_candidate = match prepare_header_authenticated_candidate(
+        PlannerAppState::new(state),
+        transport,
+        candidate,
+        request_conversion_direct_auth(transport, RequestConversionKind::ToGeminiStandard),
+        OauthPreparationContext {
+            trace_id,
+            api_format: provider_api_format,
+            operation: "openai_image_to_gemini_candidate_request",
+        },
+    )
+    .await
+    {
+        Ok(prepared) => prepared,
+        Err(skip_reason) => {
+            mark_skipped_local_openai_image_candidate(
+                state,
+                input,
+                trace_id,
+                candidate,
+                attempt.candidate_index,
+                &attempt.candidate_id,
+                skip_reason,
+            )
+            .await;
+            return None;
+        }
+    };
+
+    let Some(normalized_request) = normalize_openai_image_request(parts, body_json, body_base64)
+    else {
+        mark_skipped_local_openai_image_candidate_with_failure_diagnostic(
+            state,
+            input,
+            trace_id,
+            candidate,
+            attempt.candidate_index,
+            &attempt.candidate_id,
+            "provider_request_body_missing",
+            CandidateFailureDiagnostic::provider_request_body_missing(
+                spec_metadata.api_format,
+                provider_api_format,
+                "openai_image_request_normalize",
+            ),
+        )
+        .await;
+        return None;
+    };
+
+    let Some(mut converted) = build_gemini_image_request_body_from_openai_image_request(
+        &normalized_request,
+        &prepared_candidate.mapped_model,
+    ) else {
+        mark_skipped_local_openai_image_candidate_with_failure_diagnostic(
+            state,
+            input,
+            trace_id,
+            candidate,
+            attempt.candidate_index,
+            &attempt.candidate_id,
+            "provider_request_body_missing",
+            CandidateFailureDiagnostic::provider_request_body_missing(
+                spec_metadata.api_format,
+                provider_api_format,
+                "openai_image_to_gemini_request_body",
+            ),
+        )
+        .await;
+        return None;
+    };
+    converted.body_json =
+        match crate::ai_serving::transport::apply_standard_provider_request_body_rules_with_request_headers(
+            converted.body_json,
+            transport.endpoint.body_rules.as_ref(),
+            body_json,
+            &parts.headers,
+        ) {
+            Some(body) => body,
+            None => {
+                mark_skipped_local_openai_image_candidate_with_failure_diagnostic(
+                    state,
+                    input,
+                    trace_id,
+                    candidate,
+                    attempt.candidate_index,
+                    &attempt.candidate_id,
+                    "provider_request_body_missing",
+                    CandidateFailureDiagnostic::provider_request_body_missing(
+                        spec_metadata.api_format,
+                        provider_api_format,
+                        "openai_image_to_gemini_body_rules",
+                    ),
+                )
+                .await;
+                return None;
+            }
+        };
+    let upstream_is_stream = spec_metadata.require_streaming;
+    let Some(upstream_url) = crate::ai_serving::planner::standard::build_standard_upstream_url(
+        parts,
+        transport,
+        &converted.mapped_model,
+        provider_api_format,
+        upstream_is_stream,
+    ) else {
+        mark_skipped_local_openai_image_candidate_with_failure_diagnostic(
+            state,
+            input,
+            trace_id,
+            candidate,
+            attempt.candidate_index,
+            &attempt.candidate_id,
+            "upstream_url_missing",
+            CandidateFailureDiagnostic::upstream_url_missing(
+                spec_metadata.api_format,
+                provider_api_format,
+                "openai_image_to_gemini_url",
+            ),
+        )
+        .await;
+        return None;
+    };
+    let Some(resolved_headers) =
+        build_standard_provider_request_headers(StandardProviderRequestHeadersInput {
+            transport,
+            provider_api_format,
+            same_format: false,
+            headers: &parts.headers,
+            auth_header: &prepared_candidate.auth_header,
+            auth_value: &prepared_candidate.auth_value,
+            extra_headers: &BTreeMap::new(),
+            header_rules: transport.endpoint.header_rules.as_ref(),
+            provider_request_body: &converted.body_json,
+            original_request_body: body_json,
+            upstream_is_stream,
+        })
+    else {
+        mark_skipped_local_openai_image_candidate_with_failure_diagnostic(
+            state,
+            input,
+            trace_id,
+            candidate,
+            attempt.candidate_index,
+            &attempt.candidate_id,
+            "transport_header_rules_apply_failed",
+            CandidateFailureDiagnostic::header_rules_apply_failed(
+                spec_metadata.api_format,
+                provider_api_format,
+                "openai_image_to_gemini_headers",
+            ),
+        )
+        .await;
+        return None;
+    };
+
+    Some(LocalOpenAiImageCandidatePayloadParts {
+        transport: Arc::clone(transport),
+        auth_header: resolved_headers.auth_header,
+        auth_value: resolved_headers.auth_value,
+        requested_model: converted.requested_model,
+        mapped_model: converted.mapped_model,
+        provider_api_format: provider_api_format.to_string(),
+        provider_request_headers: resolved_headers.headers,
+        provider_request_body: converted.body_json,
+        upstream_url,
+        input_summary: converted.summary_json,
     })
 }
 

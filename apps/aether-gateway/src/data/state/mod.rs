@@ -42,10 +42,12 @@ use aether_data::repository::oauth_providers::{
     UpsertOAuthProviderConfigRecord,
 };
 use aether_data::repository::proxy_nodes::{
-    ProxyNodeHeartbeatMutation, ProxyNodeManualCreateMutation, ProxyNodeManualUpdateMutation,
+    ProxyNodeEventQuery, ProxyNodeHeartbeatMutation, ProxyNodeManualCreateMutation,
+    ProxyNodeManualUpdateMutation, ProxyNodeMetricsCleanupSummary, ProxyNodeMetricsStep,
     ProxyNodeReadRepository, ProxyNodeRegistrationMutation, ProxyNodeRemoteConfigMutation,
     ProxyNodeTrafficMutation, ProxyNodeTunnelStatusMutation, ProxyNodeWriteRepository,
-    StoredProxyNode, StoredProxyNodeEvent,
+    StoredProxyFleetMetricsBucket, StoredProxyNode, StoredProxyNodeEvent,
+    StoredProxyNodeMetricsBucket,
 };
 pub(crate) use aether_data::repository::system::{AdminSystemStats, StoredSystemConfigEntry};
 use aether_data::repository::users::{
@@ -78,6 +80,11 @@ use aether_data::repository::wallet::{
 use aether_data::{
     DataBackends, DataLayerError, DatabaseMaintenanceSummary, WalletDailyUsageAggregationInput,
     WalletDailyUsageAggregationResult,
+};
+use aether_data_contracts::repository::background_tasks::{
+    BackgroundTaskListQuery, BackgroundTaskReadRepository, BackgroundTaskSummary,
+    BackgroundTaskWriteRepository, StoredBackgroundTaskEvent, StoredBackgroundTaskRun,
+    StoredBackgroundTaskRunPage, UpsertBackgroundTaskEvent, UpsertBackgroundTaskRun,
 };
 use aether_data_contracts::repository::billing::{
     AdminBillingCollectorRecord, AdminBillingCollectorWriteInput, AdminBillingMutationOutcome,
@@ -138,6 +145,8 @@ pub(crate) struct GatewayDataState {
     proxy_node_reader: Option<Arc<dyn ProxyNodeReadRepository>>,
     proxy_node_writer: Option<Arc<dyn ProxyNodeWriteRepository>>,
     billing_reader: Option<Arc<dyn BillingReadRepository>>,
+    background_task_reader: Option<Arc<dyn BackgroundTaskReadRepository>>,
+    background_task_writer: Option<Arc<dyn BackgroundTaskWriteRepository>>,
     gemini_file_mapping_reader: Option<Arc<dyn GeminiFileMappingReadRepository>>,
     gemini_file_mapping_writer: Option<Arc<dyn GeminiFileMappingWriteRepository>>,
     global_model_reader: Option<Arc<dyn GlobalModelReadRepository>>,
@@ -204,6 +213,14 @@ impl fmt::Debug for GatewayDataState {
             .field("has_proxy_node_reader", &self.proxy_node_reader.is_some())
             .field("has_proxy_node_writer", &self.proxy_node_writer.is_some())
             .field("has_billing_reader", &self.billing_reader.is_some())
+            .field(
+                "has_background_task_reader",
+                &self.background_task_reader.is_some(),
+            )
+            .field(
+                "has_background_task_writer",
+                &self.background_task_writer.is_some(),
+            )
             .field(
                 "has_gemini_file_mapping_reader",
                 &self.gemini_file_mapping_reader.is_some(),

@@ -398,15 +398,11 @@ pub(crate) fn candidate_auth_channel_skip_reason(
 ) -> Option<&'static str> {
     let request_auth_channel = normalize_request_auth_channel(request_auth_channel?)?;
     let upstream_auth_channel = resolve_transport_request_auth_channel(transport)?;
-    if request_auth_channel == upstream_auth_channel
-        || provider_runtime_policy(&transport.provider.provider_type)
-            .allow_auth_channel_mismatch_by_default
-        || allow_auth_channel_mismatch_for_format(transport)
-    {
-        None
-    } else {
-        Some("auth_channel_mismatch")
+    if request_auth_channel == upstream_auth_channel {
+        return None;
     }
+    auth_channel_mismatch_is_explicitly_disabled_for_format(transport)
+        .then_some("auth_channel_mismatch")
 }
 
 fn normalize_request_auth_channel(value: &str) -> Option<&'static str> {
@@ -452,19 +448,22 @@ fn resolve_transport_auth_type_for_endpoint_format(
         .unwrap_or(default_auth_type)
 }
 
-fn allow_auth_channel_mismatch_for_format(transport: &GatewayProviderTransportSnapshot) -> bool {
+fn auth_channel_mismatch_is_explicitly_disabled_for_format(
+    transport: &GatewayProviderTransportSnapshot,
+) -> bool {
     let api_format = crate::ai_serving::normalize_api_format_alias(&transport.endpoint.api_format);
-    transport
+    let Some(items) = transport
         .key
         .allow_auth_channel_mismatch_formats
         .as_ref()
         .and_then(serde_json::Value::as_array)
-        .is_some_and(|items| {
-            items
-                .iter()
-                .filter_map(serde_json::Value::as_str)
-                .any(|item| crate::ai_serving::normalize_api_format_alias(item) == api_format)
-        })
+    else {
+        return false;
+    };
+    !items
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .any(|item| crate::ai_serving::normalize_api_format_alias(item) == api_format)
 }
 
 pub(crate) async fn read_candidate_transport_snapshot(
@@ -585,11 +584,11 @@ mod tests {
     }
 
     #[test]
-    fn auth_channel_gate_skips_mismatched_raw_secret_auth() {
+    fn auth_channel_gate_allows_mismatched_raw_secret_auth_by_default() {
         let transport = sample_transport("bearer");
         assert_eq!(
             candidate_auth_channel_skip_reason(&transport, Some("api_key")),
-            Some("auth_channel_mismatch")
+            None
         );
     }
 
@@ -604,6 +603,16 @@ mod tests {
     }
 
     #[test]
+    fn auth_channel_gate_blocks_explicitly_disabled_mismatch_format() {
+        let mut transport = sample_transport("bearer");
+        transport.key.allow_auth_channel_mismatch_formats = Some(json!(["openai:responses"]));
+        assert_eq!(
+            candidate_auth_channel_skip_reason(&transport, Some("api_key")),
+            Some("auth_channel_mismatch")
+        );
+    }
+
+    #[test]
     fn auth_channel_gate_treats_cli_oauth_provider_as_bearer_like() {
         let mut transport = sample_transport("oauth");
         transport.provider.provider_type = "claude_code".to_string();
@@ -613,7 +622,7 @@ mod tests {
         );
         assert_eq!(
             candidate_auth_channel_skip_reason(&transport, Some("api_key")),
-            Some("auth_channel_mismatch")
+            None
         );
     }
 

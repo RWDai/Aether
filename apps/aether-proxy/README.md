@@ -110,14 +110,16 @@ sudo aether-proxy uninstall
 | `--upstream-pool-idle-timeout-secs` | `AETHER_PROXY_UPSTREAM_POOL_IDLE_TIMEOUT_SECS` | `300` | 连接池空闲超时（秒） |
 | `--upstream-tcp-keepalive-secs` | `AETHER_PROXY_UPSTREAM_TCP_KEEPALIVE_SECS` | `60` | TCP keepalive（秒，0 关闭） |
 | `--upstream-tcp-nodelay` | `AETHER_PROXY_UPSTREAM_TCP_NODELAY` | `true` | 启用 TCP_NODELAY |
-| `--upstream-proxy-url` | `AETHER_PROXY_UPSTREAM_PROXY_URL` | 空 | 仅 provider 上游请求使用的出口代理，支持 `http://`、`socks5://`、`socks5h://` |
+| `--upstream-proxy-url` | `AETHER_PROXY_UPSTREAM_PROXY_URL` | 空 | 仅 provider 上游请求使用的出口代理 |
 | `--redirect-replay-budget-bytes` | `AETHER_PROXY_REDIRECT_REPLAY_BUDGET_BYTES` | `5M` | 307/308 请求体重放的预读预算，支持 `K/M/G`，`0` 表示禁用 body replay buffering |
 
-`upstream_proxy_url` 只影响 `aether-proxy` 访问 OpenAI、Claude、Gemini 等 provider 的上游请求，不影响节点回连 Aether 服务器的 WebSocket tunnel。配合 WARP sidecar 时可填写：
+出口代理支持 `http://`、`socks5://`、`socks5h://`。配合 WARP sidecar 时可填写：
 
 ```toml
 upstream_proxy_url = "socks5h://microwarp:1080"
 ```
+
+如果需要让 Aether 管理 API 和 WebSocket tunnel 也走代理，使用 `aether_proxy_url`。
 
 #### Aether API 客户端
 
@@ -125,6 +127,7 @@ upstream_proxy_url = "socks5h://microwarp:1080"
 |------|----------|--------|------|
 | `--aether-request-timeout-secs` | `AETHER_PROXY_AETHER_REQUEST_TIMEOUT_SECS` | `10` | 请求总超时（秒） |
 | `--aether-connect-timeout-secs` | `AETHER_PROXY_AETHER_CONNECT_TIMEOUT_SECS` | `10` | 建连超时（秒） |
+| `--aether-proxy-url` | `AETHER_PROXY_AETHER_PROXY_URL` | 空 | Aether 注册、心跳和 WebSocket tunnel 回连使用的出口代理（默认不走代理） |
 | `--aether-retry-max-attempts` | `AETHER_PROXY_AETHER_RETRY_MAX_ATTEMPTS` | `3` | 最大重试次数 |
 
 #### DNS 与安全
@@ -153,6 +156,15 @@ upstream_proxy_url = "socks5h://microwarp:1080"
 - 文件日志固定写普通文本，并支持 `hourly/daily` 轮转；默认按天轮换、保留 7 天，最多保留 30 个文件
 - 以 `systemd` 或 `OpenRC` 安装时默认会额外打开文件日志到 `/var/log/aether-proxy`
 - OpenRC 安装时，`aether-proxy logs` 实际读取 `/var/log/aether-proxy/current.log` 和 `/var/log/aether-proxy/error.log`；这些文件通常需要用 `sudo aether-proxy logs` 查看
+
+### 隧道健康上报（Heartbeat）
+
+proxy 会在心跳 `proxy_metadata` 中主动上报隧道稳定性指标，便于后端直接入库/告警：
+
+- `proxy_metadata.tunnel_metrics`：建连尝试/成功/失败、断开次数、累计在线时长、心跳 RTT、WebSocket 收发帧与字节等。
+- `proxy_metadata.recent_tunnel_errors`：最近隧道异常事件（时间戳、类别、错误摘要，环形缓冲）。
+
+说明：仅主连接（`conn=0`）发送 heartbeat，避免多条 tunnel 重复上报同一份全局指标。
 
 ### 多服务器配置
 

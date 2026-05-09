@@ -7,6 +7,7 @@ use tracing::warn;
 
 use crate::ai_serving::planner::candidate_materialization::LocalExecutionAttemptSource;
 use crate::ai_serving::planner::plan_builders::{
+    build_gemini_stream_plan_from_decision, build_gemini_sync_plan_from_decision,
     build_passthrough_sync_plan_from_decision, build_standard_stream_plan_from_decision,
     AiStreamAttempt, AiSyncAttempt,
 };
@@ -284,7 +285,13 @@ impl LocalOpenAiImageSyncAttemptSource<'_> {
             return Ok(None);
         };
 
-        match build_passthrough_sync_plan_from_decision(self.parts, payload) {
+        let provider_api_format = payload.provider_api_format.as_deref().unwrap_or_default();
+        let built = if provider_api_format == "gemini:generate_content" {
+            build_gemini_sync_plan_from_decision(self.parts, self.body_json, payload)
+        } else {
+            build_passthrough_sync_plan_from_decision(self.parts, payload)
+        };
+        match built {
             Ok(value) => Ok(value),
             Err(err) => {
                 warn!(
@@ -320,7 +327,13 @@ impl LocalOpenAiImageStreamAttemptSource<'_> {
             return Ok(None);
         };
 
-        match build_standard_stream_plan_from_decision(self.parts, self.body_json, payload, false) {
+        let provider_api_format = payload.provider_api_format.as_deref().unwrap_or_default();
+        let built = if provider_api_format == "gemini:generate_content" {
+            build_gemini_stream_plan_from_decision(self.parts, self.body_json, payload)
+        } else {
+            build_standard_stream_plan_from_decision(self.parts, self.body_json, payload, false)
+        };
+        match built {
             Ok(value) => Ok(value),
             Err(err) => {
                 warn!(
@@ -508,7 +521,13 @@ async fn build_local_sync_plan_and_reports(
             continue;
         };
 
-        match build_passthrough_sync_plan_from_decision(parts, payload) {
+        let provider_api_format = payload.provider_api_format.as_deref().unwrap_or_default();
+        let built = if provider_api_format == "gemini:generate_content" {
+            build_gemini_sync_plan_from_decision(parts, body_json, payload)
+        } else {
+            build_passthrough_sync_plan_from_decision(parts, payload)
+        };
+        match built {
             Ok(Some(value)) => plans.push(value),
             Ok(None) => {}
             Err(err) => {
@@ -578,7 +597,13 @@ async fn build_local_stream_plan_and_reports(
             continue;
         };
 
-        match build_standard_stream_plan_from_decision(parts, body_json, payload, false) {
+        let provider_api_format = payload.provider_api_format.as_deref().unwrap_or_default();
+        let built = if provider_api_format == "gemini:generate_content" {
+            build_gemini_stream_plan_from_decision(parts, body_json, payload)
+        } else {
+            build_standard_stream_plan_from_decision(parts, body_json, payload, false)
+        };
+        match built {
             Ok(Some(value)) => plans.push(value),
             Ok(None) => {}
             Err(err) => {

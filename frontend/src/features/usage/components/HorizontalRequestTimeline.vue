@@ -215,31 +215,12 @@
                     </span>
                   </div>
                   <div
-                    v-if="currentAttemptSchedulerInfo"
+                    v-if="currentAttemptRequestPathDisplay"
                     class="info-item"
                   >
-                    <span class="info-label">调度顺位</span>
-                    <span class="info-value info-value-stacked">
-                      <code class="format-code">
-                        全局 {{ currentAttemptSchedulerInfo.globalPriorityLabel }}
-                        / Provider {{ currentAttemptSchedulerInfo.providerPriorityLabel }}
-                        / Key {{ currentAttemptSchedulerInfo.keyPriorityLabel }}
-                      </code>
-                      <span class="text-xs text-muted-foreground">
-                        {{ currentAttemptSchedulerInfo.hint }}
-                      </span>
-                    </span>
-                  </div>
-                  <div
-                    v-if="currentAttemptRankingInfo"
-                    class="info-item"
-                  >
-                    <span class="info-label">排序原因</span>
-                    <span class="info-value info-value-stacked">
-                      <code class="format-code">{{ currentAttemptRankingInfo.summary }}</code>
-                      <span class="text-xs text-muted-foreground">
-                        {{ currentAttemptRankingInfo.hint }}
-                      </span>
+                    <span class="info-label">请求路径</span>
+                    <span class="info-value">
+                      <code class="format-code request-path-code">{{ currentAttemptRequestPathDisplay }}</code>
                     </span>
                   </div>
                   <div
@@ -269,19 +250,7 @@
                     <span class="info-value info-value-stacked">
                       <code class="format-code">{{ currentAttemptKeyFormatsDisplay }}</code>
                       <span class="text-xs text-muted-foreground">
-                        同一 Key 的不同 endpoint 会分别参与候选与转换判定
-                      </span>
-                    </span>
-                  </div>
-                  <div
-                    v-if="currentAttemptConversionInfo"
-                    class="info-item"
-                  >
-                    <span class="info-label">转换策略</span>
-                    <span class="info-value info-value-stacked">
-                      <code class="format-code">{{ currentAttemptConversionInfo.summary }}</code>
-                      <span class="text-xs text-muted-foreground">
-                        {{ currentAttemptConversionInfo.hint }}
+                        Key 声明的可用 endpoint 格式
                       </span>
                     </span>
                   </div>
@@ -462,38 +431,42 @@
                   </span>
                 </div>
 
-                <!-- 真实请求错误：节点级调试原因，和对客户端返回的摘要分开 -->
+                <!-- 错误信息：真实上游响应合并在此处展示 -->
                 <div
                   v-if="currentAttempt.status === 'failed' && currentAttemptRequestError"
                   class="error-block"
                 >
-                  <div class="error-type">
-                    真实请求错误
+                  <div class="error-heading">
+                    <span class="error-type">错误信息</span>
+                    <span
+                      v-if="currentAttemptRequestError.statusCode != null"
+                      class="error-status-badge"
+                      :class="currentAttemptRequestError.statusCode >= 400 ? 'is-error' : currentAttemptRequestError.statusCode >= 300 ? 'is-warning' : 'is-success'"
+                    >
+                      HTTP {{ currentAttemptRequestError.statusCode }}
+                    </span>
                   </div>
-                  <div class="error-msg">
+                  <div
+                    v-if="currentAttemptRequestError.message"
+                    class="error-msg"
+                  >
                     {{ currentAttemptRequestError.message }}
                   </div>
                   <div
-                    v-if="currentAttemptRequestError.meta.length > 0"
-                    class="error-flow-meta"
+                    v-if="currentAttemptRequestError.upstreamResponse"
+                    class="error-json"
                   >
-                    <span
-                      v-for="item in currentAttemptRequestError.meta"
-                      :key="item"
-                      class="error-flow-chip"
-                    >{{ item }}</span>
-                  </div>
-                  <div
-                    v-if="currentAttemptRequestError.safetyHint"
-                    class="error-flow-safety"
-                  >
-                    {{ currentAttemptRequestError.safetyHint }}
+                    <JsonContentPanel
+                      :data="currentAttemptRequestError.upstreamResponse"
+                      :is-dark="isDark"
+                      empty-message="无上游响应信息"
+                    />
                   </div>
                 </div>
 
                 <!-- 额外数据 -->
                 <details
-                  v-if="currentAttempt.extra_data && Object.keys(currentAttempt.extra_data).length > 0"
+                  v-if="currentAttemptExtraDataDisplay"
                   class="extra-block"
                 >
                   <summary class="extra-toggle">
@@ -501,7 +474,7 @@
                   </summary>
                   <JsonContentPanel
                     class="extra-json-panel"
-                    :data="currentAttempt.extra_data"
+                    :data="currentAttemptExtraDataDisplay"
                     :is-dark="isDark"
                     empty-message="无额外信息"
                   />
@@ -539,6 +512,7 @@ import { requestTraceApi, type RequestTrace, type CandidateRecord } from '@/api/
 import { log } from '@/utils/logger'
 import { parseApiError } from '@/utils/errorParser'
 import { formatApiFormat } from '@/api/endpoints/types/api-format'
+import { useDarkMode } from '@/composables/useDarkMode'
 import { resolveTimelineFinalStatus } from '../utils/status'
 import {
   buildPoolGroupVisibleAttempts,
@@ -588,17 +562,6 @@ interface UsageData {
     cache_read?: number
     per_request?: number
   }
-}
-
-interface AttemptErrorFlow {
-  source?: string
-  statusCode?: number
-  classification?: string
-  decision?: string
-  retryable?: boolean
-  safeToExpose?: boolean
-  propagation?: string
-  message?: string
 }
 
 const props = defineProps<{
@@ -672,7 +635,7 @@ const getFinalStatusBadgeVariant = (status: string): BadgeVariant => {
 const loading = ref(false)
 const error = ref<string | null>(null)
 const internalTrace = ref<RequestTrace | null>(null)
-const isDark = computed(() => document.documentElement.classList.contains('dark'))
+const { isDark } = useDarkMode()
 const trace = computed(() => props.traceData ?? internalTrace.value)
 const selectedGroupIndex = ref(0)
 const selectedAttemptIndex = ref(0)
@@ -1104,64 +1067,41 @@ const readNumberField = (obj: Record<string, unknown>, key: string): number | un
   return undefined
 }
 
-const readBooleanField = (obj: Record<string, unknown>, key: string): boolean | undefined => {
-  const value = obj[key]
-  return typeof value === 'boolean' ? value : undefined
+const hasRenderableValue = (value: unknown): boolean => {
+  if (value == null) return false
+  if (typeof value === 'string') return value.trim().length > 0
+  if (typeof value === 'object') return Object.keys(value as Record<string, unknown>).length > 0
+  return true
 }
 
-const normalizeAttemptErrorFlow = (value: unknown): AttemptErrorFlow | null => {
+const normalizeUpstreamResponseDisplay = (value: unknown): Record<string, unknown> | null => {
   const raw = extractObject(value)
   if (!raw) return null
+  const statusCode = readNumberField(raw, 'status_code') ?? readNumberField(raw, 'statusCode')
+  const headers = raw.headers
+  const body = raw.body
+  const bodyRef = readStringField(raw, 'body_ref') ?? readStringField(raw, 'bodyRef')
+  const bodyState = readStringField(raw, 'body_state') ?? readStringField(raw, 'bodyState')
 
-  const flow: AttemptErrorFlow = {
-    source: readStringField(raw, 'source'),
-    statusCode: readNumberField(raw, 'status_code') ?? readNumberField(raw, 'statusCode'),
-    classification: readStringField(raw, 'classification'),
-    decision: readStringField(raw, 'decision'),
-    retryable: readBooleanField(raw, 'retryable'),
-    safeToExpose: readBooleanField(raw, 'safe_to_expose') ?? readBooleanField(raw, 'safeToExpose'),
-    propagation: readStringField(raw, 'propagation'),
-    message: readStringField(raw, 'message'),
+  if (
+    statusCode == null &&
+    !hasRenderableValue(headers) &&
+    !hasRenderableValue(body) &&
+    !bodyRef &&
+    !bodyState
+  ) {
+    return null
   }
 
-  return Object.values(flow).some(value => value !== undefined) ? flow : null
+  const data: Record<string, unknown> = {}
+  if (statusCode != null) data.status_code = statusCode
+  if (hasRenderableValue(headers)) data.headers = headers
+  if (hasRenderableValue(body)) data.body = body
+  if (bodyRef) data.body_ref = bodyRef
+  if (bodyState) data.body_state = bodyState
+
+  return data
 }
-
-const labelFromMap = (value: string | undefined, labels: Record<string, string>): string | undefined => {
-  if (!value) return undefined
-  return labels[value] || value
-}
-
-const formatErrorFlowSource = (value?: string): string | undefined => labelFromMap(value, {
-  upstream_response: '上游响应',
-  request_validation: '请求校验',
-  gateway: '网关处理',
-  transport: '传输层',
-  scheduler: '调度层',
-})
-
-const formatErrorFlowDecision = (value?: string): string | undefined => labelFromMap(value, {
-  retry_next_candidate: '重试下一个候选',
-  stop_local_failover: '停止本地转移',
-  use_default: '默认处理',
-  return_to_client: '返回客户端',
-})
-
-const formatErrorFlowPropagation = (value?: string): string | undefined => labelFromMap(value, {
-  suppressed: '已抑制',
-  converted: '已转换',
-  passthrough: '直接透传',
-  local: '本地生成',
-  captured: '仅采集',
-})
-
-const formatErrorFlowClassification = (value?: string): string | undefined => labelFromMap(value, {
-  retryable: '可重试',
-  terminal: '终止',
-  provider_auth: '上游认证',
-  provider_quota: '上游额度',
-  invalid_request: '请求无效',
-})
 
 const extractStringList = (value: unknown): string[] => {
   if (Array.isArray(value)) {
@@ -1181,57 +1121,9 @@ const extractStringList = (value: unknown): string[] => {
   return []
 }
 
-const normalizePriorityNumber = (value: unknown): number | null => {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return Math.trunc(value)
-  }
-  if (typeof value === 'string' && value.trim()) {
-    const parsed = Number(value)
-    if (Number.isFinite(parsed)) {
-      return Math.trunc(parsed)
-    }
-  }
-  return null
-}
-
-const resolveClientApiFormat = (attempt: CandidateRecord): string => {
-  const extra = (
-    attempt.extra_data && typeof attempt.extra_data === 'object' && !Array.isArray(attempt.extra_data)
-      ? attempt.extra_data
-      : {}
-  ) as Record<string, unknown>
-  const fromExtra = typeof extra.client_api_format === 'string' ? extra.client_api_format.trim() : ''
-  if (fromExtra) return fromExtra
-  if (typeof props.requestApiFormat === 'string' && props.requestApiFormat.trim()) {
-    return props.requestApiFormat.trim()
-  }
-  return ''
-}
-
-const resolveProviderApiFormat = (attempt: CandidateRecord): string => {
-  const extra = (
-    attempt.extra_data && typeof attempt.extra_data === 'object' && !Array.isArray(attempt.extra_data)
-      ? attempt.extra_data
-      : {}
-  ) as Record<string, unknown>
-  const fromExtra = typeof extra.provider_api_format === 'string' ? extra.provider_api_format.trim() : ''
-  if (fromExtra) return fromExtra
-  if (typeof attempt.endpoint_name === 'string' && attempt.endpoint_name.trim()) {
-    return attempt.endpoint_name.trim()
-  }
-  return ''
-}
-
 const resolveTransportDiagnostics = (attempt: CandidateRecord): Record<string, unknown> | null => {
   const extra = extractObject(attempt.extra_data)
   return extractObject(extra?.transport_diagnostics)
-}
-
-const resolveEndpointFormatAcceptanceConfig = (attempt: CandidateRecord): Record<string, unknown> | null => {
-  const fromAttempt = extractObject(attempt.endpoint_format_acceptance_config)
-  if (fromAttempt) return fromAttempt
-  const transport = resolveTransportDiagnostics(attempt)
-  return extractObject(transport?.endpoint_format_acceptance_config)
 }
 
 const currentAttemptFormatDisplay = computed(() => {
@@ -1261,120 +1153,55 @@ const currentAttemptFormatDisplay = computed(() => {
   return providerText || requestText
 })
 
-const currentAttemptSchedulerInfo = computed<{
-  globalPriorityLabel: string
-  providerPriorityLabel: string
-  keyPriorityLabel: string
-  hint: string
-} | null>(() => {
-  const attempt = currentAttempt.value
-  if (!attempt) return null
+const normalizeQueryString = (value: string): string => {
+  const trimmed = value.trim()
+  if (!trimmed) return ''
+  return trimmed.startsWith('?') ? trimmed.slice(1) : trimmed
+}
 
-  const clientApiFormat = resolveClientApiFormat(attempt)
-  const providerApiFormat = resolveProviderApiFormat(attempt)
-  const providerPriority = normalizePriorityNumber(attempt.provider_priority)
-  const keyInternalPriority = normalizePriorityNumber(attempt.key_internal_priority)
+const resolveRequestPathFromObject = (value: unknown): string => {
+  const object = extractObject(value)
+  if (!object) return ''
 
-  let globalPriority: number | null = null
-  const globalPriorityMap = attempt.key_global_priority_by_format
-  if (globalPriorityMap && typeof globalPriorityMap === 'object' && !Array.isArray(globalPriorityMap) && clientApiFormat) {
-    const match = Object.entries(globalPriorityMap).find(([format]) => (
-      normalizeFormatSignature(format) === normalizeFormatSignature(clientApiFormat)
-    ))
-    globalPriority = match ? normalizePriorityNumber(match[1]) : null
-  }
-
-  const isCrossFormat = Boolean(
-    clientApiFormat &&
-    providerApiFormat &&
-    normalizeFormatSignature(clientApiFormat) !== normalizeFormatSignature(providerApiFormat),
+  const pathWithQuery = (
+    readStringField(object, 'request_path_and_query')
+    || readStringField(object, 'public_path_and_query')
+    || readStringField(object, 'path_and_query')
+    || readStringField(object, 'request_uri')
+    || readStringField(object, 'public_uri')
   )
-  const keepPriorityOnConversion = attempt.provider_keep_priority_on_conversion === true
+  if (pathWithQuery) return pathWithQuery
 
-  let hint = '顺位展示 Provider / Key 优先级；不同 endpoint 独立参与候选'
-  if (globalPriority !== null) {
-    hint = `当前格式 ${formatApiFormat(clientApiFormat)} 先看全局 Key 优先级；不同 endpoint 单独判定`
-  }
-  if (isCrossFormat) {
-    hint = keepPriorityOnConversion
-      ? '跨格式候选已开启保持优先级；同一 Key 的不同 endpoint 独立参与'
-      : '跨格式候选默认排在同格式候选之后；同一 Key 的不同 endpoint 独立参与'
-  }
+  const path = (
+    readStringField(object, 'request_path')
+    || readStringField(object, 'public_path')
+    || readStringField(object, 'path')
+  )
+  if (!path) return ''
 
-  return {
-    globalPriorityLabel: globalPriority !== null ? String(globalPriority) : '-',
-    providerPriorityLabel: providerPriority !== null ? String(providerPriority) : '-',
-    keyPriorityLabel: keyInternalPriority !== null ? String(keyInternalPriority) : '-',
-    hint,
-  }
-})
-
-const normalizeMetadataText = (value: unknown): string => {
-  return typeof value === 'string' ? value.trim() : ''
+  const query = normalizeQueryString(
+    readStringField(object, 'request_query_string')
+    || readStringField(object, 'public_query_string')
+    || readStringField(object, 'query_string')
+    || readStringField(object, 'query')
+    || '',
+  )
+  if (!query || path.includes('?')) return path
+  return `${path}?${query}`
 }
 
-const formatRankingModeLabel = (value: string): string => {
-  const normalized = value.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase()
-  const labels: Record<string, string> = {
-    fixed_order: '固定顺序',
-    cache_affinity: '亲和性优先',
-    load_balance: '负载均衡',
-  }
-  return labels[normalized] || value
-}
-
-const formatPriorityModeLabel = (value: string): string => {
-  const normalized = value.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase()
-  const labels: Record<string, string> = {
-    provider: 'Provider 优先级',
-    global_key: '全局 Key 优先级',
-  }
-  return labels[normalized] || value
-}
-
-const formatRankingReasonLabel = (value: string): string => {
-  const labels: Record<string, string> = {
-    cached_affinity: '缓存亲和性命中',
-    local_tunnel: '本地隧道优先',
-    cross_format: '跨格式降级',
-  }
-  return labels[value] || value
-}
-
-const currentAttemptRankingInfo = computed<{
-  summary: string
-  hint: string
-} | null>(() => {
+const currentAttemptRequestPathDisplay = computed(() => {
   const attempt = currentAttempt.value
-  if (!attempt) return null
-  const ranking = extractObject(attempt.ranking)
-  const extra = extractObject(attempt.extra_data)
-  if (!ranking && !extra) return null
+  const fromAttempt = resolveRequestPathFromObject(attempt?.extra_data)
+  if (fromAttempt) return fromAttempt
 
-  const rankingMode = normalizeMetadataText(ranking?.mode ?? extra?.ranking_mode)
-  const priorityMode = normalizeMetadataText(ranking?.priority_mode ?? extra?.priority_mode)
-  const promotedBy = normalizeMetadataText(ranking?.promoted_by ?? extra?.promoted_by)
-  const demotedBy = normalizeMetadataText(ranking?.demoted_by ?? extra?.demoted_by)
-  const rankingIndex = normalizePriorityNumber(ranking?.index ?? extra?.ranking_index)
-  const prioritySlot = normalizePriorityNumber(ranking?.priority_slot ?? extra?.priority_slot)
-  if (!rankingMode && !priorityMode && !promotedBy && !demotedBy && rankingIndex === null && prioritySlot === null) {
-    return null
-  }
+  const fromTrace = resolveRequestPathFromObject(trace.value)
+  if (fromTrace) return fromTrace
 
-  const summaryParts: string[] = []
-  if (rankingMode) summaryParts.push(formatRankingModeLabel(rankingMode))
-  if (promotedBy) summaryParts.push(formatRankingReasonLabel(promotedBy))
-  if (demotedBy) summaryParts.push(formatRankingReasonLabel(demotedBy))
+  const fromRequestMetadata = resolveRequestPathFromObject(props.requestMetadata)
+  if (fromRequestMetadata) return fromRequestMetadata
 
-  const hintParts: string[] = []
-  if (rankingIndex !== null) hintParts.push(`排序 #${rankingIndex + 1}`)
-  if (priorityMode) hintParts.push(formatPriorityModeLabel(priorityMode))
-  if (prioritySlot !== null) hintParts.push(`槽位 ${prioritySlot}`)
-
-  return {
-    summary: summaryParts.length > 0 ? summaryParts.join(' / ') : '排序元数据',
-    hint: hintParts.length > 0 ? hintParts.join(' · ') : '候选排序由 scheduler ranking engine 生成',
-  }
+  return ''
 })
 
 const currentAttemptKeyFormatsDisplay = computed(() => {
@@ -1388,66 +1215,6 @@ const currentAttemptKeyFormatsDisplay = computed(() => {
     .map(format => formatApiFormat(format))
     .join(' / ')
 })
-
-const currentAttemptConversionInfo = computed<{
-  summary: string
-  hint: string
-} | null>(() => {
-  const attempt = currentAttempt.value
-  if (!attempt) return null
-
-  const clientApiFormat = resolveClientApiFormat(attempt)
-  const providerApiFormat = resolveProviderApiFormat(attempt)
-  if (!clientApiFormat || !providerApiFormat) return null
-
-  const isCrossFormat = normalizeFormatSignature(clientApiFormat) !== normalizeFormatSignature(providerApiFormat)
-  if (!isCrossFormat) {
-    return {
-      summary: '同格式直连',
-      hint: '当前候选直接命中 endpoint 原生格式',
-    }
-  }
-
-  const transportDiagnostics = resolveTransportDiagnostics(attempt)
-  const providerEnabled = attempt.provider_enable_format_conversion === true
-    || transportDiagnostics?.provider_enable_format_conversion === true
-  const endpointConfig = resolveEndpointFormatAcceptanceConfig(attempt)
-  const endpointRuleEnabled = endpointConfig
-    ? endpointConfig.enabled !== false
-    : false
-  const acceptFormats = extractStringList(endpointConfig?.accept_formats)
-  const rejectFormats = extractStringList(endpointConfig?.reject_formats)
-  const normalizedClientFormat = normalizeFormatSignature(clientApiFormat)
-  const endpointAcceptsClient = acceptFormats.some(
-    format => normalizeFormatSignature(format) === normalizedClientFormat,
-  )
-  const endpointRejectsClient = rejectFormats.some(
-    format => normalizeFormatSignature(format) === normalizedClientFormat,
-  )
-
-  let summary = '未开启格式转换'
-  if (providerEnabled && endpointRuleEnabled) {
-    summary = 'Provider 总开关 + Endpoint 规则'
-  } else if (providerEnabled) {
-    summary = 'Provider 总格式转换'
-  } else if (endpointRuleEnabled) {
-    summary = 'Endpoint 独立格式转换'
-  }
-
-  let hint = '同一 Key 的不同 endpoint 会分别判定格式转换'
-  if (endpointRejectsClient) {
-    hint = `当前 endpoint 明确拒绝 ${formatApiFormat(clientApiFormat)}`
-  } else if (endpointAcceptsClient) {
-    hint = `当前 endpoint 明确接受 ${formatApiFormat(clientApiFormat)}`
-  } else if (providerEnabled) {
-    hint = '当前跨格式由 Provider 总开关放行'
-  } else if (attempt.skip_reason === 'format_conversion_disabled') {
-    hint = 'Provider 总开关关闭，且当前 endpoint 未单独放行'
-  }
-
-  return { summary, hint }
-})
-
 const currentAttemptSkipReasonDisplay = computed(() => {
   const attempt = currentAttempt.value
   if (!attempt?.skip_reason) return ''
@@ -1497,43 +1264,62 @@ const currentAttemptFailureDiagnostic = computed<{
   }
 })
 
+const formatAttemptErrorMessage = (message: string, statusCode?: number): string => {
+  const normalized = message.trim()
+  if (!normalized) return ''
+  if (/execution runtime (stream )?returned non-success status \d+/i.test(normalized)) {
+    return statusCode != null ? `上游返回非成功状态 ${statusCode}` : '上游返回非成功状态'
+  }
+  return normalized
+}
+
 const currentAttemptRequestError = computed<{
   message: string
-  meta: string[]
-  safetyHint: string
+  statusCode?: number
+  upstreamResponse: Record<string, unknown> | null
 } | null>(() => {
   const attempt = currentAttempt.value
   if (!attempt || attempt.status !== 'failed') return null
 
   const extra = extractObject(attempt.extra_data)
-  const flow = normalizeAttemptErrorFlow(extra?.error_flow)
+  const upstreamResponse = extractObject(extra?.upstream_response)
+  const errorFlow = extractObject(extra?.error_flow)
+  const statusCode = readNumberField(upstreamResponse ?? {}, 'status_code')
+    ?? readNumberField(upstreamResponse ?? {}, 'statusCode')
+    ?? readNumberField(errorFlow ?? {}, 'status_code')
+    ?? readNumberField(errorFlow ?? {}, 'statusCode')
+    ?? attempt.status_code
+  const flowMessage = errorFlow
+    ? readStringField(errorFlow, 'message')
+    : ''
   const fallbackMessage = typeof attempt.error_message === 'string' && attempt.error_message.trim()
     ? attempt.error_message.trim()
     : ''
   const fallbackType = typeof attempt.error_type === 'string' && attempt.error_type.trim()
     ? attempt.error_type.trim()
     : ''
-  const message = flow?.message || fallbackMessage
-  if (!message && !fallbackType && !flow) return null
-
-  const meta = [
-    flow?.statusCode != null ? `HTTP ${flow.statusCode}` : (attempt.status_code ? `HTTP ${attempt.status_code}` : ''),
-    formatErrorFlowSource(flow?.source),
-    formatErrorFlowClassification(flow?.classification) || fallbackType,
-    formatErrorFlowDecision(flow?.decision),
-    formatErrorFlowPropagation(flow?.propagation),
-    flow?.retryable != null ? (flow.retryable ? '会继续重试' : '不再重试') : '',
-  ].filter((item): item is string => Boolean(item))
-
-  const safetyHint = flow?.safeToExpose === false
-    ? '该错误被标记为敏感上游错误：仅在链路节点展示，不应完整返回给客户端。'
-    : ''
+  const message = formatAttemptErrorMessage(flowMessage || fallbackMessage, statusCode) || fallbackType
+  const upstreamResponseDisplay = normalizeUpstreamResponseDisplay(extra?.upstream_response)
+  if (!message && statusCode == null && !upstreamResponseDisplay) return null
 
   return {
-    message: message || fallbackType || '未知错误',
-    meta,
-    safetyHint,
+    message: upstreamResponseDisplay ? '' : (message || '未知错误'),
+    statusCode,
+    upstreamResponse: upstreamResponseDisplay,
   }
+})
+
+const currentAttemptExtraDataDisplay = computed<Record<string, unknown> | null>(() => {
+  const extra = extractObject(currentAttempt.value?.extra_data)
+  if (!extra) return null
+
+  const display = { ...extra }
+  delete display.upstream_response
+  delete display.error_flow
+  delete display.client_response
+  delete display.provider_response
+
+  return Object.keys(display).length > 0 ? display : null
 })
 
 // 计算当前尝试启用的能力标签（请求需要的能力）
@@ -1870,8 +1656,16 @@ const getStatusColorClass = (status: string) => {
 // 展示状态：进行中态优先（包括 started 但未 finished 的中间态），再按 HTTP 状态码兜底
 function getDisplayStatus(attempt: CandidateRecord | null | undefined): string {
   if (!attempt) return 'available'
+  const code = attempt.status_code
+  const isTerminalSuccessCode = typeof code === 'number' && code >= 200 && code < 300
+
+  if (attempt.status === 'success') {
+    if (typeof code === 'number' && !isTerminalSuccessCode) {
+      return 'failed'
+    }
+    return 'success'
+  }
   if (
-    attempt.status === 'success' ||
     attempt.status === 'failed' ||
     attempt.status === 'cancelled' ||
     attempt.status === 'skipped' ||
@@ -1890,10 +1684,9 @@ function getDisplayStatus(attempt: CandidateRecord | null | undefined): string {
   if (isExplicitPending || isImplicitPending) {
     return 'pending'
   }
-  const code = attempt.status_code
   if (typeof code === 'number') {
-    if (code >= 200 && code < 300) return 'success'
-    if (code >= 400) return 'failed'
+    if (isTerminalSuccessCode) return 'success'
+    if (code >= 300) return 'failed'
   }
   return attempt.status
 }
@@ -2695,13 +2488,45 @@ function getDisplayStatus(attempt: CandidateRecord | null | undefined): string {
   border-radius: 8px;
 }
 
+.error-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.25rem;
+}
+
 .error-type {
   font-size: 0.75rem;
   font-weight: 600;
   color: #ef4444;
-  margin-bottom: 0.25rem;
   text-transform: uppercase;
   letter-spacing: 0.025em;
+}
+
+.error-status-badge {
+  flex-shrink: 0;
+  padding: 0.125rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-family: ui-monospace, monospace;
+  background: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+}
+
+.error-status-badge.is-success {
+  color: #166534;
+  background: #22c55e18;
+}
+
+.error-status-badge.is-warning {
+  color: #92400e;
+  background: #f59e0b1f;
+}
+
+.error-status-badge.is-error {
+  color: #991b1b;
+  background: #ef44441f;
 }
 
 .error-msg {
@@ -2710,35 +2535,19 @@ function getDisplayStatus(attempt: CandidateRecord | null | undefined): string {
   word-break: break-word;
 }
 
-.error-flow-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.375rem;
-  margin-top: 0.625rem;
+.error-json {
+  margin-top: 0.75rem;
 }
 
-.error-flow-chip {
-  padding: 0.125rem 0.45rem;
-  border-radius: 999px;
-  background: #ef444414;
-  border: 1px solid #ef44442e;
-  color: #991b1b;
-  font-size: 0.72rem;
-  line-height: 1.35;
+.dark .error-status-badge.is-success {
+  color: #bbf7d0;
 }
 
-.error-flow-safety {
-  margin-top: 0.625rem;
-  color: #991b1b;
-  font-size: 0.78rem;
-  line-height: 1.5;
+.dark .error-status-badge.is-warning {
+  color: #fde68a;
 }
 
-.dark .error-flow-chip {
-  color: #fecaca;
-}
-
-.dark .error-flow-safety {
+.dark .error-status-badge.is-error {
   color: #fecaca;
 }
 

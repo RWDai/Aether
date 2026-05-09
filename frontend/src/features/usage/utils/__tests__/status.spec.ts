@@ -106,6 +106,14 @@ describe('usage status helpers', () => {
     })).toBe('failed')
   })
 
+  it('downgrades terminal success to failed when status code is 3xx', () => {
+    expect(resolveTimelineFinalStatus({
+      traceFinalStatus: 'success',
+      requestStatus: 'completed',
+      statusCode: 302,
+    })).toBe('failed')
+  })
+
   it('falls back to request lifecycle status when status code and trace are missing', () => {
     expect(resolveTimelineFinalStatus({
       requestStatus: 'failed',
@@ -189,6 +197,9 @@ describe('usage status helpers', () => {
     expect(resolveTimelineFinalStatus({
       statusCode: 200,
     })).toBe('success')
+    expect(resolveTimelineFinalStatus({
+      statusCode: 302,
+    })).toBe('failed')
     expect(resolveTimelineFinalStatus({
       statusCode: 503,
     })).toBe('failed')

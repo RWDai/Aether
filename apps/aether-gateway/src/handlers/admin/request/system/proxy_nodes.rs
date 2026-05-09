@@ -3,8 +3,10 @@ use crate::handlers::shared::unix_secs_to_rfc3339;
 use crate::maintenance::{inspect_proxy_upgrade_rollout, ProxyUpgradeRolloutStatus};
 use crate::GatewayError;
 use aether_admin::system::{
-    build_admin_proxy_node_event_payload, build_admin_proxy_node_events_payload_response,
-    build_admin_proxy_node_payload, build_admin_proxy_nodes_data_unavailable_response,
+    build_admin_proxy_fleet_metrics_payload_response, build_admin_proxy_node_event_payload,
+    build_admin_proxy_node_events_payload_response,
+    build_admin_proxy_node_metrics_payload_response, build_admin_proxy_node_payload,
+    build_admin_proxy_nodes_data_unavailable_response,
     build_admin_proxy_nodes_invalid_status_response, build_admin_proxy_nodes_list_payload_response,
     build_admin_proxy_nodes_not_found_response,
 };
@@ -84,6 +86,30 @@ impl<'a> AdminAppState<'a> {
     pub(crate) async fn build_admin_proxy_node_events_response(
         &self,
         node_id: &str,
+        query: &aether_data::repository::proxy_nodes::ProxyNodeEventQuery,
+    ) -> Result<Response<Body>, GatewayError> {
+        if !self.has_proxy_node_reader() {
+            return Ok(build_admin_proxy_nodes_data_unavailable_response());
+        }
+        if self.find_proxy_node(node_id).await?.is_none() {
+            return Ok(build_admin_proxy_nodes_not_found_response());
+        }
+        let items = self
+            .app
+            .list_proxy_node_events_filtered(node_id, query)
+            .await?
+            .into_iter()
+            .map(|event| build_admin_proxy_node_event_payload(&event))
+            .collect::<Vec<_>>();
+        Ok(build_admin_proxy_node_events_payload_response(items))
+    }
+
+    pub(crate) async fn build_admin_proxy_node_metrics_response(
+        &self,
+        node_id: &str,
+        step: aether_data::repository::proxy_nodes::ProxyNodeMetricsStep,
+        from_unix_secs: u64,
+        to_unix_secs: u64,
         limit: usize,
     ) -> Result<Response<Body>, GatewayError> {
         if !self.has_proxy_node_reader() {
@@ -93,12 +119,37 @@ impl<'a> AdminAppState<'a> {
             return Ok(build_admin_proxy_nodes_not_found_response());
         }
         let items = self
-            .list_proxy_node_events(node_id, limit)
-            .await?
-            .into_iter()
-            .map(|event| build_admin_proxy_node_event_payload(&event))
-            .collect::<Vec<_>>();
-        Ok(build_admin_proxy_node_events_payload_response(items))
+            .app
+            .list_proxy_node_metrics(node_id, step, from_unix_secs, to_unix_secs, limit)
+            .await?;
+        Ok(build_admin_proxy_node_metrics_payload_response(
+            step,
+            from_unix_secs,
+            to_unix_secs,
+            items,
+        ))
+    }
+
+    pub(crate) async fn build_admin_proxy_fleet_metrics_response(
+        &self,
+        step: aether_data::repository::proxy_nodes::ProxyNodeMetricsStep,
+        from_unix_secs: u64,
+        to_unix_secs: u64,
+        limit: usize,
+    ) -> Result<Response<Body>, GatewayError> {
+        if !self.has_proxy_node_reader() {
+            return Ok(build_admin_proxy_nodes_data_unavailable_response());
+        }
+        let items = self
+            .app
+            .list_proxy_fleet_metrics(step, from_unix_secs, to_unix_secs, limit)
+            .await?;
+        Ok(build_admin_proxy_fleet_metrics_payload_response(
+            step,
+            from_unix_secs,
+            to_unix_secs,
+            items,
+        ))
     }
 
     pub(crate) async fn unregister_proxy_node(

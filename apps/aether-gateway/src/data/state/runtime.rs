@@ -5,11 +5,12 @@ use super::{
     AdminBillingRuleWriteInput, AdminPaymentOrderListQuery, AdminRedeemCodeBatchListQuery,
     AdminRedeemCodeListQuery, AdminWalletLedgerQuery, AdminWalletListQuery,
     AdminWalletRefundRequestListQuery, AnnouncementListQuery, AuditLogListQuery,
-    CompleteAdminWalletRefundInput, CreateAdminRedeemCodeBatchInput,
-    CreateAdminRedeemCodeBatchResult, CreateAnnouncementRecord, CreateManualWalletRechargeInput,
-    CreateWalletRechargeOrderInput, CreateWalletRechargeOrderOutcome,
-    CreateWalletRefundRequestInput, CreateWalletRefundRequestOutcome, CreditAdminPaymentOrderInput,
-    DataLayerError, DatabaseMaintenanceSummary, DecisionTrace, DeleteAdminRedeemCodeBatchInput,
+    BackgroundTaskListQuery, BackgroundTaskSummary, CompleteAdminWalletRefundInput,
+    CreateAdminRedeemCodeBatchInput, CreateAdminRedeemCodeBatchResult, CreateAnnouncementRecord,
+    CreateManualWalletRechargeInput, CreateWalletRechargeOrderInput,
+    CreateWalletRechargeOrderOutcome, CreateWalletRefundRequestInput,
+    CreateWalletRefundRequestOutcome, CreditAdminPaymentOrderInput, DataLayerError,
+    DatabaseMaintenanceSummary, DecisionTrace, DeleteAdminRedeemCodeBatchInput,
     DisableAdminRedeemCodeBatchInput, DisableAdminRedeemCodeInput, FailAdminWalletRefundInput,
     GatewayDataState, GatewayProviderTransportSnapshot, LocalVideoTaskReadResponse,
     ProcessAdminWalletRefundInput, ProcessPaymentCallbackInput, ProcessPaymentCallbackOutcome,
@@ -19,15 +20,16 @@ use super::{
     StoredAdminRedeemCodePage, StoredAdminWalletLedgerPage, StoredAdminWalletListPage,
     StoredAdminWalletRefund, StoredAdminWalletRefundPage, StoredAdminWalletRefundRequestPage,
     StoredAdminWalletTransaction, StoredAdminWalletTransactionPage, StoredAnnouncement,
-    StoredAnnouncementPage, StoredBillingModelContext, StoredProviderQuotaSnapshot,
+    StoredAnnouncementPage, StoredBackgroundTaskEvent, StoredBackgroundTaskRun,
+    StoredBackgroundTaskRunPage, StoredBillingModelContext, StoredProviderQuotaSnapshot,
     StoredProviderUsageSummary, StoredRequestUsageAudit, StoredSuspiciousActivity,
     StoredUsageSettlement, StoredUserAuditLogPage, StoredUserAuthRecord, StoredUserExportRow,
     StoredUserSummary, StoredVideoTask, StoredWalletDailyUsageLedger,
     StoredWalletDailyUsageLedgerPage, StoredWalletSnapshot, UpdateAnnouncementRecord,
-    UpsertUsageRecord, UpsertVideoTask, UsageSettlementInput, VideoTaskLookupKey,
-    VideoTaskModelCount, VideoTaskQueryFilter, VideoTaskStatusCount,
-    WalletDailyUsageAggregationInput, WalletDailyUsageAggregationResult, WalletLookupKey,
-    WalletMutationOutcome,
+    UpsertBackgroundTaskEvent, UpsertBackgroundTaskRun, UpsertUsageRecord, UpsertVideoTask,
+    UsageSettlementInput, VideoTaskLookupKey, VideoTaskModelCount, VideoTaskQueryFilter,
+    VideoTaskStatusCount, WalletDailyUsageAggregationInput, WalletDailyUsageAggregationResult,
+    WalletLookupKey, WalletMutationOutcome,
 };
 use aether_data_contracts::repository::usage::{
     PendingUsageCleanupSummary, ProviderApiKeyWindowUsageRequest,
@@ -1715,6 +1717,82 @@ impl GatewayDataState {
         request_path: &str,
     ) -> Result<Option<LocalVideoTaskReadResponse>, DataLayerError> {
         read_data_backed_video_task_response(self, route_family, request_path).await
+    }
+
+    pub(crate) async fn find_background_task_run(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<StoredBackgroundTaskRun>, DataLayerError> {
+        match &self.background_task_reader {
+            Some(repository) => repository.find_run(run_id).await,
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn list_background_task_runs(
+        &self,
+        query: &BackgroundTaskListQuery,
+    ) -> Result<StoredBackgroundTaskRunPage, DataLayerError> {
+        match &self.background_task_reader {
+            Some(repository) => repository.list_runs(query).await,
+            None => Ok(StoredBackgroundTaskRunPage::default()),
+        }
+    }
+
+    pub(crate) async fn list_background_task_events(
+        &self,
+        run_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<StoredBackgroundTaskEvent>, DataLayerError> {
+        match &self.background_task_reader {
+            Some(repository) => repository.list_events(run_id, offset, limit).await,
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn summarize_background_task_runs(
+        &self,
+    ) -> Result<BackgroundTaskSummary, DataLayerError> {
+        match &self.background_task_reader {
+            Some(repository) => repository.summarize_runs().await,
+            None => Ok(BackgroundTaskSummary::default()),
+        }
+    }
+
+    pub(crate) async fn upsert_background_task_run(
+        &self,
+        run: UpsertBackgroundTaskRun,
+    ) -> Result<Option<StoredBackgroundTaskRun>, DataLayerError> {
+        match &self.background_task_writer {
+            Some(repository) => repository.upsert_run(run).await.map(Some),
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn request_cancel_background_task_run(
+        &self,
+        run_id: &str,
+        updated_at_unix_secs: u64,
+    ) -> Result<bool, DataLayerError> {
+        match &self.background_task_writer {
+            Some(repository) => {
+                repository
+                    .request_cancel(run_id, updated_at_unix_secs)
+                    .await
+            }
+            None => Ok(false),
+        }
+    }
+
+    pub(crate) async fn upsert_background_task_event(
+        &self,
+        event: UpsertBackgroundTaskEvent,
+    ) -> Result<Option<StoredBackgroundTaskEvent>, DataLayerError> {
+        match &self.background_task_writer {
+            Some(repository) => repository.upsert_event(event).await.map(Some),
+            None => Ok(None),
+        }
     }
 }
 

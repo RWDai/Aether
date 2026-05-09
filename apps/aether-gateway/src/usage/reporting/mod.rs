@@ -9,6 +9,7 @@ use crate::clock::current_unix_ms;
 use crate::log_ids::short_request_id;
 use crate::orchestration::{apply_local_report_effect, LocalReportEffect};
 use crate::request_candidate_runtime::record_report_request_candidate_status;
+use crate::task_runtime::{spawn_fire_and_forget, TASK_KEY_USAGE_SYNC_REPORT};
 use crate::{AppState, GatewayError};
 
 mod context;
@@ -142,7 +143,7 @@ pub(crate) async fn submit_sync_report(
 pub(crate) fn spawn_sync_report(state: AppState, payload: GatewaySyncReportRequest) {
     let report_request_id_for_log =
         short_request_id(report_request_id(payload.report_context.as_ref()));
-    tokio::spawn(async move {
+    spawn_fire_and_forget(TASK_KEY_USAGE_SYNC_REPORT, async move {
         let trace_id = payload.trace_id.clone();
         if let Err(err) = submit_sync_report(&state, payload).await {
             warn!(

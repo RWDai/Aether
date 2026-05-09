@@ -92,6 +92,7 @@ fn maybe_build_local_openai_image_sync_finalize_response(
         payload.report_kind.as_str(),
         payload.status_code,
         payload.report_context.as_ref(),
+        payload.body_json.as_ref(),
         payload.body_base64.as_deref(),
     )
     .map_err(GatewayError::from)?

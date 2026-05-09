@@ -529,7 +529,8 @@ fn build_terminal_usage_event_from_seed_impl(
     };
     let routing = merge_routing_seed_with_metadata_owned(routing, request_metadata.as_ref());
     let body_refs = merge_body_refs_seed_with_metadata_owned(body_refs, request_metadata.as_ref());
-    let error_message = resolve_error_message(status_code, provider_response.as_ref(), None);
+    let error_message = resolve_error_message(status_code, provider_response.as_ref(), None)
+        .or_else(|| resolve_error_message(status_code, client_response.as_ref(), None));
     let api_family = infer_api_family(&client_contract).map(ToOwned::to_owned);
     let endpoint_kind = infer_endpoint_kind(&client_contract).map(ToOwned::to_owned);
     let provider_api_family = infer_api_family(&provider_contract).map(ToOwned::to_owned);
@@ -734,7 +735,8 @@ pub fn build_sync_terminal_usage_payload_seed(
     let context = payload.report_context.as_ref().and_then(Value::as_object);
     let provider_response_headers = context_usage_value(context, "provider_response_headers")
         .or_else(|| headers_to_json(&payload.headers));
-    let client_response_headers = headers_to_json(&payload.headers);
+    let client_response_headers = context_usage_value(context, "client_response_headers")
+        .or_else(|| headers_to_json(&payload.headers));
     SyncTerminalUsagePayloadSeed {
         report_kind: payload.report_kind.clone(),
         status_code: payload.status_code,
@@ -941,7 +943,7 @@ fn infer_sync_terminal_state(
 ) -> UsageTerminalState {
     if status_code == 499 || report_kind.contains("cancel") {
         UsageTerminalState::Cancelled
-    } else if status_code >= 400
+    } else if !(200..300).contains(&status_code)
         || provider_response
             .and_then(|value| value.get("error"))
             .is_some_and(|value| !value.is_null())
@@ -959,7 +961,7 @@ fn infer_stream_terminal_state(
 ) -> UsageTerminalState {
     if cancelled || status_code == 499 || report_kind.contains("cancel") {
         UsageTerminalState::Cancelled
-    } else if status_code >= 400 {
+    } else if !(200..300).contains(&status_code) {
         UsageTerminalState::Failed
     } else {
         UsageTerminalState::Completed
@@ -1982,6 +1984,8 @@ fn resolve_error_category(status_code: u16, event_type: UsageEventType) -> Optio
         UsageEventType::Cancelled => Some("cancelled".to_string()),
         UsageEventType::Failed if status_code >= 500 => Some("server_error".to_string()),
         UsageEventType::Failed if status_code >= 400 => Some("client_error".to_string()),
+        UsageEventType::Failed if status_code >= 300 => Some("redirect".to_string()),
+        UsageEventType::Failed => Some("non_success_status".to_string()),
         _ => None,
     }
 }
@@ -2000,7 +2004,7 @@ fn resolve_error_message(
     if explicit_error_message.is_some() {
         return explicit_error_message;
     }
-    if status_code < 400 {
+    if (200..300).contains(&status_code) {
         return None;
     }
 
@@ -2795,6 +2799,81 @@ mod tests {
                     "has_completion": true
                 }
             }))
+        );
+    }
+
+    #[test]
+    fn stream_terminal_usage_marks_redirect_status_as_failed() {
+        let plan = ExecutionPlan {
+            request_id: "req-stream-redirect-usage".to_string(),
+            candidate_id: Some("cand-stream-redirect-usage".to_string()),
+            provider_name: Some("ChatGPTWeb".to_string()),
+            provider_id: "provider-redirect".to_string(),
+            endpoint_id: "endpoint-redirect".to_string(),
+            key_id: "key-redirect".to_string(),
+            method: "POST".to_string(),
+            url: "https://example.com/v1beta/models/gemini:streamGenerateContent".to_string(),
+            headers: BTreeMap::new(),
+            content_type: None,
+            content_encoding: None,
+            body: RequestBody {
+                json_body: None,
+                body_bytes_b64: None,
+                body_ref: None,
+            },
+            stream: true,
+            client_api_format: "gemini:generate_content".to_string(),
+            provider_api_format: "gemini:generate_content".to_string(),
+            model_name: Some("gemini".to_string()),
+            proxy: None,
+            transport_profile: None,
+            timeouts: None,
+        };
+        let client_body = json!({
+            "error": {
+                "type": "execution_runtime_non_success_status",
+                "message": "execution runtime stream returned non-success status 302",
+                "code": 302,
+                "upstream_status": 302,
+                "location": "/"
+            }
+        });
+        let payload = GatewayStreamReportRequest {
+            trace_id: "trace-stream-redirect-usage".to_string(),
+            report_kind: "gemini_chat_stream_success".to_string(),
+            report_context: Some(json!({
+                "client_api_format": "gemini:generate_content",
+                "provider_api_format": "gemini:generate_content"
+            })),
+            status_code: 302,
+            headers: BTreeMap::from([
+                ("content-type".to_string(), "application/json".to_string()),
+                ("x-aether-upstream-status".to_string(), "302".to_string()),
+            ]),
+            provider_body_base64: Some(
+                base64::engine::general_purpose::STANDARD
+                    .encode(br#"{"error":{"message":"raw redirect body"}}"#),
+            ),
+            provider_body_state: Some(UsageBodyCaptureState::Inline),
+            client_body_base64: Some(
+                base64::engine::general_purpose::STANDARD
+                    .encode(serde_json::to_vec(&client_body).expect("body should encode")),
+            ),
+            client_body_state: Some(UsageBodyCaptureState::Inline),
+            terminal_summary: None,
+            telemetry: None,
+        };
+
+        let event =
+            build_stream_terminal_usage_event(&plan, payload.report_context.as_ref(), &payload)
+                .expect("usage event should build");
+
+        assert_eq!(event.event_type, UsageEventType::Failed);
+        assert_eq!(event.data.status_code, Some(302));
+        assert_eq!(event.data.error_category.as_deref(), Some("redirect"));
+        assert_eq!(
+            event.data.error_message.as_deref(),
+            Some("raw redirect body")
         );
     }
 

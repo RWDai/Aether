@@ -8,6 +8,7 @@ use std::time::UNIX_EPOCH;
 
 use bytes::Bytes;
 use tokio::sync::watch;
+use tokio::time::Instant;
 use tracing::{debug, info, warn};
 
 use crate::registration::client::RemoteConfig;
@@ -60,6 +61,13 @@ struct HeartbeatSnapshot {
     stream_errors: u64,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct PendingHeartbeat {
+    heartbeat_id: u64,
+    snapshot: HeartbeatSnapshot,
+    sent_at: Option<Instant>,
+}
+
 /// Spawn the heartbeat task. Returns a handle for forwarding ACKs.
 pub fn spawn(
     state: Arc<AppState>,
@@ -76,7 +84,7 @@ pub fn spawn(
         // At most one in-flight heartbeat snapshot is tracked at a time.
         // Snapshot is only cleared after receiving an ACK, which avoids losing
         // interval counters when ACK/frame delivery is temporarily unstable.
-        let mut pending: Option<(u64, HeartbeatSnapshot)> = None;
+        let mut pending: Option<PendingHeartbeat> = None;
         let mut next_heartbeat_id: u64 = 1;
         let heartbeat_session_id = format!(
             "{}-{}",
@@ -93,8 +101,8 @@ pub fn spawn(
         loop {
             tokio::select! {
                 _ = tokio::time::sleep(current_interval) => {
-                    let (heartbeat_id, snapshot) = if let Some((id, snap)) = pending {
-                        (id, snap)
+                    let pending_entry = if let Some(entry) = pending {
+                        entry
                     } else {
                         let snap = collect_snapshot(&server);
                         let id = next_heartbeat_id;
@@ -102,23 +110,33 @@ pub fn spawn(
                         if next_heartbeat_id == 0 {
                             next_heartbeat_id = 1;
                         }
-                        pending = Some((id, snap));
-                        (id, snap)
+                        let entry = PendingHeartbeat {
+                            heartbeat_id: id,
+                            snapshot: snap,
+                            sent_at: None,
+                        };
+                        pending = Some(entry);
+                        entry
                     };
 
                     let payload = build_heartbeat_payload(
                         &state,
                         &server,
                         &heartbeat_session_id,
-                        heartbeat_id,
-                        snapshot
+                        pending_entry.heartbeat_id,
+                        pending_entry.snapshot
                     ).await;
                     let frame = Frame::control(MsgType::HeartbeatData, payload);
                     if frame_tx.send(frame).await.is_err() {
-                        if let Some((_, snap)) = pending.take() {
-                            restore_snapshot(&server, snap);
+                        if let Some(entry) = pending.take() {
+                            restore_snapshot(&server, entry.snapshot);
                         }
                         break; // Writer closed
+                    }
+                    server.tunnel_metrics.record_heartbeat_sent();
+                    if let Some(mut entry) = pending {
+                        entry.sent_at = Some(Instant::now());
+                        pending = Some(entry);
                     }
                     debug!("sent heartbeat data");
 
@@ -142,8 +160,11 @@ pub fn spawn(
                             heartbeat_id: ack_id,
                             upgrade_to,
                         } => {
-                            if let Some((pending_id, _)) = pending {
-                                if ack_id == pending_id {
+                            if let Some(entry) = pending {
+                                if ack_id == entry.heartbeat_id {
+                                    if let Some(sent_at) = entry.sent_at {
+                                        server.tunnel_metrics.record_heartbeat_ack(sent_at.elapsed());
+                                    }
                                     pending = None;
                                 }
                             }
@@ -154,8 +175,8 @@ pub fn spawn(
                 }
                 _ = shutdown.changed() => {
                     debug!("heartbeat task shutting down");
-                    if let Some((_, snap)) = pending.take() {
-                        restore_snapshot(&server, snap);
+                    if let Some(entry) = pending.take() {
+                        restore_snapshot(&server, entry.snapshot);
                     }
                     break;
                 }
@@ -217,6 +238,8 @@ async fn build_heartbeat_payload(
     snapshot: HeartbeatSnapshot,
 ) -> Bytes {
     let node_id = server.node_id.read().unwrap().clone();
+    let tunnel_snapshot = server.tunnel_metrics.snapshot();
+    let recent_errors = server.tunnel_metrics.recent_errors(8);
 
     let avg_latency_ms = if snapshot.requests > 0 {
         Some(snapshot.latency_ns as f64 / snapshot.requests as f64 / 1_000_000.0)
@@ -268,6 +291,26 @@ async fn build_heartbeat_payload(
         "proxy_metadata": {
             "version": CURRENT_VERSION,
             "admission": admission,
+            "tunnel_metrics": {
+                "connect_attempts": tunnel_snapshot.connect_attempts,
+                "connect_successes": tunnel_snapshot.connect_successes,
+                "connect_errors": tunnel_snapshot.connect_errors,
+                "disconnects": tunnel_snapshot.disconnects,
+                "last_connected_at_unix_secs": tunnel_snapshot.last_connected_at_unix_secs,
+                "last_disconnected_at_unix_secs": tunnel_snapshot.last_disconnected_at_unix_secs,
+                "last_connected_duration_ms": tunnel_snapshot.last_connected_duration_ms,
+                "connected_duration_total_ms": tunnel_snapshot.connected_duration_total_ms,
+                "heartbeat_sent": tunnel_snapshot.heartbeat_sent,
+                "heartbeat_ack": tunnel_snapshot.heartbeat_ack,
+                "heartbeat_rtt_last_ms": tunnel_snapshot.heartbeat_rtt_last_ms,
+                "heartbeat_rtt_avg_ms": tunnel_snapshot.heartbeat_rtt_avg_ms(),
+                "ws_in_frames": tunnel_snapshot.ws_in_frames,
+                "ws_in_bytes": tunnel_snapshot.ws_in_bytes,
+                "ws_out_frames": tunnel_snapshot.ws_out_frames,
+                "ws_out_bytes": tunnel_snapshot.ws_out_bytes,
+                "error_events_total": tunnel_snapshot.error_events_total,
+            },
+            "recent_tunnel_errors": recent_errors,
         },
     });
 
@@ -277,6 +320,9 @@ async fn build_heartbeat_payload(
 fn handle_ack(server: &ServerContext, payload: &[u8]) -> AckDecision {
     if payload.is_empty() {
         warn!("received empty heartbeat ACK");
+        server
+            .tunnel_metrics
+            .record_error("heartbeat_ack_empty", "received empty heartbeat ACK");
         return AckDecision::Ignore;
     }
 
@@ -303,6 +349,9 @@ fn handle_ack(server: &ServerContext, payload: &[u8]) -> AckDecision {
         }
         Err(e) => {
             warn!(error = %e, "failed to parse heartbeat ACK");
+            server
+                .tunnel_metrics
+                .record_error("heartbeat_ack_parse", &e.to_string());
             AckDecision::Ignore
         }
     }
@@ -373,7 +422,7 @@ mod tests {
     use super::{handle_ack, AckDecision};
     use crate::registration::client::AetherClient;
     use crate::runtime::DynamicConfig;
-    use crate::state::{ProxyMetrics, ServerContext};
+    use crate::state::{ProxyMetrics, ServerContext, TunnelMetrics};
 
     fn sample_server() -> Arc<ServerContext> {
         let config = Arc::new(crate::config::Config::parse_from([
@@ -399,6 +448,7 @@ mod tests {
             dynamic: Arc::new(ArcSwap::from_pointee(DynamicConfig::from_config(&config))),
             active_connections: Arc::new(AtomicU64::new(0)),
             metrics: Arc::new(ProxyMetrics::new()),
+            tunnel_metrics: Arc::new(TunnelMetrics::new()),
         })
     }
 

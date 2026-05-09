@@ -84,6 +84,10 @@ where
                     stale_ms = stale_timeout.as_millis(),
                     "tunnel connection stale, no data received"
                 );
+                server.tunnel_metrics.record_error(
+                    "stale_timeout",
+                    &format!("no tunnel frame received for {}ms", stale_timeout.as_millis()),
+                );
                 break None;
             }
         };
@@ -92,6 +96,9 @@ where
             Ok(m) => m,
             Err(e) => {
                 error!(error = %e, "WebSocket read error");
+                server
+                    .tunnel_metrics
+                    .record_error("ws_read_error", &e.to_string());
                 break Some(e);
             }
         };
@@ -100,7 +107,10 @@ where
         last_data_at = tokio::time::Instant::now();
 
         let data = match msg {
-            Message::Binary(data) => Bytes::from(data),
+            Message::Binary(data) => {
+                server.tunnel_metrics.record_ws_incoming_frame(data.len());
+                Bytes::from(data)
+            }
             Message::Ping(_) => continue,
             Message::Pong(_) => continue,
             Message::Close(_) => {
@@ -114,6 +124,9 @@ where
             Ok(f) => f,
             Err(e) => {
                 warn!(error = %e, "failed to decode frame");
+                server
+                    .tunnel_metrics
+                    .record_error("frame_decode_error", &e.to_string());
                 continue;
             }
         };
@@ -223,6 +236,10 @@ where
                     if is_end || dispatch != StreamDispatchStatus::Delivered {
                         streams.remove(&sid);
                         if dispatch == StreamDispatchStatus::TimedOut {
+                            server.tunnel_metrics.record_error(
+                                "stream_dispatch_timeout",
+                                &format!("request body dispatch timed out for stream {}", sid),
+                            );
                             try_send_stream_error(
                                 &frame_tx,
                                 sid,

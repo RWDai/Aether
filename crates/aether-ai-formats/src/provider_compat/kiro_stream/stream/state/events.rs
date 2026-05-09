@@ -6,7 +6,7 @@ use crate::provider_compat::kiro_stream::{
     find_kiro_real_thinking_start_tag, KIRO_MAX_THINKING_BUFFER,
 };
 
-use crate::response::AiSurfaceFinalizeError;
+use crate::formats::shared::AiSurfaceFinalizeError;
 
 use super::super::AwsEventFrame;
 use super::super::KiroClaudeStreamState;

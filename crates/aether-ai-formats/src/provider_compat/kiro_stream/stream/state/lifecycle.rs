@@ -1,10 +1,10 @@
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::formats::shared::AiSurfaceFinalizeError;
 use crate::provider_compat::kiro_stream::{
     build_kiro_initial_sse_events, build_kiro_stream_error_sse_events, encode_kiro_sse_events,
 };
-use crate::response::AiSurfaceFinalizeError;
 
 use super::super::{EventStreamDecoder, KiroClaudeStreamState, KiroToClaudeCliStreamState};
 

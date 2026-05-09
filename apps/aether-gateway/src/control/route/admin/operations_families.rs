@@ -47,6 +47,83 @@ pub(super) fn classify_admin_operations_family_route(
             false,
         ))
     } else if method == http::Method::GET
+        && matches!(normalized_path, "/api/admin/tasks" | "/api/admin/tasks/")
+    {
+        Some(classified(
+            "admin_proxy",
+            "tasks_manage",
+            "list_tasks",
+            "admin:tasks",
+            false,
+        ))
+    } else if method == http::Method::GET
+        && matches!(
+            normalized_path,
+            "/api/admin/tasks/stats" | "/api/admin/tasks/stats/"
+        )
+    {
+        Some(classified(
+            "admin_proxy",
+            "tasks_manage",
+            "stats",
+            "admin:tasks",
+            false,
+        ))
+    } else if method == http::Method::GET
+        && normalized_path.starts_with("/api/admin/tasks/")
+        && normalized_path.ends_with("/events")
+        && normalized_path.matches('/').count() == 5
+    {
+        Some(classified(
+            "admin_proxy",
+            "tasks_manage",
+            "events",
+            "admin:tasks",
+            false,
+        ))
+    } else if method == http::Method::POST
+        && normalized_path.starts_with("/api/admin/tasks/")
+        && normalized_path.ends_with("/cancel")
+        && normalized_path.matches('/').count() == 5
+    {
+        Some(classified(
+            "admin_proxy",
+            "tasks_manage",
+            "cancel",
+            "admin:tasks",
+            false,
+        ))
+    } else if method == http::Method::POST
+        && normalized_path.starts_with("/api/admin/tasks/")
+        && normalized_path.ends_with("/trigger")
+        && normalized_path.matches('/').count() == 5
+    {
+        Some(classified(
+            "admin_proxy",
+            "tasks_manage",
+            "trigger",
+            "admin:tasks",
+            false,
+        ))
+    } else if method == http::Method::GET
+        && normalized_path.starts_with("/api/admin/tasks/")
+        && normalized_path["/api/admin/tasks/".len()..]
+            .split('/')
+            .count()
+            == 1
+        && !matches!(
+            normalized_path,
+            "/api/admin/tasks/stats" | "/api/admin/tasks/stats/"
+        )
+    {
+        Some(classified(
+            "admin_proxy",
+            "tasks_manage",
+            "detail",
+            "admin:tasks",
+            false,
+        ))
+    } else if method == http::Method::GET
         && normalized_path.starts_with("/api/admin/video-tasks/")
         && normalized_path.ends_with("/video")
         && normalized_path.matches('/').count() == 5
@@ -110,6 +187,34 @@ pub(super) fn classify_admin_operations_family_route(
             "admin_proxy",
             "proxy_nodes_manage",
             "list_nodes",
+            "admin:proxy_nodes",
+            false,
+        ))
+    } else if method == http::Method::GET
+        && matches!(
+            normalized_path,
+            "/api/admin/proxy-nodes/metrics/fleet" | "/api/admin/proxy-nodes/metrics/fleet/"
+        )
+    {
+        Some(classified(
+            "admin_proxy",
+            "proxy_nodes_manage",
+            "list_fleet_metrics",
+            "admin:proxy_nodes",
+            false,
+        ))
+    } else if method == http::Method::GET
+        && normalized_path_no_trailing.starts_with("/api/admin/proxy-nodes/")
+        && normalized_path_no_trailing.ends_with("/metrics")
+        && normalized_path_no_trailing["/api/admin/proxy-nodes/".len()..]
+            .split('/')
+            .count()
+            == 2
+    {
+        Some(classified(
+            "admin_proxy",
+            "proxy_nodes_manage",
+            "list_node_metrics",
             "admin:proxy_nodes",
             false,
         ))

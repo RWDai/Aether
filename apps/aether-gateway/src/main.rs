@@ -1202,13 +1202,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     state.bootstrap_admin_from_env().await?;
 
     let background_tasks = if args.node_role.spawns_background_tasks() {
-        state.spawn_background_tasks()
+        Some(state.spawn_background_tasks())
     } else {
         info!(
             node_role = args.node_role.as_str(),
             "background workers disabled for this node role"
         );
-        Vec::new()
+        None
     };
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
     let public_base_url = resolve_local_http_base_url(app_port)?;
@@ -1241,8 +1241,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
     .await?;
-    for handle in background_tasks {
-        handle.abort();
+    if let Some(background_tasks) = background_tasks {
+        background_tasks.shutdown().await;
     }
     Ok(())
 }

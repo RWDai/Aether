@@ -459,55 +459,6 @@
                 />
               </div>
 
-              <!-- 错误域卡片：保持上游响应与客户端响应两个边界可对照 -->
-              <div
-                v-if="hasVisibleErrorCards"
-                class="space-y-3"
-              >
-                <div
-                  class="grid gap-3"
-                  :class="visibleErrorCardCount > 1 ? 'lg:grid-cols-2' : 'grid-cols-1'"
-                >
-                  <Card
-                    v-if="displayClientErrorMessage"
-                    class="border-amber-200 dark:border-amber-800"
-                  >
-                    <div class="p-4">
-                      <h4 class="text-sm font-semibold text-amber-700 dark:text-amber-300 mb-2">
-                        返回客户端错误
-                      </h4>
-                      <div class="bg-amber-50 dark:bg-amber-900/20 rounded-lg p-3 space-y-1">
-                        <p class="text-sm text-amber-900 dark:text-amber-200">
-                          {{ displayClientErrorMessage }}
-                        </p>
-                      </div>
-                    </div>
-                  </Card>
-
-                  <Card
-                    v-if="normalizedUpstreamError"
-                    class="border-orange-200 dark:border-orange-800"
-                  >
-                    <div class="p-4">
-                      <h4 class="text-sm font-semibold text-orange-700 dark:text-orange-300 mb-2">
-                        上游响应错误
-                      </h4>
-                      <div class="bg-orange-50 dark:bg-orange-900/20 rounded-lg p-3 space-y-1">
-                        <p class="text-sm text-orange-900 dark:text-orange-200">
-                          {{ normalizedUpstreamError.message }}
-                        </p>
-                        <p
-                          v-if="formatErrorDomainMeta(normalizedUpstreamError)"
-                          class="text-xs text-orange-800/70 dark:text-orange-200/70 font-mono"
-                        >
-                          {{ formatErrorDomainMeta(normalizedUpstreamError) }}
-                        </p>
-                      </div>
-                    </div>
-                  </Card>
-                </div>
-              </div>
-
               <!-- Tabs 区域 -->
               <Card>
                 <div class="p-3 sm:p-4">
@@ -743,6 +694,7 @@ import { ref, watch, computed, onMounted, onBeforeUnmount } from 'vue'
 import Button from '@/components/ui/button.vue'
 import { useEscapeKey } from '@/composables/useEscapeKey'
 import { useClipboard } from '@/composables/useClipboard'
+import { useDarkMode } from '@/composables/useDarkMode'
 import Card from '@/components/ui/card.vue'
 import Badge from '@/components/ui/badge.vue'
 import Separator from '@/components/ui/separator.vue'
@@ -750,7 +702,7 @@ import Skeleton from '@/components/ui/skeleton.vue'
 import Tabs from '@/components/ui/tabs.vue'
 import TabsContent from '@/components/ui/tabs-content.vue'
 import { Check, Columns2, RefreshCw, X, Monitor, Server, MessageSquareText, Code2, Terminal, Play } from 'lucide-vue-next'
-import { dashboardApi, type RequestDetail, type RequestErrorDomain } from '@/api/dashboard'
+import { dashboardApi, type RequestDetail } from '@/api/dashboard'
 import { formatApiFormat } from '@/api/endpoints/types/api-format'
 import { formatShortRequestId } from '@/utils/format'
 import { log } from '@/utils/logger'
@@ -832,40 +784,9 @@ type PricingTierLike = {
 
 type JsonRecord = Record<string, unknown>
 
-type NormalizedErrorDomain = {
-  source?: string | null
-  status_code?: number | null
-  type?: string | null
-  message: string
-  code?: string | number | null
-  category?: string | null
-}
-
 function asRecord(value: unknown): JsonRecord | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   return value as JsonRecord
-}
-
-function normalizeErrorDomain(domain: RequestErrorDomain | null | undefined): NormalizedErrorDomain | null {
-  if (!domain || typeof domain !== 'object') return null
-  const message = typeof domain.message === 'string' ? domain.message.trim() : ''
-  if (!message) return null
-  return {
-    source: domain.source ?? null,
-    status_code: domain.status_code ?? null,
-    type: domain.type ?? null,
-    message,
-    code: domain.code ?? null,
-    category: domain.category ?? null,
-  }
-}
-
-function formatErrorDomainMeta(domain: NormalizedErrorDomain): string {
-  const parts: string[] = []
-  if (domain.status_code != null) parts.push(`HTTP ${domain.status_code}`)
-  if (domain.type) parts.push(domain.type)
-  if (domain.source) parts.push(`source=${domain.source}`)
-  return parts.join(' · ')
 }
 
 function handleTraceState(state: { loaded: boolean, hasTrace: boolean }) {
@@ -987,10 +908,7 @@ watch(activeTab, (newTab) => {
   }
 })
 
-// 检测暗色模式
-const isDark = computed(() => {
-  return document.documentElement.classList.contains('dark')
-})
+const { isDark } = useDarkMode()
 
 const traceRequestMetadata = computed<Record<string, unknown> | null>(() => {
   const meta = detail.value?.metadata
@@ -1020,27 +938,6 @@ const metadataPanelData = computed<Record<string, unknown> | null>(() => {
 
   return Object.keys(merged).length > 0 ? merged : null
 })
-
-const normalizedClientError = computed(() =>
-  normalizeErrorDomain(detail.value?.errors?.client_error ?? detail.value?.client_error),
-)
-
-const normalizedUpstreamError = computed(() =>
-  normalizeErrorDomain(detail.value?.errors?.upstream_error ?? detail.value?.upstream_error),
-)
-
-const displayClientErrorMessage = computed(() =>
-  normalizedClientError.value?.message ?? '',
-)
-
-const hasVisibleErrorCards = computed(() =>
-  Boolean(displayClientErrorMessage.value || normalizedUpstreamError.value),
-)
-
-const visibleErrorCardCount = computed(() =>
-  (displayClientErrorMessage.value ? 1 : 0)
-    + (normalizedUpstreamError.value ? 1 : 0),
-)
 
 const settlementInfo = computed<JsonRecord | null>(() =>
   asRecord(detail.value?.settlement ?? null),

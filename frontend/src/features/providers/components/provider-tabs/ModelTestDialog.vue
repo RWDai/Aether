@@ -673,6 +673,7 @@ import type { CandidateRecord, RequestTrace } from '@/api/requestTrace'
 import HorizontalRequestTimeline from '@/features/usage/components/HorizontalRequestTimeline.vue'
 import JsonContent from '@/features/usage/components/RequestDetailDrawer/JsonContent.vue'
 import { useClipboard } from '@/composables/useClipboard'
+import { useDarkMode } from '@/composables/useDarkMode'
 
 type TestEndpointOption = {
   id: string
@@ -716,7 +717,7 @@ const traceCandidates = computed(() => props.trace?.candidates ?? [])
 const showSetup = computed(() => props.open && !props.testing && !props.result)
 const showResult = computed(() => !!props.result)
 const showTraceTimeline = computed(() => Boolean(props.requestId) && traceCandidates.value.length > 0)
-const isDark = computed(() => typeof document !== 'undefined' && document.documentElement.classList.contains('dark'))
+const { isDark } = useDarkMode()
 const { copyToClipboard } = useClipboard()
 
 const dialogTitle = computed(() => {

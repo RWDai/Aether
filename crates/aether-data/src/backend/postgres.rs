@@ -15,6 +15,9 @@ use crate::repository::auth_modules::{
     AuthModuleReadRepository, AuthModuleWriteRepository, SqlxAuthModuleReadRepository,
     SqlxAuthModuleRepository,
 };
+use crate::repository::background_tasks::{
+    BackgroundTaskReadRepository, BackgroundTaskWriteRepository, SqlxBackgroundTaskRepository,
+};
 use crate::repository::billing::{BillingReadRepository, SqlxBillingReadRepository};
 use crate::repository::candidate_selection::{
     MinimalCandidateSelectionReadRepository, SqlxMinimalCandidateSelectionReadRepository,
@@ -116,6 +119,14 @@ impl PostgresBackend {
 
     pub fn billing_read_repository(&self) -> Arc<dyn BillingReadRepository> {
         Arc::new(SqlxBillingReadRepository::new(self.pool_clone()))
+    }
+
+    pub fn background_task_read_repository(&self) -> Arc<dyn BackgroundTaskReadRepository> {
+        Arc::new(SqlxBackgroundTaskRepository::new(self.pool_clone()))
+    }
+
+    pub fn background_task_write_repository(&self) -> Arc<dyn BackgroundTaskWriteRepository> {
+        Arc::new(SqlxBackgroundTaskRepository::new(self.pool_clone()))
     }
 
     pub fn minimal_candidate_selection_read_repository(

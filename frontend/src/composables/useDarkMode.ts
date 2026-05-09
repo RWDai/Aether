@@ -25,10 +25,40 @@ const applyDarkMode = (value: boolean) => {
 }
 
 const getSystemPreference = (): boolean => {
-  if (typeof window === 'undefined') {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
     return false
   }
   return window.matchMedia('(prefers-color-scheme: dark)').matches
+}
+
+const getThemeStorage = (): Storage | null => {
+  if (typeof window === 'undefined') {
+    return null
+  }
+
+  const storage = window.localStorage
+  if (!storage || typeof storage.getItem !== 'function' || typeof storage.setItem !== 'function') {
+    return null
+  }
+
+  return storage
+}
+
+const readStoredTheme = (): ThemeMode | null => {
+  try {
+    const value = getThemeStorage()?.getItem(THEME_STORAGE_KEY)
+    return value === 'dark' || value === 'light' || value === 'system' ? value : null
+  } catch {
+    return null
+  }
+}
+
+const writeStoredTheme = (value: ThemeMode) => {
+  try {
+    getThemeStorage()?.setItem(THEME_STORAGE_KEY, value)
+  } catch {
+    // Ignore storage failures in restricted or test-like environments.
+  }
 }
 
 const updateDarkMode = () => {
@@ -59,9 +89,7 @@ const ensureWatcher = () => {
       (value) => {
         updateDarkMode()
 
-        if (typeof window !== 'undefined') {
-          localStorage.setItem(THEME_STORAGE_KEY, value)
-        }
+        writeStoredTheme(value)
       },
       { flush: 'post' }
     )
@@ -77,9 +105,9 @@ const initialize = () => {
   ensureWatcher()
 
   if (typeof window !== 'undefined') {
-    const storedTheme = localStorage.getItem(THEME_STORAGE_KEY) as ThemeMode | null
+    const storedTheme = readStoredTheme()
 
-    if (storedTheme === 'dark' || storedTheme === 'light' || storedTheme === 'system') {
+    if (storedTheme) {
       themeMode.value = storedTheme
     } else {
       // 兼容旧版本存储格式，旧版本直接存储 'dark' 或 'light'
@@ -87,8 +115,10 @@ const initialize = () => {
     }
 
     // 监听系统主题变化
-    mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
-    mediaQuery.addEventListener('change', handleSystemChange)
+    if (typeof window.matchMedia === 'function') {
+      mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
+      mediaQuery.addEventListener('change', handleSystemChange)
+    }
   }
 
   updateDarkMode()

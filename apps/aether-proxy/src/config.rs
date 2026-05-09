@@ -339,6 +339,11 @@ pub struct Config {
     #[arg(long, env = "AETHER_PROXY_AETHER_HTTP2", default_value_t = true)]
     pub aether_http2: bool,
 
+    /// Optional egress proxy used for Aether API registration and WebSocket tunnel reconnects.
+    /// Supported schemes: http, socks5, socks5h.
+    #[arg(long, env = "AETHER_PROXY_AETHER_PROXY_URL")]
+    pub aether_proxy_url: Option<String>,
+
     /// Aether API retry attempts (including initial)
     #[arg(
         long,
@@ -680,12 +685,11 @@ impl Config {
         if self.upstream_connect_timeout_secs == 0 {
             anyhow::bail!("upstream_connect_timeout_secs must be > 0");
         }
-        if let Some(proxy_url) = self
-            .upstream_proxy_url
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
+        if let Some(proxy_url) = normalized_proxy_url(&self.aether_proxy_url) {
+            crate::egress_proxy::UpstreamProxyConfig::parse(proxy_url)
+                .map_err(|err| anyhow::anyhow!("aether_proxy_url invalid: {err}"))?;
+        }
+        if let Some(proxy_url) = normalized_proxy_url(&self.upstream_proxy_url) {
             crate::egress_proxy::UpstreamProxyConfig::parse(proxy_url)
                 .map_err(|err| anyhow::anyhow!("upstream_proxy_url invalid: {err}"))?;
         }
@@ -738,6 +742,10 @@ impl Config {
 
     pub fn tunnel_stale_timeout(&self) -> anyhow::Result<Duration> {
         Ok(Duration::from_millis(self.tunnel_stale_timeout_ms))
+    }
+
+    pub fn effective_aether_proxy_url(&self) -> Option<&str> {
+        normalized_proxy_url(&self.aether_proxy_url)
     }
 
     pub fn resolve_tunnel_pool_sizing(
@@ -850,6 +858,8 @@ pub struct ConfigFile {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub aether_http2: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub aether_proxy_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub aether_retry_max_attempts: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub aether_retry_base_delay_ms: Option<u64>,
@@ -929,8 +939,7 @@ impl ConfigFile {
     /// Load from a TOML file.
     pub fn load(path: &Path) -> anyhow::Result<Self> {
         let content = std::fs::read_to_string(path)?;
-        reject_removed_config_keys(&content)?;
-        Ok(toml::from_str(&content)?)
+        parse_config_file_content(&content)
     }
 
     /// Save to a TOML file.
@@ -1006,6 +1015,7 @@ impl ConfigFile {
         );
         set!("AETHER_PROXY_AETHER_TCP_NODELAY", self.aether_tcp_nodelay);
         set!("AETHER_PROXY_AETHER_HTTP2", self.aether_http2);
+        set!("AETHER_PROXY_AETHER_PROXY_URL", self.aether_proxy_url);
         set!(
             "AETHER_PROXY_AETHER_RETRY_MAX_ATTEMPTS",
             self.aether_retry_max_attempts
@@ -1124,6 +1134,59 @@ impl ConfigFile {
     }
 }
 
+fn parse_config_file_content(content: &str) -> anyhow::Result<ConfigFile> {
+    reject_removed_config_keys(content)?;
+    let mut value: toml::Value = toml::from_str(content)?;
+    promote_server_scoped_upstream_proxy_url(&mut value)?;
+    Ok(value.try_into()?)
+}
+
+fn normalized_proxy_url(value: &Option<String>) -> Option<&str> {
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn promote_server_scoped_upstream_proxy_url(value: &mut toml::Value) -> anyhow::Result<()> {
+    const KEY: &str = "upstream_proxy_url";
+
+    let Some(root) = value.as_table_mut() else {
+        return Ok(());
+    };
+
+    let mut promoted = root.get(KEY).cloned();
+    let Some(servers) = root.get_mut("servers").and_then(toml::Value::as_array_mut) else {
+        return Ok(());
+    };
+
+    for (index, server) in servers.iter_mut().enumerate() {
+        let Some(table) = server.as_table_mut() else {
+            continue;
+        };
+        let Some(server_value) = table.remove(KEY) else {
+            continue;
+        };
+
+        match promoted.as_ref() {
+            Some(existing) if existing != &server_value => {
+                anyhow::bail!(
+                    "conflicting upstream_proxy_url values: top-level value and [[servers]] entry {} differ; configure it once at the top level",
+                    index + 1
+                );
+            }
+            Some(_) => {}
+            None => promoted = Some(server_value),
+        }
+    }
+
+    if let Some(promoted) = promoted {
+        root.insert(KEY.to_string(), promoted);
+    }
+
+    Ok(())
+}
+
 fn reject_removed_config_keys(content: &str) -> anyhow::Result<()> {
     let value: toml::Value = toml::from_str(content)?;
     let Some(table) = value.as_table() else {
@@ -1230,6 +1293,92 @@ mod tests {
         assert_eq!(
             cfg.upstream_proxy_url.as_deref(),
             Some("http://proxy.example:8080")
+        );
+    }
+
+    #[test]
+    fn config_file_deserializes_aether_proxy_url() {
+        let cfg: ConfigFile = toml::from_str("aether_proxy_url = \"socks5h://127.0.0.1:1080\"")
+            .expect("proxy URL toml");
+        assert_eq!(
+            cfg.aether_proxy_url.as_deref(),
+            Some("socks5h://127.0.0.1:1080")
+        );
+    }
+
+    #[test]
+    fn aether_proxy_url_requires_explicit_opt_in() {
+        let default_direct = Config::parse_from([
+            "aether-proxy",
+            "--aether-url",
+            "https://example.com",
+            "--management-token",
+            "ae_test",
+            "--node-name",
+            "proxy-test",
+            "--upstream-proxy-url",
+            "socks5h://127.0.0.1:1080",
+        ]);
+        assert_eq!(default_direct.effective_aether_proxy_url(), None);
+
+        let explicit = Config::parse_from([
+            "aether-proxy",
+            "--aether-url",
+            "https://example.com",
+            "--management-token",
+            "ae_test",
+            "--node-name",
+            "proxy-test",
+            "--upstream-proxy-url",
+            "socks5h://127.0.0.1:1080",
+            "--aether-proxy-url",
+            "http://127.0.0.1:8080",
+        ]);
+        assert_eq!(
+            explicit.effective_aether_proxy_url(),
+            Some("http://127.0.0.1:8080")
+        );
+    }
+
+    #[test]
+    fn config_file_load_accepts_server_scoped_upstream_proxy_url() {
+        let cfg = parse_config_file_content(
+            r#"
+[[servers]]
+aether_url = "https://aether.example.com"
+upstream_proxy_url = "socks5://127.0.0.1:1080"
+management_token = "ae_test"
+node_name = "proxy-test"
+"#,
+        )
+        .expect("server-scoped proxy URL should be promoted");
+
+        assert_eq!(
+            cfg.upstream_proxy_url.as_deref(),
+            Some("socks5://127.0.0.1:1080")
+        );
+        assert_eq!(cfg.servers.len(), 1);
+        assert_eq!(cfg.servers[0].aether_url, "https://aether.example.com");
+    }
+
+    #[test]
+    fn config_file_load_rejects_conflicting_server_scoped_upstream_proxy_url() {
+        let error = parse_config_file_content(
+            r#"
+upstream_proxy_url = "socks5://127.0.0.1:1080"
+
+[[servers]]
+aether_url = "https://aether.example.com"
+upstream_proxy_url = "socks5://127.0.0.1:1081"
+management_token = "ae_test"
+node_name = "proxy-test"
+"#,
+        )
+        .expect_err("conflicting proxy URLs should be rejected");
+
+        assert!(
+            error.to_string().contains("conflicting upstream_proxy_url"),
+            "error should mention the conflicting key"
         );
     }
 

@@ -1,4 +1,5 @@
 use crate::ai_serving::build_request_trace_proxy_value;
+use crate::ai_serving::planner::common::OPENAI_CHAT_STREAM_PLAN_KIND;
 use crate::ai_serving::planner::report_context::{
     build_local_execution_report_context, insert_provider_stream_event_api_format,
     LocalExecutionReportContextParts,
@@ -29,6 +30,7 @@ pub(crate) async fn maybe_build_local_openai_chat_decision_payload_for_candidate
     report_kind: &str,
     upstream_is_stream: bool,
 ) -> Option<AiExecutionDecision> {
+    let decision_is_stream = decision_kind == OPENAI_CHAT_STREAM_PLAN_KIND;
     let attempt_identity = attempt.attempt_identity();
     let LocalOpenAiChatCandidateAttempt {
         eligible,
@@ -107,6 +109,8 @@ pub(crate) async fn maybe_build_local_openai_chat_decision_payload_for_candidate
                 provider_request_method: Some(serde_json::Value::Null),
                 provider_request_headers: Some(&resolved.provider_request_headers),
                 original_headers: &parts.headers,
+                request_path: Some(parts.uri.path()),
+                request_query_string: parts.uri.query(),
                 request_origin: Some(crate::ai_serving::request_origin_from_parts(parts)),
                 original_request_body_json: Some(body_json),
                 original_request_body_base64: None,
@@ -147,7 +151,7 @@ pub(crate) async fn maybe_build_local_openai_chat_decision_payload_for_candidate
 
     Some(build_ai_execution_decision_response(
         AiExecutionDecisionResponseParts {
-            decision_is_stream: upstream_is_stream,
+            decision_is_stream,
             decision_kind: decision_kind.to_string(),
             execution_strategy,
             conversion_mode,

@@ -17,11 +17,15 @@ pub struct SchedulerRequestCandidateReportContext {
     pub key_id: Option<String>,
     pub client_api_format: Option<String>,
     pub provider_api_format: Option<String>,
+    pub request_path: Option<String>,
+    pub request_query_string: Option<String>,
+    pub request_path_and_query: Option<String>,
     pub upstream_url: Option<String>,
     pub mapped_model: Option<String>,
     pub key_name: Option<String>,
     pub header_rules: Option<Value>,
     pub body_rules: Option<Value>,
+    pub upstream_response: Option<Value>,
     pub proxy: Option<Value>,
     pub error_flow: Option<Value>,
     pub candidate_group_id: Option<String>,
@@ -60,11 +64,15 @@ pub struct SchedulerExecutionRequestCandidateSeed {
 struct ReportCandidateExtraDataInput {
     client_api_format: Option<String>,
     provider_api_format: Option<String>,
+    request_path: Option<String>,
+    request_query_string: Option<String>,
+    request_path_and_query: Option<String>,
     upstream_url: Option<String>,
     mapped_model: Option<String>,
     key_name: Option<String>,
     header_rules: Option<Value>,
     body_rules: Option<Value>,
+    upstream_response: Option<Value>,
     proxy: Option<Value>,
     error_flow: Option<Value>,
     candidate_group_id: Option<String>,
@@ -138,6 +146,9 @@ pub fn parse_request_candidate_report_context(
         key_id: string_field(report_context, "key_id"),
         client_api_format: string_field(report_context, "client_api_format"),
         provider_api_format: string_field(report_context, "provider_api_format"),
+        request_path: string_field(report_context, "request_path"),
+        request_query_string: string_field(report_context, "request_query_string"),
+        request_path_and_query: string_field(report_context, "request_path_and_query"),
         upstream_url: string_field(report_context, "upstream_url"),
         mapped_model: string_field(report_context, "mapped_model"),
         key_name: string_field(report_context, "key_name"),
@@ -147,6 +158,10 @@ pub fn parse_request_candidate_report_context(
             .filter(|value| !value.is_null()),
         body_rules: report_context
             .get("body_rules")
+            .cloned()
+            .filter(|value| !value.is_null()),
+        upstream_response: report_context
+            .get("upstream_response")
             .cloned()
             .filter(|value| !value.is_null()),
         proxy: report_context
@@ -187,11 +202,15 @@ pub fn resolve_report_request_candidate_slot(
         key_id,
         client_api_format,
         provider_api_format,
+        request_path,
+        request_query_string,
+        request_path_and_query,
         upstream_url,
         mapped_model,
         key_name,
         header_rules,
         body_rules,
+        upstream_response,
         proxy,
         error_flow,
         candidate_group_id,
@@ -207,11 +226,15 @@ pub fn resolve_report_request_candidate_slot(
     let synthesized_extra_data = build_report_candidate_extra_data(ReportCandidateExtraDataInput {
         client_api_format,
         provider_api_format,
+        request_path,
+        request_query_string,
+        request_path_and_query,
         upstream_url,
         mapped_model,
         key_name,
         header_rules,
         body_rules,
+        upstream_response,
         proxy,
         error_flow,
         candidate_group_id,
@@ -326,11 +349,15 @@ pub fn build_execution_request_candidate_seed(
         build_report_candidate_extra_data(ReportCandidateExtraDataInput {
             client_api_format: metadata.client_api_format,
             provider_api_format: metadata.provider_api_format,
+            request_path: metadata.request_path,
+            request_query_string: metadata.request_query_string,
+            request_path_and_query: metadata.request_path_and_query,
             upstream_url: metadata.upstream_url,
             mapped_model: metadata.mapped_model,
             key_name: metadata.key_name,
             header_rules: metadata.header_rules,
             body_rules: metadata.body_rules,
+            upstream_response: metadata.upstream_response,
             proxy: metadata.proxy,
             error_flow: metadata.error_flow,
             candidate_group_id: metadata.candidate_group_id,
@@ -431,11 +458,15 @@ pub fn build_local_request_candidate_status_record(
     let extra_data = build_report_candidate_extra_data(ReportCandidateExtraDataInput {
         client_api_format: metadata.client_api_format.clone(),
         provider_api_format: metadata.provider_api_format.clone(),
+        request_path: metadata.request_path.clone(),
+        request_query_string: metadata.request_query_string.clone(),
+        request_path_and_query: metadata.request_path_and_query.clone(),
         upstream_url: metadata.upstream_url.clone(),
         mapped_model: metadata.mapped_model.clone(),
         key_name: metadata.key_name.clone(),
         header_rules: metadata.header_rules.clone(),
         body_rules: metadata.body_rules.clone(),
+        upstream_response: metadata.upstream_response.clone(),
         proxy: metadata.proxy.clone(),
         error_flow: metadata.error_flow.clone(),
         candidate_group_id: metadata.candidate_group_id.clone(),
@@ -667,11 +698,15 @@ fn build_report_candidate_extra_data(input: ReportCandidateExtraDataInput) -> Op
     let ReportCandidateExtraDataInput {
         client_api_format,
         provider_api_format,
+        request_path,
+        request_query_string,
+        request_path_and_query,
         upstream_url,
         mapped_model,
         key_name,
         header_rules,
         body_rules,
+        upstream_response,
         proxy,
         error_flow,
         candidate_group_id,
@@ -698,6 +733,21 @@ fn build_report_candidate_extra_data(input: ReportCandidateExtraDataInput) -> Op
             Value::String(provider_api_format),
         );
     }
+    if let Some(request_path) = request_path {
+        extra_data.insert("request_path".to_string(), Value::String(request_path));
+    }
+    if let Some(request_query_string) = request_query_string {
+        extra_data.insert(
+            "request_query_string".to_string(),
+            Value::String(request_query_string),
+        );
+    }
+    if let Some(request_path_and_query) = request_path_and_query {
+        extra_data.insert(
+            "request_path_and_query".to_string(),
+            Value::String(request_path_and_query),
+        );
+    }
     if let Some(upstream_url) = upstream_url {
         extra_data.insert("upstream_url".to_string(), Value::String(upstream_url));
     }
@@ -712,6 +762,9 @@ fn build_report_candidate_extra_data(input: ReportCandidateExtraDataInput) -> Op
     }
     if let Some(body_rules) = body_rules {
         extra_data.insert("body_rules".to_string(), body_rules);
+    }
+    if let Some(upstream_response) = upstream_response {
+        extra_data.insert("upstream_response".to_string(), upstream_response);
     }
     if let Some(proxy) = proxy {
         extra_data.insert("proxy".to_string(), proxy);
@@ -903,6 +956,11 @@ mod tests {
             "body_rules": [
                 {"op": "remove", "path": "/store"}
             ],
+            "upstream_response": {
+                "status_code": 503,
+                "headers": {"retry-after": "2"},
+                "body": {"error": {"message": "overloaded"}}
+            },
             "proxy": {
                 "node_id": "proxy-node-1",
                 "node_name": "edge-1",
@@ -961,6 +1019,13 @@ mod tests {
                 .and_then(Value::as_array)
                 .map(Vec::len),
             Some(1)
+        );
+        assert_eq!(
+            slot.extra_data
+                .as_ref()
+                .and_then(|value| value.get("upstream_response"))
+                .and_then(|value| value.get("status_code")),
+            Some(&json!(503))
         );
         assert_eq!(
             slot.extra_data
@@ -1063,6 +1128,8 @@ mod tests {
                     "api_key_id": "api-key-1",
                     "client_api_format": "openai:chat",
                     "provider_api_format": "openai:responses",
+                    "request_path": "/v1/responses",
+                    "request_query_string": "debug=true",
                     "upstream_url": "https://example.com/v1/responses",
                     "mapped_model": "gpt-5-upstream",
                     "key_name": "primary",
@@ -1097,6 +1164,20 @@ mod tests {
                 .as_ref()
                 .and_then(|value| value.get("provider_api_format")),
             Some(&json!("openai:responses"))
+        );
+        assert_eq!(
+            record
+                .extra_data
+                .as_ref()
+                .and_then(|value| value.get("request_path")),
+            Some(&json!("/v1/responses"))
+        );
+        assert_eq!(
+            record
+                .extra_data
+                .as_ref()
+                .and_then(|value| value.get("request_query_string")),
+            Some(&json!("debug=true"))
         );
         assert_eq!(
             record

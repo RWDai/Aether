@@ -76,6 +76,7 @@ pub async fn run(
             info!(server = %server.server_label, conn = conn_idx, "tunnel drained, exiting slot");
             return;
         }
+        server.tunnel_metrics.record_connect_attempt();
         let started_at = Instant::now();
         match client::connect_and_run(state, server, conn_idx, &mut shutdown, drain.clone()).await {
             Ok(client::TunnelOutcome::Shutdown) => {
@@ -86,6 +87,10 @@ pub async fn run(
                 debug!(server = %server.server_label, conn = conn_idx, "tunnel disconnected, reconnecting");
             }
             Err(e) => {
+                server.tunnel_metrics.record_connect_error();
+                server
+                    .tunnel_metrics
+                    .record_error("tunnel_connect_error", &e.to_string());
                 error!(server = %server.server_label, conn = conn_idx, error = %e, "tunnel connection error, reconnecting");
             }
         }
@@ -237,7 +242,7 @@ mod tests {
     use crate::config::Config;
     use crate::registration::client::AetherClient;
     use crate::runtime::DynamicConfig;
-    use crate::state::{AppState as ProxyAppState, ProxyMetrics, ServerContext};
+    use crate::state::{AppState as ProxyAppState, ProxyMetrics, ServerContext, TunnelMetrics};
     use crate::target_filter::DnsCache;
     use crate::tunnel::protocol;
     use crate::upstream_client;
@@ -478,6 +483,7 @@ mod tests {
             dynamic: Arc::new(ArcSwap::from_pointee(DynamicConfig::from_config(&config))),
             active_connections: Arc::new(AtomicU64::new(0)),
             metrics: Arc::new(ProxyMetrics::new()),
+            tunnel_metrics: Arc::new(TunnelMetrics::new()),
         })
     }
 
@@ -498,6 +504,7 @@ mod tests {
             aether_tcp_keepalive_secs: 60,
             aether_tcp_nodelay: true,
             aether_http2: true,
+            aether_proxy_url: None,
             aether_retry_max_attempts: 1,
             aether_retry_base_delay_ms: 50,
             aether_retry_max_delay_ms: 100,

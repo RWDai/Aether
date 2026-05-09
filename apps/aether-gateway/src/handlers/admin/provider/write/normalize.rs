@@ -104,11 +104,7 @@ pub(crate) fn normalize_allow_auth_channel_mismatch_formats(
             normalized.push(serde_json::Value::String(canonical));
         }
     }
-    if normalized.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(serde_json::Value::Array(normalized)))
-    }
+    Ok(Some(serde_json::Value::Array(normalized)))
 }
 
 pub(crate) fn normalize_auth_type(value: Option<&str>) -> Result<String, String> {
@@ -179,9 +175,9 @@ fn normalize_json_like_object(
 #[cfg(test)]
 mod tests {
     use super::{
-        normalize_api_format_json_object_keys, normalize_api_format_list, normalize_auth_type,
-        normalize_auth_type_by_format, normalize_pool_advanced_config,
-        normalize_provider_type_input, validate_vertex_api_formats,
+        normalize_allow_auth_channel_mismatch_formats, normalize_api_format_json_object_keys,
+        normalize_api_format_list, normalize_auth_type, normalize_auth_type_by_format,
+        normalize_pool_advanced_config, normalize_provider_type_input, validate_vertex_api_formats,
     };
     use serde_json::json;
 
@@ -277,6 +273,36 @@ mod tests {
                 "claude:messages": "bearer",
                 "gemini:generate_content": "api_key"
             }))
+        );
+    }
+
+    #[test]
+    fn normalize_allow_auth_channel_mismatch_formats_preserves_explicit_empty_array() {
+        assert_eq!(
+            normalize_allow_auth_channel_mismatch_formats(
+                Some(Vec::new()),
+                "allow_auth_channel_mismatch_formats",
+                &["claude:messages".to_string()],
+            )
+            .expect("empty array should normalize"),
+            Some(json!([]))
+        );
+    }
+
+    #[test]
+    fn normalize_allow_auth_channel_mismatch_formats_normalizes_and_dedupes_values() {
+        assert_eq!(
+            normalize_allow_auth_channel_mismatch_formats(
+                Some(vec![
+                    "claude:messages".to_string(),
+                    "CLAUDE:MESSAGES".to_string(),
+                    " claude:messages ".to_string(),
+                ]),
+                "allow_auth_channel_mismatch_formats",
+                &["claude:messages".to_string()],
+            )
+            .expect("format list should normalize"),
+            Some(json!(["claude:messages"]))
         );
     }
 

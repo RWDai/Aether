@@ -301,6 +301,9 @@ pub fn build_admin_monitoring_trace_request_payload_response_with_key_accounts(
         .collect::<Vec<_>>();
     Json(json!({
         "request_id": trace.request_id,
+        "request_path": admin_monitoring_trace_request_path(usage),
+        "request_query_string": admin_monitoring_trace_request_query_string(usage),
+        "request_path_and_query": admin_monitoring_trace_request_path_and_query(usage),
         "total_candidates": trace.total_candidates,
         "final_status": trace.final_status,
         "total_latency_ms": trace.total_latency_ms,
@@ -470,6 +473,33 @@ fn build_admin_monitoring_trace_candidate_extra_data(
                 .entry("first_byte_time_ms".to_string())
                 .or_insert_with(|| json!(first_byte_time_ms));
         }
+        if let Some(request_path) = admin_monitoring_usage_request_path(usage) {
+            extra_object
+                .entry("request_path".to_string())
+                .or_insert_with(|| json!(request_path));
+        }
+        if let Some(request_query_string) = admin_monitoring_usage_request_query_string(usage) {
+            extra_object
+                .entry("request_query_string".to_string())
+                .or_insert_with(|| json!(request_query_string));
+        }
+        if let Some(request_path_and_query) = admin_monitoring_usage_request_path_and_query(usage) {
+            extra_object
+                .entry("request_path_and_query".to_string())
+                .or_insert_with(|| json!(request_path_and_query));
+        }
+        if admin_monitoring_usage_is_error_node(usage) {
+            if let Some(response) = admin_monitoring_trace_response_data(
+                "upstream_response",
+                usage.status_code,
+                usage.response_headers.as_ref(),
+                usage.response_body.as_ref(),
+                usage.response_body_ref.as_deref(),
+                usage.response_body_state,
+            ) {
+                extra_object.insert("upstream_response".to_string(), response);
+            }
+        }
 
         if let Some(proxy_value) = extra_object.get_mut("proxy") {
             if let Some(proxy_object) = proxy_value.as_object_mut() {
@@ -495,6 +525,96 @@ fn build_admin_monitoring_trace_candidate_extra_data(
         Some(object) => Value::Object(object),
         None => Value::Null,
     }
+}
+
+fn admin_monitoring_trace_response_data(
+    source: &str,
+    status_code: Option<u16>,
+    headers: Option<&Value>,
+    body: Option<&Value>,
+    body_ref: Option<&str>,
+    body_state: Option<aether_data_contracts::repository::usage::UsageBodyCaptureState>,
+) -> Option<Value> {
+    if status_code.is_none()
+        && headers.is_none()
+        && body.is_none()
+        && body_ref.is_none()
+        && body_state.is_none()
+    {
+        return None;
+    }
+
+    Some(json!({
+        "source": source,
+        "status_code": status_code,
+        "headers": headers.cloned().unwrap_or(Value::Null),
+        "body": body.cloned().unwrap_or(Value::Null),
+        "body_ref": body_ref,
+        "body_state": body_state.map(|state| state.as_str()),
+    }))
+}
+
+fn admin_monitoring_usage_is_error_node(usage: &StoredRequestUsageAudit) -> bool {
+    !usage.status.eq_ignore_ascii_case("completed")
+        || usage
+            .status_code
+            .is_some_and(|status| !(200..300).contains(&status))
+}
+
+fn admin_monitoring_trace_request_path(usage: Option<&StoredRequestUsageAudit>) -> Option<String> {
+    usage.and_then(admin_monitoring_usage_request_path)
+}
+
+fn admin_monitoring_trace_request_query_string(
+    usage: Option<&StoredRequestUsageAudit>,
+) -> Option<String> {
+    usage.and_then(admin_monitoring_usage_request_query_string)
+}
+
+fn admin_monitoring_trace_request_path_and_query(
+    usage: Option<&StoredRequestUsageAudit>,
+) -> Option<String> {
+    usage.and_then(admin_monitoring_usage_request_path_and_query)
+}
+
+fn admin_monitoring_usage_request_path(usage: &StoredRequestUsageAudit) -> Option<String> {
+    admin_monitoring_usage_metadata_string(usage, "request_path")
+}
+
+fn admin_monitoring_usage_request_query_string(usage: &StoredRequestUsageAudit) -> Option<String> {
+    admin_monitoring_usage_metadata_string(usage, "request_query_string")
+        .map(|value| value.trim_start_matches('?').to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn admin_monitoring_usage_request_path_and_query(
+    usage: &StoredRequestUsageAudit,
+) -> Option<String> {
+    admin_monitoring_usage_metadata_string(usage, "request_path_and_query").or_else(|| {
+        let path = admin_monitoring_usage_metadata_string(usage, "request_path")?;
+        let query = admin_monitoring_usage_metadata_string(usage, "request_query_string")
+            .map(|value| value.trim_start_matches('?').to_string())
+            .filter(|value| !value.is_empty());
+        Some(match query {
+            Some(query) if !path.contains('?') => format!("{path}?{query}"),
+            _ => path,
+        })
+    })
+}
+
+fn admin_monitoring_usage_metadata_string(
+    usage: &StoredRequestUsageAudit,
+    key: &str,
+) -> Option<String> {
+    usage
+        .request_metadata
+        .as_ref()
+        .and_then(Value::as_object)
+        .and_then(|metadata| metadata.get(key))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn json_string_field(object: &serde_json::Map<String, Value>, key: &str) -> Option<String> {

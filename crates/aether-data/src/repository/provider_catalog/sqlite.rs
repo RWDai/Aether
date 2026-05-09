@@ -7,7 +7,7 @@ use super::{
     StoredProviderCatalogKey, StoredProviderCatalogKeyPage, StoredProviderCatalogKeyStats,
     StoredProviderCatalogProvider,
 };
-use crate::driver::sqlite::SqlitePool;
+use crate::driver::sqlite::{sqlite_optional_real, SqlitePool};
 use crate::error::SqlResultExt;
 use crate::DataLayerError;
 
@@ -34,7 +34,9 @@ impl SqliteProviderCatalogReadRepository {
             r#"
 SELECT
   id, name, description, website, provider_type, billing_type,
-  monthly_quota_usd, monthly_used_usd, quota_reset_day,
+  CAST(monthly_quota_usd AS REAL) AS monthly_quota_usd,
+  CAST(monthly_used_usd AS REAL) AS monthly_used_usd,
+  quota_reset_day,
   quota_last_reset_at AS quota_last_reset_at_unix_secs,
   quota_expires_at AS quota_expires_at_unix_secs,
   provider_priority, is_active, keep_priority_on_conversion,
@@ -1258,8 +1260,8 @@ fn map_provider_row(row: &SqliteRow) -> Result<StoredProviderCatalogProvider, Da
     .with_description(row.try_get("description").map_sql_err()?)
     .with_billing_fields(
         row.try_get("billing_type").map_sql_err()?,
-        row.try_get("monthly_quota_usd").map_sql_err()?,
-        row.try_get("monthly_used_usd").map_sql_err()?,
+        sqlite_optional_real(row, "monthly_quota_usd")?,
+        sqlite_optional_real(row, "monthly_used_usd")?,
         optional_u64(
             row.try_get("quota_reset_day").map_sql_err()?,
             "providers.quota_reset_day",
@@ -1316,11 +1318,7 @@ fn map_endpoint_row(row: &SqliteRow) -> Result<StoredProviderCatalogEndpoint, Da
             "provider_endpoints.updated_at",
         )?,
     )
-    .with_health_score(
-        row.try_get::<Option<f64>, _>("health_score")
-            .map_sql_err()?
-            .unwrap_or(1.0),
-    )
+    .with_health_score(sqlite_optional_real(row, "health_score")?.unwrap_or(1.0))
     .with_transport_fields(
         row.try_get("base_url").map_sql_err()?,
         optional_json_from_string(
@@ -1349,10 +1347,7 @@ fn map_endpoint_row(row: &SqliteRow) -> Result<StoredProviderCatalogEndpoint, Da
 }
 
 fn map_key_row(row: &SqliteRow) -> Result<StoredProviderCatalogKey, DataLayerError> {
-    let total_cost_usd = row
-        .try_get::<Option<f64>, _>("total_cost_usd")
-        .map_sql_err()?
-        .unwrap_or(0.0);
+    let total_cost_usd = sqlite_optional_real(row, "total_cost_usd")?.unwrap_or(0.0);
     if !total_cost_usd.is_finite() {
         return Err(DataLayerError::UnexpectedValue(
             "invalid provider_api_keys.total_cost_usd".to_string(),
@@ -1571,6 +1566,8 @@ mod tests {
             .expect("providers should list");
         assert_eq!(providers.len(), 1);
         assert_eq!(providers[0].provider_priority, 10);
+        assert_eq!(providers[0].monthly_quota_usd, Some(0.0));
+        assert_eq!(providers[0].monthly_used_usd, Some(0.0));
 
         let endpoints = repository
             .list_endpoints_by_provider_ids(&["provider-1".to_string()])
@@ -1827,11 +1824,12 @@ mod tests {
             r#"
 INSERT INTO providers (
   id, name, description, website, provider_type, provider_priority,
+  monthly_quota_usd, monthly_used_usd,
   is_active, keep_priority_on_conversion, enable_format_conversion,
   config, created_at, updated_at
 ) VALUES (
   'provider-1', 'Provider One', 'test provider', 'https://example.com',
-  'custom', 10, 1, 1, 1, '{"region":"us"}', 1, 2
+  'custom', 10, 0, 0, 1, 1, 1, '{"region":"us"}', 1, 2
 )
 "#,
         )

@@ -23,6 +23,7 @@ aether-provider-transport.workspace = true
 aether-scheduler-core.workspace = true
 aether-runtime.workspace = true
 aether-runtime-state.workspace = true
+aether-task-runtime.workspace = true
 aether-usage-runtime.workspace = true
 aether-video-tasks-core.workspace = true
 aether-wallet.workspace = true

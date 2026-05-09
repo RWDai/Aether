@@ -356,6 +356,164 @@ async fn admin_monitoring_trace_request_enriches_proxy_timing_from_usage_audit()
         payload["candidates"][0]["extra_data"]["proxy"]["timing"]["response_wait_ms"],
         json!(475)
     );
+    assert!(payload["candidates"][0]["extra_data"]
+        .get("upstream_response")
+        .is_none());
+}
+
+#[tokio::test]
+async fn admin_monitoring_trace_request_exposes_request_path_from_usage_audit() {
+    let mut candidate = sample_candidate(
+        "cand-used",
+        "request-1",
+        0,
+        RequestCandidateStatus::Failed,
+        Some(101),
+        Some(33),
+        Some(403),
+    );
+    candidate.extra_data = Some(json!({
+        "client_api_format": "gemini:generate_content"
+    }));
+
+    let request_candidates = Arc::new(InMemoryRequestCandidateRepository::seed(vec![candidate]));
+    let provider_catalog = Arc::new(InMemoryProviderCatalogReadRepository::seed(
+        vec![sample_provider()],
+        vec![sample_endpoint()],
+        vec![sample_key()],
+    ));
+    let mut usage = sample_usage(
+        "request-1",
+        "provider-1",
+        "OpenAI",
+        40,
+        0.02,
+        "failed",
+        Some(403),
+        100,
+    );
+    usage.candidate_id = Some("cand-used".to_string());
+    usage.request_metadata = Some(json!({
+        "request_path": "/v1beta/models/gemini-2.5-pro:generateContent",
+        "request_query_string": "alt=sse"
+    }));
+    let usage_repository = Arc::new(InMemoryUsageReadRepository::seed(vec![usage]));
+    let data_state =
+        crate::data::GatewayDataState::with_request_candidate_and_usage_repository_for_tests(
+            request_candidates,
+            usage_repository,
+        )
+        .with_provider_catalog_reader(provider_catalog);
+    let state = AppState::new()
+        .expect("state should build")
+        .with_data_state_for_tests(data_state);
+    let context = request_context(http::Method::GET, "/api/admin/monitoring/trace/request-1");
+
+    let response = local_monitoring_response(&state, &context)
+        .await
+        .expect("handler should not error")
+        .expect("route should be handled locally");
+
+    assert_eq!(response.status(), http::StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body should read");
+    let payload: serde_json::Value = serde_json::from_slice(&body).expect("json body should parse");
+
+    assert_eq!(
+        payload["request_path"],
+        json!("/v1beta/models/gemini-2.5-pro:generateContent")
+    );
+    assert_eq!(payload["request_query_string"], json!("alt=sse"));
+    assert_eq!(
+        payload["request_path_and_query"],
+        json!("/v1beta/models/gemini-2.5-pro:generateContent?alt=sse")
+    );
+    assert_eq!(
+        payload["candidates"][0]["extra_data"]["request_path_and_query"],
+        json!("/v1beta/models/gemini-2.5-pro:generateContent?alt=sse")
+    );
+}
+
+#[tokio::test]
+async fn admin_monitoring_trace_request_exposes_failed_candidate_upstream_response_boundary() {
+    let candidate = sample_candidate(
+        "cand-used",
+        "request-1",
+        0,
+        RequestCandidateStatus::Failed,
+        Some(101),
+        Some(33),
+        Some(302),
+    );
+
+    let request_candidates = Arc::new(InMemoryRequestCandidateRepository::seed(vec![candidate]));
+    let provider_catalog = Arc::new(InMemoryProviderCatalogReadRepository::seed(
+        vec![sample_provider()],
+        vec![sample_endpoint()],
+        vec![sample_key()],
+    ));
+    let mut usage = sample_usage(
+        "request-1",
+        "provider-1",
+        "OpenAI",
+        40,
+        0.02,
+        "failed",
+        Some(302),
+        100,
+    );
+    usage.candidate_id = Some("cand-used".to_string());
+    usage.response_headers = Some(json!({
+        "location": "/",
+        "content-type": "text/html"
+    }));
+    usage.client_response_headers = Some(json!({
+        "content-type": "application/json",
+        "x-aether-upstream-status": "302"
+    }));
+    usage.client_response_body = Some(json!({
+        "error": {
+            "type": "execution_runtime_non_success_status",
+            "message": "execution runtime stream returned non-success status 302",
+            "upstream_status": 302,
+            "location": "/"
+        }
+    }));
+    usage.request_metadata = Some(json!({
+        "client_response_status_code": 502
+    }));
+    let usage_repository = Arc::new(InMemoryUsageReadRepository::seed(vec![usage]));
+    let data_state =
+        crate::data::GatewayDataState::with_request_candidate_and_usage_repository_for_tests(
+            request_candidates,
+            usage_repository,
+        )
+        .with_provider_catalog_reader(provider_catalog);
+    let state = AppState::new()
+        .expect("state should build")
+        .with_data_state_for_tests(data_state);
+    let context = request_context(http::Method::GET, "/api/admin/monitoring/trace/request-1");
+
+    let response = local_monitoring_response(&state, &context)
+        .await
+        .expect("handler should not error")
+        .expect("route should be handled locally");
+
+    assert_eq!(response.status(), http::StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body should read");
+    let payload: serde_json::Value = serde_json::from_slice(&body).expect("json body should parse");
+    let extra = &payload["candidates"][0]["extra_data"];
+    assert_eq!(extra["upstream_response"]["status_code"], json!(302));
+    assert_eq!(
+        extra["upstream_response"]["headers"]["location"],
+        json!("/")
+    );
+    assert!(extra["upstream_response"]["body"].is_null());
+    assert!(extra.get("client_response").is_none());
+    assert!(extra.get("provider_response").is_none());
 }
 
 #[tokio::test]

@@ -1,4 +1,4 @@
-use aether_ai_formats::protocol::matrix::{
+use aether_ai_formats::formats::matrix::{
     request_conversion_kind, request_conversion_requires_enable_flag,
 };
 use aether_contracts::ProxySnapshot;

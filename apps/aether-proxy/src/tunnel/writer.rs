@@ -5,9 +5,10 @@
 //! periodic WebSocket Ping frames to keep the connection alive through
 //! intermediary proxies (Nginx, Cloudflare, etc.).
 
+use std::sync::Arc;
 use std::time::Duration;
 
-use aether_contracts::tunnel::MsgType;
+use aether_contracts::tunnel::{MsgType, HEADER_SIZE};
 #[cfg(test)]
 use aether_runtime::QueueSnapshot;
 use aether_runtime::{bounded_queue, BoundedQueueSender, QueueSendError};
@@ -15,6 +16,8 @@ use futures_util::SinkExt;
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, error, trace};
+
+use crate::state::TunnelMetrics;
 
 use super::protocol::Frame;
 
@@ -77,7 +80,20 @@ impl FrameSender {
 ///
 /// `ping_interval` controls WebSocket-level Ping frequency (typically 15s).
 /// This keeps the connection alive through intermediary proxies/load-balancers.
-pub fn spawn_writer<S>(mut sink: S, ping_interval: Duration) -> (FrameSender, JoinHandle<()>)
+#[cfg(test)]
+pub fn spawn_writer<S>(sink: S, ping_interval: Duration) -> (FrameSender, JoinHandle<()>)
+where
+    S: SinkExt<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin + Send + 'static,
+{
+    spawn_writer_with_metrics(sink, ping_interval, None)
+}
+
+/// Spawn the writer task with optional tunnel metrics instrumentation.
+pub fn spawn_writer_with_metrics<S>(
+    mut sink: S,
+    ping_interval: Duration,
+    tunnel_metrics: Option<Arc<TunnelMetrics>>,
+) -> (FrameSender, JoinHandle<()>)
 where
     S: SinkExt<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin + Send + 'static,
 {
@@ -93,7 +109,7 @@ where
 
         loop {
             if let Ok(frame) = high_rx.try_recv() {
-                if !write_frame(&mut sink, frame).await {
+                if !write_frame(&mut sink, frame, tunnel_metrics.as_deref()).await {
                     break;
                 }
                 continue;
@@ -107,7 +123,7 @@ where
                 frame = high_rx.recv(), if high_open => {
                     match frame {
                         Some(frame) => {
-                            if !write_frame(&mut sink, frame).await {
+                            if !write_frame(&mut sink, frame, tunnel_metrics.as_deref()).await {
                                 break;
                             }
                         }
@@ -117,6 +133,9 @@ where
                 _ = ping_ticker.tick(), if high_open || normal_open => {
                     if let Err(e) = sink.send(Message::Ping(vec![])).await {
                         error!(error = %e, "failed to send WebSocket ping");
+                        if let Some(metrics) = tunnel_metrics.as_deref() {
+                            metrics.record_error("ws_ping_error", &e.to_string());
+                        }
                         break;
                     }
                     trace!("sent WebSocket ping");
@@ -124,7 +143,7 @@ where
                 frame = normal_rx.recv(), if normal_open => {
                     match frame {
                         Some(frame) => {
-                            if !write_frame(&mut sink, frame).await {
+                            if !write_frame(&mut sink, frame, tunnel_metrics.as_deref()).await {
                                 break;
                             }
                         }
@@ -156,14 +175,21 @@ fn classify_frame_priority(frame: &Frame) -> FramePriority {
     }
 }
 
-async fn write_frame<S>(sink: &mut S, frame: Frame) -> bool
+async fn write_frame<S>(sink: &mut S, frame: Frame, tunnel_metrics: Option<&TunnelMetrics>) -> bool
 where
     S: SinkExt<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin + Send + 'static,
 {
     let data = frame.encode();
+    let wire_len = data.len().max(HEADER_SIZE);
     if let Err(e) = sink.send(Message::Binary(data.into())).await {
         error!(error = %e, "failed to write frame to WebSocket");
+        if let Some(metrics) = tunnel_metrics {
+            metrics.record_error("ws_write_error", &e.to_string());
+        }
         return false;
+    }
+    if let Some(metrics) = tunnel_metrics {
+        metrics.record_ws_outgoing_frame(wire_len);
     }
     true
 }

@@ -2153,7 +2153,7 @@ fn ai_serving_image_routes_split_surface_normalization_and_transport_policy() {
     }
 
     let surface_image =
-        read_workspace_file("crates/aether-ai-formats/src/request/specialized/image.rs");
+        read_workspace_file("crates/aether-ai-formats/src/formats/openai/image/request.rs");
     for pattern in [
         "pub enum OpenAiImageOperation",
         "pub fn is_openai_image_stream_request(",
@@ -3220,7 +3220,7 @@ fn ai_serving_leaf_planner_owners_route_contract_specs_through_gateway_seams() {
     );
     assert!(
         !specialized_files_decision
-            .contains("aether_ai_formats::request::specialized::files::LocalGeminiFilesSpec"),
+            .contains("aether_ai_formats::formats::gemini::files::spec::LocalGeminiFilesSpec"),
         "planner/specialized/files/decision.rs should consume LocalGeminiFilesSpec through the local specialized seam"
     );
     assert!(
@@ -3243,7 +3243,7 @@ fn ai_serving_m5_moves_contracts_and_route_logic_into_format_crate() {
         "crates/aether-ai-formats/src/contracts/actions.rs",
         "crates/aether-ai-formats/src/contracts/plan_kinds.rs",
         "crates/aether-ai-formats/src/contracts/report_kinds.rs",
-        "crates/aether-ai-formats/src/request/route.rs",
+        "crates/aether-ai-formats/src/formats/shared/routing.rs",
     ] {
         assert!(
             workspace_file_exists(path),
@@ -3304,7 +3304,8 @@ fn ai_serving_m5_moves_contracts_and_route_logic_into_format_crate() {
         );
     }
 
-    let surface_route = read_workspace_file("crates/aether-ai-formats/src/request/route.rs");
+    let surface_route =
+        read_workspace_file("crates/aether-ai-formats/src/formats/shared/routing.rs");
     for pattern in [
         "pub fn is_matching_stream_http_request(",
         "is_openai_image_stream_request(parts, body_json, body_base64)",
@@ -3553,11 +3554,11 @@ fn ai_serving_error_body_is_owned_by_format_finalize_module() {
         "ai_serving/conversion/error.rs should stay removed"
     );
     assert!(
-        workspace_file_exists("crates/aether-ai-formats/src/response/error_body.rs"),
+        workspace_file_exists("crates/aether-ai-formats/src/formats/shared/error_body.rs"),
         "format error response-body helpers should live under finalize/error_body.rs"
     );
     assert!(
-        !workspace_file_exists("crates/aether-ai-formats/src/protocol/conversion/error.rs"),
+        !workspace_file_exists("crates/aether-ai-formats/src/formats/conversion/error.rs"),
         "aether-ai-formats should not keep error response-body helpers under conversion"
     );
 
@@ -3582,7 +3583,7 @@ fn ai_serving_error_body_is_owned_by_format_finalize_module() {
 #[test]
 fn ai_serving_conversion_request_is_owned_by_format_crate() {
     assert!(
-        workspace_file_exists("crates/aether-ai-formats/src/protocol/conversion/request/mod.rs"),
+        workspace_file_exists("crates/aether-ai-formats/src/formats/conversion/request.rs"),
         "request conversion should live in aether-ai-formats"
     );
     assert!(
@@ -3609,7 +3610,7 @@ fn ai_serving_conversion_request_is_owned_by_format_crate() {
 
     let surface_api = read_workspace_file("crates/aether-ai-formats/src/api.rs");
     assert!(
-        surface_api.contains("pub use aether_ai_formats::protocol::conversion::request::{"),
+        surface_api.contains("pub use aether_ai_formats::formats::conversion::request::{"),
         "format API facade should re-export request conversion directly from aether-ai-formats"
     );
 }
@@ -3617,7 +3618,7 @@ fn ai_serving_conversion_request_is_owned_by_format_crate() {
 #[test]
 fn ai_serving_conversion_response_is_owned_by_format_crate() {
     assert!(
-        workspace_file_exists("crates/aether-ai-formats/src/protocol/conversion/response/mod.rs"),
+        workspace_file_exists("crates/aether-ai-formats/src/formats/conversion/response.rs"),
         "response conversion should live in aether-ai-formats"
     );
     assert!(
@@ -3644,7 +3645,7 @@ fn ai_serving_conversion_response_is_owned_by_format_crate() {
 
     let surface_api = read_workspace_file("crates/aether-ai-formats/src/api.rs");
     assert!(
-        surface_api.contains("pub use aether_ai_formats::protocol::conversion::response::{"),
+        surface_api.contains("pub use aether_ai_formats::formats::conversion::response::{"),
         "format API facade should re-export response conversion directly from aether-ai-formats"
     );
 }
@@ -3652,7 +3653,7 @@ fn ai_serving_conversion_response_is_owned_by_format_crate() {
 #[test]
 fn ai_format_crate_owns_conversion_and_surface_facade() {
     assert!(
-        workspace_file_exists("crates/aether-ai-formats/src/protocol/conversion"),
+        workspace_file_exists("crates/aether-ai-formats/src/formats/conversion"),
         "aether-ai-formats should own the conversion directory"
     );
 
@@ -3665,9 +3666,9 @@ fn ai_format_crate_owns_conversion_and_surface_facade() {
     let surface_api = read_workspace_file("crates/aether-ai-formats/src/api.rs");
     for pattern in [
         "pub use aether_ai_formats::{",
-        "pub use aether_ai_formats::protocol::conversion::request::{",
-        "pub use aether_ai_formats::protocol::conversion::response::{",
-        "pub use crate::response::error_body::{",
+        "pub use aether_ai_formats::formats::conversion::request::{",
+        "pub use aether_ai_formats::formats::conversion::response::{",
+        "pub use crate::formats::shared::error_body::{",
     ] {
         assert!(
             surface_api.contains(pattern),
@@ -3746,12 +3747,12 @@ fn ai_serving_finalize_standard_sync_response_converters_are_owned_by_format_cra
 #[test]
 fn ai_serving_finalize_stream_engine_is_owned_by_format_crate() {
     for path in [
-        "crates/aether-ai-formats/src/response/sse.rs",
-        "crates/aether-ai-formats/src/response/standard/stream_core/common.rs",
-        "crates/aether-ai-formats/src/response/standard/stream_core/format_matrix.rs",
-        "crates/aether-ai-formats/src/response/standard/openai/stream.rs",
-        "crates/aether-ai-formats/src/response/standard/claude/stream.rs",
-        "crates/aether-ai-formats/src/response/standard/gemini/stream.rs",
+        "crates/aether-ai-formats/src/formats/shared/sse.rs",
+        "crates/aether-ai-formats/src/formats/shared/stream_core/common.rs",
+        "crates/aether-ai-formats/src/formats/shared/stream_core/format_matrix.rs",
+        "crates/aether-ai-formats/src/formats/openai/chat/stream.rs",
+        "crates/aether-ai-formats/src/formats/claude/messages/stream.rs",
+        "crates/aether-ai-formats/src/formats/gemini/generate_content/stream.rs",
     ] {
         assert!(
             workspace_file_exists(path),
@@ -3787,7 +3788,7 @@ fn ai_serving_finalize_stream_engine_is_owned_by_format_crate() {
     }
 
     let surface_format_matrix = read_workspace_file(
-        "crates/aether-ai-formats/src/response/standard/stream_core/format_matrix.rs",
+        "crates/aether-ai-formats/src/formats/shared/stream_core/format_matrix.rs",
     );
     for pattern in [
         "pub struct StreamingStandardFormatMatrix",
@@ -3811,16 +3812,16 @@ fn ai_serving_finalize_stream_engine_is_owned_by_format_crate() {
 #[test]
 fn ai_serving_finalize_standard_sync_products_are_owned_by_format_crate() {
     assert!(
-        workspace_file_exists("crates/aether-ai-formats/src/response/sync_products.rs"),
+        workspace_file_exists("crates/aether-ai-formats/src/formats/shared/sync_products.rs"),
         "finalize sync_products should live in aether-ai-formats"
     );
     assert!(
-        workspace_file_exists("crates/aether-ai-formats/src/response/sync_to_stream.rs"),
+        workspace_file_exists("crates/aether-ai-formats/src/formats/shared/sync_to_stream.rs"),
         "finalize sync-to-stream bridge should live in aether-ai-formats"
     );
 
     let surface_sync_products =
-        read_workspace_file("crates/aether-ai-formats/src/response/sync_products.rs");
+        read_workspace_file("crates/aether-ai-formats/src/formats/shared/sync_products.rs");
     for expected in [
         "pub fn maybe_build_standard_cross_format_sync_product_from_normalized_payload(",
         "pub fn maybe_build_standard_same_format_sync_body_from_normalized_payload(",
@@ -3947,7 +3948,7 @@ fn ai_serving_finalize_standard_sync_products_are_owned_by_format_crate() {
     }
 
     let surface_openai_image_stream =
-        read_workspace_file("crates/aether-ai-formats/src/response/openai_image_stream.rs");
+        read_workspace_file("crates/aether-ai-formats/src/formats/openai/image/stream.rs");
     for expected in [
         "pub fn maybe_build_openai_image_sync_finalize_product(",
         "pub struct OpenAiImageSyncFinalizeProduct",
@@ -3962,7 +3963,7 @@ fn ai_serving_finalize_standard_sync_products_are_owned_by_format_crate() {
     }
 
     let surface_sync_to_stream =
-        read_workspace_file("crates/aether-ai-formats/src/response/sync_to_stream.rs");
+        read_workspace_file("crates/aether-ai-formats/src/formats/shared/sync_to_stream.rs");
     for expected in [
         "pub fn maybe_bridge_standard_sync_json_to_stream(",
         "pub struct SyncToStreamBridgeOutcome",
@@ -3999,11 +4000,11 @@ fn ai_serving_finalize_standard_sync_products_are_owned_by_format_crate() {
 #[test]
 fn ai_serving_finalize_stream_rewrite_matrix_is_owned_by_format_crate() {
     assert!(
-        workspace_file_exists("crates/aether-ai-formats/src/response/stream_rewrite.rs"),
+        workspace_file_exists("crates/aether-ai-formats/src/formats/shared/stream_rewrite.rs"),
         "finalize stream rewrite matrix should live in aether-ai-formats"
     );
     assert!(
-        workspace_file_exists("crates/aether-ai-formats/src/response/openai_image_stream.rs"),
+        workspace_file_exists("crates/aether-ai-formats/src/formats/openai/image/stream.rs"),
         "OpenAI image stream rewrite state should live in aether-ai-formats"
     );
 
@@ -4052,7 +4053,7 @@ fn ai_serving_finalize_stream_rewrite_matrix_is_owned_by_format_crate() {
 #[test]
 fn ai_serving_planner_common_parser_is_owned_by_format_crate() {
     assert!(
-        workspace_file_exists("crates/aether-ai-formats/src/request/common.rs"),
+        workspace_file_exists("crates/aether-ai-formats/src/formats/shared/request.rs"),
         "planner/common pure parser should exist in aether-ai-formats"
     );
 
@@ -4195,7 +4196,7 @@ fn ai_serving_root_owns_shared_gemini_request_path_parser() {
 #[test]
 fn ai_serving_planner_standard_normalize_is_owned_by_format_crate() {
     assert!(
-        workspace_file_exists("crates/aether-ai-formats/src/request/standard/normalize.rs"),
+        workspace_file_exists("crates/aether-ai-formats/src/formats/shared/standard_normalize.rs"),
         "planner/standard/normalize should live in aether-ai-formats"
     );
 
@@ -4258,7 +4259,7 @@ fn ai_serving_planner_standard_normalize_is_owned_by_format_crate() {
 #[test]
 fn ai_serving_openai_helpers_are_owned_by_format_crate() {
     assert!(
-        workspace_file_exists("crates/aether-ai-formats/src/request/openai.rs"),
+        workspace_file_exists("crates/aether-ai-formats/src/formats/openai/shared.rs"),
         "planner/openai helper owner should exist in aether-ai-formats"
     );
 
@@ -4291,17 +4292,17 @@ fn ai_serving_openai_helpers_are_owned_by_format_crate() {
 #[test]
 fn ai_serving_standard_matrix_delegates_format_conversion_to_format_crate() {
     assert!(
-        workspace_file_exists("crates/aether-ai-formats/src/request/matrix.rs"),
+        workspace_file_exists("crates/aether-ai-formats/src/formats/shared/request_matrix.rs"),
         "planner/matrix facade should live in aether-ai-formats"
     );
     assert!(
-        workspace_file_exists("crates/aether-ai-formats/src/request/standard/matrix.rs"),
+        workspace_file_exists("crates/aether-ai-formats/src/formats/shared/standard_matrix.rs"),
         "format standard request-body planner should live in aether-ai-formats"
     );
     for path in [
         "crates/aether-ai-formats/src/protocol/canonical.rs",
-        "crates/aether-ai-formats/src/protocol/matrix.rs",
-        "crates/aether-ai-formats/src/protocol/registry.rs",
+        "crates/aether-ai-formats/src/formats/matrix.rs",
+        "crates/aether-ai-formats/src/formats/registry.rs",
     ] {
         assert!(
             workspace_file_exists(path),
@@ -4309,12 +4310,12 @@ fn ai_serving_standard_matrix_delegates_format_conversion_to_format_crate() {
         );
     }
     let surface_matrix =
-        read_workspace_file("crates/aether-ai-formats/src/request/standard/matrix.rs");
+        read_workspace_file("crates/aether-ai-formats/src/formats/shared/standard_matrix.rs");
     assert!(
-        surface_matrix.contains("use aether_ai_formats::protocol::registry::{")
+        surface_matrix.contains("use aether_ai_formats::formats::registry::{")
             && surface_matrix.contains("convert_request")
             && surface_matrix.contains("FormatContext")
-            && surface_matrix.contains("aether_ai_formats::protocol::conversion::request::{"),
+            && surface_matrix.contains("aether_ai_formats::formats::conversion::request::{"),
         "format standard matrix should delegate format conversion to aether-ai-formats"
     );
     for forbidden in [
@@ -4361,23 +4362,27 @@ fn ai_serving_standard_matrix_delegates_format_conversion_to_format_crate() {
 #[test]
 fn ai_serving_standard_family_specs_are_owned_by_format_crate() {
     assert!(
-        workspace_file_exists("crates/aether-ai-formats/src/request/standard/family.rs"),
+        workspace_file_exists("crates/aether-ai-formats/src/formats/shared/family.rs"),
         "planner/standard/family pure spec owner should live in aether-ai-formats"
     );
     assert!(
-        workspace_file_exists("crates/aether-ai-formats/src/request/standard/claude/chat.rs"),
+        workspace_file_exists("crates/aether-ai-formats/src/formats/claude/messages/chat_spec.rs"),
         "planner/standard/claude/chat pure spec resolver should live in aether-ai-formats"
     );
     assert!(
-        workspace_file_exists("crates/aether-ai-formats/src/request/standard/claude/cli.rs"),
+        workspace_file_exists("crates/aether-ai-formats/src/formats/claude/messages/cli_spec.rs"),
         "planner/standard/claude/cli pure spec resolver should live in aether-ai-formats"
     );
     assert!(
-        workspace_file_exists("crates/aether-ai-formats/src/request/standard/gemini/chat.rs"),
+        workspace_file_exists(
+            "crates/aether-ai-formats/src/formats/gemini/generate_content/chat_spec.rs"
+        ),
         "planner/standard/gemini/chat pure spec resolver should live in aether-ai-formats"
     );
     assert!(
-        workspace_file_exists("crates/aether-ai-formats/src/request/standard/gemini/cli.rs"),
+        workspace_file_exists(
+            "crates/aether-ai-formats/src/formats/gemini/generate_content/cli_spec.rs"
+        ),
         "planner/standard/gemini/cli pure spec resolver should live in aether-ai-formats"
     );
 
@@ -4444,7 +4449,7 @@ fn ai_serving_standard_family_specs_are_owned_by_format_crate() {
 #[test]
 fn ai_serving_same_format_provider_specs_are_owned_by_format_crate() {
     assert!(
-        workspace_file_exists("crates/aether-ai-formats/src/request/passthrough/provider.rs"),
+        workspace_file_exists("crates/aether-ai-formats/src/formats/shared/passthrough.rs"),
         "planner/passthrough/provider pure spec owner should live in aether-ai-formats"
     );
 
@@ -4495,7 +4500,7 @@ fn ai_serving_same_format_provider_specs_are_owned_by_format_crate() {
 #[test]
 fn ai_serving_passthrough_provider_specs_are_owned_by_format_crate() {
     assert!(
-        workspace_file_exists("crates/aether-ai-formats/src/request/passthrough/provider.rs"),
+        workspace_file_exists("crates/aether-ai-formats/src/formats/shared/passthrough.rs"),
         "planner/passthrough/provider pure spec owner should live in aether-ai-formats"
     );
 
@@ -4540,7 +4545,7 @@ fn ai_serving_passthrough_provider_specs_are_owned_by_format_crate() {
 #[test]
 fn ai_serving_specialized_files_specs_are_owned_by_format_crate() {
     assert!(
-        workspace_file_exists("crates/aether-ai-formats/src/request/specialized/files.rs"),
+        workspace_file_exists("crates/aether-ai-formats/src/formats/gemini/files/spec.rs"),
         "planner/specialized/files pure spec owner should live in aether-ai-formats"
     );
 
@@ -4570,9 +4575,18 @@ fn ai_serving_specialized_files_specs_are_owned_by_format_crate() {
 #[test]
 fn ai_serving_specialized_video_specs_are_owned_by_format_crate() {
     assert!(
-        workspace_file_exists("crates/aether-ai-formats/src/request/specialized/video.rs"),
-        "planner/specialized/video pure spec owner should live in aether-ai-formats"
+        workspace_file_exists("crates/aether-ai-formats/src/formats/shared/video.rs"),
+        "planner/specialized/video shared spec seam should live in aether-ai-formats"
     );
+    for path in [
+        "crates/aether-ai-formats/src/formats/openai/video/spec.rs",
+        "crates/aether-ai-formats/src/formats/gemini/video/spec.rs",
+    ] {
+        assert!(
+            workspace_file_exists(path),
+            "{path} should own provider-specific video create spec resolution"
+        );
+    }
 
     let video =
         read_workspace_file("apps/aether-gateway/src/ai_serving/planner/specialized/video.rs");
@@ -4598,7 +4612,7 @@ fn ai_serving_specialized_video_specs_are_owned_by_format_crate() {
 #[test]
 fn ai_serving_openai_responses_specs_are_owned_by_format_crate() {
     assert!(
-        workspace_file_exists("crates/aether-ai-formats/src/request/standard/openai_responses.rs"),
+        workspace_file_exists("crates/aether-ai-formats/src/formats/openai/responses/spec.rs"),
         "planner/standard/openai_responses pure spec owner should live in aether-ai-formats"
     );
 
@@ -4639,8 +4653,8 @@ fn ai_serving_openai_responses_specs_are_owned_by_format_crate() {
 fn ai_serving_legacy_api_format_names_stay_out_of_primary_paths() {
     for path in [
         "crates/aether-ai-formats/src/contracts/plan_kinds.rs",
-        "crates/aether-ai-formats/src/request/route.rs",
-        "crates/aether-ai-formats/src/request/standard/openai_responses.rs",
+        "crates/aether-ai-formats/src/formats/shared/routing.rs",
+        "crates/aether-ai-formats/src/formats/openai/responses/spec.rs",
         "apps/aether-gateway/src/ai_serving/planner/decision/control_plan.rs",
         "apps/aether-gateway/src/execution_runtime/fallback.rs",
     ] {
@@ -4664,7 +4678,7 @@ fn ai_serving_legacy_api_format_names_stay_out_of_primary_paths() {
         }
     }
 
-    let registry = read_workspace_file("crates/aether-ai-formats/src/protocol/registry.rs");
+    let registry = read_workspace_file("crates/aether-ai-formats/src/formats/registry.rs");
     let implementation = registry
         .split("#[cfg(test)]")
         .next()
@@ -4697,9 +4711,9 @@ fn retired_api_format_occurrences_are_whitelisted() {
 
     let allowed_paths = [
         "apps/aether-gateway/src/handlers/admin/provider/write/normalize.rs",
-        "crates/aether-ai-formats/src/protocol/formats.rs",
-        "crates/aether-ai-formats/src/protocol/matrix.rs",
-        "crates/aether-ai-formats/src/protocol/registry.rs",
+        "crates/aether-ai-formats/src/formats/id.rs",
+        "crates/aether-ai-formats/src/formats/matrix.rs",
+        "crates/aether-ai-formats/src/formats/registry.rs",
         "crates/aether-data/src/migrate.rs",
         "crates/aether-data/src/lifecycle/migrate/tests.rs",
         "crates/aether-usage-runtime/src/report.rs",

@@ -119,9 +119,7 @@ async fn gateway_background_request_candidate_cleanup_deletes_expired_entries_in
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
 
-    for handle in background_tasks {
-        handle.abort();
-    }
+    background_tasks.shutdown().await;
 }
 
 #[tokio::test]

@@ -1,6 +1,9 @@
 use aether_data::repository::{
     auth_modules::{StoredLdapModuleConfig, StoredOAuthProviderModuleConfig},
-    proxy_nodes::{StoredProxyNode, StoredProxyNodeEvent},
+    proxy_nodes::{
+        ProxyNodeMetricsStep, StoredProxyFleetMetricsBucket, StoredProxyNode, StoredProxyNodeEvent,
+        StoredProxyNodeMetricsBucket,
+    },
     system::StoredSystemConfigEntry,
     wallet::StoredWalletSnapshot,
 };
@@ -1255,6 +1258,9 @@ pub fn admin_system_config_default_value(key: &str) -> Option<serde_json::Value>
         "cleanup_batch_size" => Some(json!(1000)),
         "request_candidates_retention_days" => Some(json!(30)),
         "request_candidates_cleanup_batch_size" => Some(json!(5000)),
+        "proxy_node_metrics_1m_retention_days" => Some(json!(30)),
+        "proxy_node_metrics_1h_retention_days" => Some(json!(180)),
+        "proxy_node_metrics_cleanup_batch_size" => Some(json!(5000)),
         "enable_provider_checkin" => Some(json!(true)),
         "provider_checkin_time" => Some(json!("01:05")),
         "provider_priority_mode" => Some(json!("provider")),
@@ -1832,11 +1838,13 @@ pub fn build_admin_proxy_node_event_payload(event: &StoredProxyNodeEvent) -> ser
         "id": event.id,
         "event_type": event.event_type,
         "detail": event.detail,
+        "event_metadata": event.event_metadata,
         "created_at": event.created_at_unix_ms.and_then(unix_secs_to_rfc3339),
     })
 }
 
 pub fn admin_proxy_node_event_node_id_from_path(request_path: &str) -> Option<&str> {
+    let request_path = request_path.trim_end_matches('/');
     let node_id = request_path.strip_prefix("/api/admin/proxy-nodes/")?;
     let node_id = node_id.strip_suffix("/events")?;
     if node_id.is_empty() || node_id.contains('/') {
@@ -1844,6 +1852,219 @@ pub fn admin_proxy_node_event_node_id_from_path(request_path: &str) -> Option<&s
     } else {
         Some(node_id)
     }
+}
+
+pub fn admin_proxy_node_metrics_node_id_from_path(request_path: &str) -> Option<&str> {
+    let request_path = request_path.trim_end_matches('/');
+    let node_id = request_path.strip_prefix("/api/admin/proxy-nodes/")?;
+    let node_id = node_id.strip_suffix("/metrics")?;
+    if node_id.is_empty() || node_id.contains('/') {
+        None
+    } else {
+        Some(node_id)
+    }
+}
+
+pub fn build_admin_proxy_node_metrics_payload_response(
+    step: ProxyNodeMetricsStep,
+    from_unix_secs: u64,
+    to_unix_secs: u64,
+    items: Vec<StoredProxyNodeMetricsBucket>,
+) -> Response<Body> {
+    let summary = summarize_proxy_node_metric_buckets(items.iter().map(|item| {
+        (
+            item.samples,
+            item.uptime_samples,
+            item.active_connections_sum,
+            item.active_connections_max,
+            item.heartbeat_rtt_ms_sum,
+            item.heartbeat_rtt_ms_max,
+            item.connect_errors_delta,
+            item.disconnects_delta,
+            item.error_events_delta,
+            item.ws_in_bytes_delta,
+            item.ws_out_bytes_delta,
+            item.ws_in_frames_delta,
+            item.ws_out_frames_delta,
+        )
+    }));
+    let items = items
+        .into_iter()
+        .map(build_admin_proxy_node_metrics_bucket_payload)
+        .collect::<Vec<_>>();
+    Json(json!({
+        "step": step.as_api_value(),
+        "from": from_unix_secs,
+        "to": to_unix_secs,
+        "items": items,
+        "summary": summary,
+    }))
+    .into_response()
+}
+
+pub fn build_admin_proxy_fleet_metrics_payload_response(
+    step: ProxyNodeMetricsStep,
+    from_unix_secs: u64,
+    to_unix_secs: u64,
+    items: Vec<StoredProxyFleetMetricsBucket>,
+) -> Response<Body> {
+    let summary = summarize_proxy_node_metric_buckets(items.iter().map(|item| {
+        (
+            item.samples,
+            item.uptime_samples,
+            item.active_connections_sum,
+            item.active_connections_max,
+            item.heartbeat_rtt_ms_sum,
+            item.heartbeat_rtt_ms_max,
+            item.connect_errors_delta,
+            item.disconnects_delta,
+            item.error_events_delta,
+            item.ws_in_bytes_delta,
+            item.ws_out_bytes_delta,
+            item.ws_in_frames_delta,
+            item.ws_out_frames_delta,
+        )
+    }));
+    let items = items
+        .into_iter()
+        .map(build_admin_proxy_fleet_metrics_bucket_payload)
+        .collect::<Vec<_>>();
+    Json(json!({
+        "step": step.as_api_value(),
+        "from": from_unix_secs,
+        "to": to_unix_secs,
+        "items": items,
+        "summary": summary,
+    }))
+    .into_response()
+}
+
+fn build_admin_proxy_node_metrics_bucket_payload(
+    item: StoredProxyNodeMetricsBucket,
+) -> serde_json::Value {
+    json!({
+        "node_id": item.node_id,
+        "bucket_start_unix_secs": item.bucket_start_unix_secs,
+        "bucket_start": unix_secs_to_rfc3339(item.bucket_start_unix_secs),
+        "samples": item.samples,
+        "uptime_samples": item.uptime_samples,
+        "uptime_ratio": ratio(item.uptime_samples, item.samples),
+        "active_connections_sum": item.active_connections_sum,
+        "active_connections_max": item.active_connections_max,
+        "active_connections_avg": ratio(item.active_connections_sum, item.samples),
+        "heartbeat_rtt_ms_sum": item.heartbeat_rtt_ms_sum,
+        "heartbeat_rtt_ms_max": item.heartbeat_rtt_ms_max,
+        "heartbeat_rtt_ms_avg": ratio(item.heartbeat_rtt_ms_sum, item.samples),
+        "connect_errors_delta": item.connect_errors_delta,
+        "disconnects_delta": item.disconnects_delta,
+        "error_events_delta": item.error_events_delta,
+        "ws_in_bytes_delta": item.ws_in_bytes_delta,
+        "ws_out_bytes_delta": item.ws_out_bytes_delta,
+        "ws_in_frames_delta": item.ws_in_frames_delta,
+        "ws_out_frames_delta": item.ws_out_frames_delta,
+    })
+}
+
+fn build_admin_proxy_fleet_metrics_bucket_payload(
+    item: StoredProxyFleetMetricsBucket,
+) -> serde_json::Value {
+    json!({
+        "bucket_start_unix_secs": item.bucket_start_unix_secs,
+        "bucket_start": unix_secs_to_rfc3339(item.bucket_start_unix_secs),
+        "samples": item.samples,
+        "uptime_samples": item.uptime_samples,
+        "uptime_ratio": ratio(item.uptime_samples, item.samples),
+        "active_connections_sum": item.active_connections_sum,
+        "active_connections_max": item.active_connections_max,
+        "active_connections_avg": ratio(item.active_connections_sum, item.samples),
+        "heartbeat_rtt_ms_sum": item.heartbeat_rtt_ms_sum,
+        "heartbeat_rtt_ms_max": item.heartbeat_rtt_ms_max,
+        "heartbeat_rtt_ms_avg": ratio(item.heartbeat_rtt_ms_sum, item.samples),
+        "connect_errors_delta": item.connect_errors_delta,
+        "disconnects_delta": item.disconnects_delta,
+        "error_events_delta": item.error_events_delta,
+        "ws_in_bytes_delta": item.ws_in_bytes_delta,
+        "ws_out_bytes_delta": item.ws_out_bytes_delta,
+        "ws_in_frames_delta": item.ws_in_frames_delta,
+        "ws_out_frames_delta": item.ws_out_frames_delta,
+    })
+}
+
+fn summarize_proxy_node_metric_buckets<I>(items: I) -> serde_json::Value
+where
+    I: IntoIterator<
+        Item = (
+            i64,
+            i64,
+            i64,
+            i64,
+            i64,
+            i64,
+            i64,
+            i64,
+            i64,
+            i64,
+            i64,
+            i64,
+            i64,
+        ),
+    >,
+{
+    let mut samples = 0;
+    let mut uptime_samples = 0;
+    let mut active_connections_sum = 0;
+    let mut active_connections_max = 0;
+    let mut heartbeat_rtt_ms_sum = 0;
+    let mut heartbeat_rtt_ms_max = 0;
+    let mut connect_errors_delta = 0;
+    let mut disconnects_delta = 0;
+    let mut error_events_delta = 0;
+    let mut ws_in_bytes_delta = 0;
+    let mut ws_out_bytes_delta = 0;
+    let mut ws_in_frames_delta = 0;
+    let mut ws_out_frames_delta = 0;
+
+    for item in items {
+        samples += item.0;
+        uptime_samples += item.1;
+        active_connections_sum += item.2;
+        active_connections_max = active_connections_max.max(item.3);
+        heartbeat_rtt_ms_sum += item.4;
+        heartbeat_rtt_ms_max = heartbeat_rtt_ms_max.max(item.5);
+        connect_errors_delta += item.6;
+        disconnects_delta += item.7;
+        error_events_delta += item.8;
+        ws_in_bytes_delta += item.9;
+        ws_out_bytes_delta += item.10;
+        ws_in_frames_delta += item.11;
+        ws_out_frames_delta += item.12;
+    }
+
+    json!({
+        "samples": samples,
+        "uptime_samples": uptime_samples,
+        "uptime_ratio": ratio(uptime_samples, samples),
+        "active_connections_sum": active_connections_sum,
+        "active_connections_max": active_connections_max,
+        "active_connections_avg": ratio(active_connections_sum, samples),
+        "heartbeat_rtt_ms_sum": heartbeat_rtt_ms_sum,
+        "heartbeat_rtt_ms_max": heartbeat_rtt_ms_max,
+        "heartbeat_rtt_ms_avg": ratio(heartbeat_rtt_ms_sum, samples),
+        "connect_errors_delta": connect_errors_delta,
+        "disconnects_delta": disconnects_delta,
+        "error_events_delta": error_events_delta,
+        "ws_in_bytes_delta": ws_in_bytes_delta,
+        "ws_out_bytes_delta": ws_out_bytes_delta,
+        "ws_in_frames_delta": ws_in_frames_delta,
+        "ws_out_frames_delta": ws_out_frames_delta,
+    })
+}
+
+fn ratio(numerator: i64, denominator: i64) -> Option<f64> {
+    if denominator <= 0 {
+        return None;
+    }
+    Some(numerator as f64 / denominator as f64)
 }
 
 pub fn build_admin_proxy_nodes_list_payload_response(

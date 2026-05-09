@@ -5,6 +5,7 @@ use super::{MysqlBackend, PostgresBackend, SqliteBackend};
 use crate::repository::announcements::AnnouncementWriteRepository;
 use crate::repository::auth::AuthApiKeyWriteRepository;
 use crate::repository::auth_modules::AuthModuleWriteRepository;
+use crate::repository::background_tasks::BackgroundTaskWriteRepository;
 use crate::repository::candidates::RequestCandidateWriteRepository;
 use crate::repository::gemini_file_mappings::GeminiFileMappingWriteRepository;
 use crate::repository::global_models::GlobalModelWriteRepository;
@@ -23,6 +24,7 @@ pub struct DataWriteRepositories {
     announcements: Option<Arc<dyn AnnouncementWriteRepository>>,
     auth_api_keys: Option<Arc<dyn AuthApiKeyWriteRepository>>,
     auth_modules: Option<Arc<dyn AuthModuleWriteRepository>>,
+    background_tasks: Option<Arc<dyn BackgroundTaskWriteRepository>>,
     request_candidates: Option<Arc<dyn RequestCandidateWriteRepository>>,
     gemini_file_mappings: Option<Arc<dyn GeminiFileMappingWriteRepository>>,
     global_models: Option<Arc<dyn GlobalModelWriteRepository>>,
@@ -43,6 +45,7 @@ impl fmt::Debug for DataWriteRepositories {
             .field("has_announcements", &self.announcements.is_some())
             .field("has_auth_api_keys", &self.auth_api_keys.is_some())
             .field("has_auth_modules", &self.auth_modules.is_some())
+            .field("has_background_tasks", &self.background_tasks.is_some())
             .field("has_request_candidates", &self.request_candidates.is_some())
             .field(
                 "has_gemini_file_mappings",
@@ -81,6 +84,10 @@ impl DataWriteRepositories {
                 .map(PostgresBackend::auth_module_write_repository)
                 .or_else(|| mysql.map(MysqlBackend::auth_module_write_repository))
                 .or_else(|| sqlite.map(SqliteBackend::auth_module_write_repository)),
+            background_tasks: postgres
+                .map(PostgresBackend::background_task_write_repository)
+                .or_else(|| mysql.map(MysqlBackend::background_task_write_repository))
+                .or_else(|| sqlite.map(SqliteBackend::background_task_write_repository)),
             request_candidates: postgres
                 .map(PostgresBackend::request_candidate_write_repository)
                 .or_else(|| mysql.map(MysqlBackend::request_candidate_write_repository))
@@ -149,6 +156,10 @@ impl DataWriteRepositories {
         self.auth_modules.clone()
     }
 
+    pub fn background_tasks(&self) -> Option<Arc<dyn BackgroundTaskWriteRepository>> {
+        self.background_tasks.clone()
+    }
+
     pub fn usage(&self) -> Option<Arc<dyn UsageWriteRepository>> {
         self.usage.clone()
     }
@@ -201,6 +212,7 @@ impl DataWriteRepositories {
         self.announcements.is_some()
             || self.auth_api_keys.is_some()
             || self.auth_modules.is_some()
+            || self.background_tasks.is_some()
             || self.request_candidates.is_some()
             || self.gemini_file_mappings.is_some()
             || self.global_models.is_some()

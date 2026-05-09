@@ -72,7 +72,5 @@ async fn gateway_background_gemini_file_mapping_cleanup_deletes_expired_entries(
         "active mapping should remain"
     );
 
-    for handle in background_tasks {
-        handle.abort();
-    }
+    background_tasks.shutdown().await;
 }

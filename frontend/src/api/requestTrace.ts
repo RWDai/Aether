@@ -9,6 +9,15 @@ export interface CandidateRankingMetadata {
   demoted_by?: string
 }
 
+export interface CandidateResponseBoundary {
+  source?: string
+  status_code?: number | null
+  headers?: Record<string, unknown> | null
+  body?: unknown
+  body_ref?: string | null
+  body_state?: string | null
+}
+
 export interface CandidateRecord {
   id: string
   request_id: string
@@ -46,7 +55,9 @@ export interface CandidateRecord {
   latency_ms?: number
   concurrent_requests?: number
   ranking?: CandidateRankingMetadata | null
-  extra_data?: Record<string, unknown>
+  extra_data?: Record<string, unknown> & {
+    upstream_response?: CandidateResponseBoundary
+  }
   created_at: string
   started_at?: string
   finished_at?: string
@@ -54,6 +65,9 @@ export interface CandidateRecord {
 
 export interface RequestTrace {
   request_id: string
+  request_path?: string
+  request_query_string?: string
+  request_path_and_query?: string
   total_candidates: number
   final_status: 'success' | 'failed' | 'streaming' | 'pending' | 'cancelled'
   total_latency_ms: number

@@ -7,10 +7,14 @@ use serde_json::{json, Map, Value};
 use uuid::Uuid;
 
 use super::types::{
-    normalize_proxy_metadata, reconcile_remote_config_after_heartbeat, ProxyNodeHeartbeatMutation,
-    ProxyNodeManualCreateMutation, ProxyNodeManualUpdateMutation, ProxyNodeReadRepository,
+    bucket_start_unix_secs, build_tunnel_error_event_detail, build_tunnel_metrics_sample,
+    normalize_proxy_metadata, reconcile_remote_config_after_heartbeat, ProxyNodeEventQuery,
+    ProxyNodeHeartbeatMutation, ProxyNodeManualCreateMutation, ProxyNodeManualUpdateMutation,
+    ProxyNodeMetricsCleanupSummary, ProxyNodeMetricsStep, ProxyNodeReadRepository,
     ProxyNodeRegistrationMutation, ProxyNodeRemoteConfigMutation, ProxyNodeTrafficMutation,
-    ProxyNodeTunnelStatusMutation, ProxyNodeWriteRepository, StoredProxyNode, StoredProxyNodeEvent,
+    ProxyNodeTunnelStatusMutation, ProxyNodeWriteRepository, StoredProxyFleetMetricsBucket,
+    StoredProxyNode, StoredProxyNodeEvent, StoredProxyNodeMetricsBucket, TunnelMetricsSample,
+    PROXY_NODE_EVENT_TYPE_TUNNEL_ERROR,
 };
 use crate::DataLayerError;
 
@@ -18,6 +22,8 @@ use crate::DataLayerError;
 pub struct InMemoryProxyNodeRepository {
     nodes: RwLock<BTreeMap<String, StoredProxyNode>>,
     events: RwLock<Vec<StoredProxyNodeEvent>>,
+    metrics_1m: RwLock<BTreeMap<(String, u64), StoredProxyNodeMetricsBucket>>,
+    metrics_1h: RwLock<BTreeMap<(String, u64), StoredProxyNodeMetricsBucket>>,
 }
 
 impl InMemoryProxyNodeRepository {
@@ -33,6 +39,8 @@ impl InMemoryProxyNodeRepository {
                     .collect(),
             ),
             events: RwLock::new(Vec::new()),
+            metrics_1m: RwLock::new(BTreeMap::new()),
+            metrics_1h: RwLock::new(BTreeMap::new()),
         }
     }
 
@@ -49,6 +57,8 @@ impl InMemoryProxyNodeRepository {
                     .collect(),
             ),
             events: RwLock::new(events.into_iter().collect()),
+            metrics_1m: RwLock::new(BTreeMap::new()),
+            metrics_1h: RwLock::new(BTreeMap::new()),
         }
     }
 
@@ -61,6 +71,50 @@ impl InMemoryProxyNodeRepository {
 
     fn next_event_id(events: &[StoredProxyNodeEvent]) -> i64 {
         events.iter().map(|event| event.id).max().unwrap_or(0) + 1
+    }
+
+    fn upsert_metrics_bucket(
+        metrics: &mut BTreeMap<(String, u64), StoredProxyNodeMetricsBucket>,
+        node_id: &str,
+        bucket_start_unix_secs: u64,
+        sample: &TunnelMetricsSample,
+    ) {
+        let key = (node_id.to_string(), bucket_start_unix_secs);
+        let bucket = metrics
+            .entry(key)
+            .or_insert_with(|| StoredProxyNodeMetricsBucket {
+                node_id: node_id.to_string(),
+                bucket_start_unix_secs,
+                samples: 0,
+                uptime_samples: 0,
+                active_connections_sum: 0,
+                active_connections_max: 0,
+                heartbeat_rtt_ms_sum: 0,
+                heartbeat_rtt_ms_max: 0,
+                connect_errors_delta: 0,
+                disconnects_delta: 0,
+                error_events_delta: 0,
+                ws_in_bytes_delta: 0,
+                ws_out_bytes_delta: 0,
+                ws_in_frames_delta: 0,
+                ws_out_frames_delta: 0,
+            });
+
+        bucket.samples += sample.samples;
+        bucket.uptime_samples += sample.uptime_samples;
+        bucket.active_connections_sum += sample.active_connections_sum;
+        bucket.active_connections_max = bucket
+            .active_connections_max
+            .max(sample.active_connections_max);
+        bucket.heartbeat_rtt_ms_sum += sample.heartbeat_rtt_ms_sum;
+        bucket.heartbeat_rtt_ms_max = bucket.heartbeat_rtt_ms_max.max(sample.heartbeat_rtt_ms_max);
+        bucket.connect_errors_delta += sample.connect_errors_delta;
+        bucket.disconnects_delta += sample.disconnects_delta;
+        bucket.error_events_delta += sample.error_events_delta;
+        bucket.ws_in_bytes_delta += sample.ws_in_bytes_delta;
+        bucket.ws_out_bytes_delta += sample.ws_out_bytes_delta;
+        bucket.ws_in_frames_delta += sample.ws_in_frames_delta;
+        bucket.ws_out_frames_delta += sample.ws_out_frames_delta;
     }
 
     fn normalize_remote_config(
@@ -151,6 +205,130 @@ impl ProxyNodeReadRepository for InMemoryProxyNodeRepository {
                 .cmp(&left.created_at_unix_ms.unwrap_or(0))
                 .then(right.id.cmp(&left.id))
         });
+        items.truncate(limit);
+        Ok(items)
+    }
+
+    async fn list_proxy_node_events_filtered(
+        &self,
+        node_id: &str,
+        query: &ProxyNodeEventQuery,
+    ) -> Result<Vec<StoredProxyNodeEvent>, DataLayerError> {
+        let events = self.events.read().expect("proxy node repository lock");
+        let mut items = events
+            .iter()
+            .filter(|event| event.node_id == node_id)
+            .filter(|event| {
+                query
+                    .from_unix_secs
+                    .map(|from| event.created_at_unix_ms.unwrap_or(0) >= from)
+                    .unwrap_or(true)
+            })
+            .filter(|event| {
+                query
+                    .to_unix_secs
+                    .map(|to| event.created_at_unix_ms.unwrap_or(u64::MAX) <= to)
+                    .unwrap_or(true)
+            })
+            .filter(|event| {
+                query
+                    .event_type
+                    .as_deref()
+                    .map(|event_type| event.event_type.eq_ignore_ascii_case(event_type))
+                    .unwrap_or(true)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        items.sort_by(|left, right| {
+            right
+                .created_at_unix_ms
+                .unwrap_or(0)
+                .cmp(&left.created_at_unix_ms.unwrap_or(0))
+                .then(right.id.cmp(&left.id))
+        });
+        items.truncate(query.limit);
+        Ok(items)
+    }
+
+    async fn list_proxy_node_metrics(
+        &self,
+        node_id: &str,
+        step: ProxyNodeMetricsStep,
+        from_unix_secs: u64,
+        to_unix_secs: u64,
+        limit: usize,
+    ) -> Result<Vec<StoredProxyNodeMetricsBucket>, DataLayerError> {
+        let metrics = match step {
+            ProxyNodeMetricsStep::OneMinute => self.metrics_1m.read(),
+            ProxyNodeMetricsStep::OneHour => self.metrics_1h.read(),
+        }
+        .expect("proxy node repository lock");
+        let mut items = metrics
+            .values()
+            .filter(|bucket| bucket.node_id == node_id)
+            .filter(|bucket| bucket.bucket_start_unix_secs >= from_unix_secs)
+            .filter(|bucket| bucket.bucket_start_unix_secs <= to_unix_secs)
+            .cloned()
+            .collect::<Vec<_>>();
+        items.sort_by_key(|bucket| bucket.bucket_start_unix_secs);
+        items.truncate(limit);
+        Ok(items)
+    }
+
+    async fn list_proxy_fleet_metrics(
+        &self,
+        step: ProxyNodeMetricsStep,
+        from_unix_secs: u64,
+        to_unix_secs: u64,
+        limit: usize,
+    ) -> Result<Vec<StoredProxyFleetMetricsBucket>, DataLayerError> {
+        let metrics = match step {
+            ProxyNodeMetricsStep::OneMinute => self.metrics_1m.read(),
+            ProxyNodeMetricsStep::OneHour => self.metrics_1h.read(),
+        }
+        .expect("proxy node repository lock");
+        let mut grouped = BTreeMap::<u64, StoredProxyFleetMetricsBucket>::new();
+        for bucket in metrics.values() {
+            if bucket.bucket_start_unix_secs < from_unix_secs
+                || bucket.bucket_start_unix_secs > to_unix_secs
+            {
+                continue;
+            }
+            let item = grouped
+                .entry(bucket.bucket_start_unix_secs)
+                .or_insert_with(|| StoredProxyFleetMetricsBucket {
+                    bucket_start_unix_secs: bucket.bucket_start_unix_secs,
+                    samples: 0,
+                    uptime_samples: 0,
+                    active_connections_sum: 0,
+                    active_connections_max: 0,
+                    heartbeat_rtt_ms_sum: 0,
+                    heartbeat_rtt_ms_max: 0,
+                    connect_errors_delta: 0,
+                    disconnects_delta: 0,
+                    error_events_delta: 0,
+                    ws_in_bytes_delta: 0,
+                    ws_out_bytes_delta: 0,
+                    ws_in_frames_delta: 0,
+                    ws_out_frames_delta: 0,
+                });
+            item.samples += bucket.samples;
+            item.uptime_samples += bucket.uptime_samples;
+            item.active_connections_sum += bucket.active_connections_sum;
+            item.active_connections_max = item
+                .active_connections_max
+                .max(bucket.active_connections_max);
+            item.heartbeat_rtt_ms_sum += bucket.heartbeat_rtt_ms_sum;
+            item.heartbeat_rtt_ms_max = item.heartbeat_rtt_ms_max.max(bucket.heartbeat_rtt_ms_max);
+            item.connect_errors_delta += bucket.connect_errors_delta;
+            item.disconnects_delta += bucket.disconnects_delta;
+            item.error_events_delta += bucket.error_events_delta;
+            item.ws_in_bytes_delta += bucket.ws_in_bytes_delta;
+            item.ws_out_bytes_delta += bucket.ws_out_bytes_delta;
+            item.ws_in_frames_delta += bucket.ws_in_frames_delta;
+            item.ws_out_frames_delta += bucket.ws_out_frames_delta;
+        }
+        let mut items = grouped.into_values().collect::<Vec<_>>();
         items.truncate(limit);
         Ok(items)
     }
@@ -376,65 +554,114 @@ impl ProxyNodeWriteRepository for InMemoryProxyNodeRepository {
         &self,
         mutation: &ProxyNodeHeartbeatMutation,
     ) -> Result<Option<StoredProxyNode>, DataLayerError> {
-        let mut nodes = self.nodes.write().expect("proxy node repository lock");
-        let Some(node) = nodes.get_mut(&mutation.node_id) else {
-            return Ok(None);
+        let (node, sample, now_unix_secs) = {
+            let mut nodes = self.nodes.write().expect("proxy node repository lock");
+            let Some(node) = nodes.get_mut(&mutation.node_id) else {
+                return Ok(None);
+            };
+            if !node.tunnel_mode {
+                return Err(DataLayerError::InvalidInput(
+                    "non-tunnel mode is no longer supported, please upgrade aether-proxy to use tunnel mode"
+                        .to_string(),
+                ));
+            }
+
+            let previous_proxy_metadata = node.proxy_metadata.clone();
+            let now_unix_secs = Self::now_unix_secs().unwrap_or(0);
+            let now = Some(now_unix_secs);
+            node.last_heartbeat_at_unix_secs = now;
+            if node.status != "online" || !node.tunnel_connected {
+                node.status = "online".to_string();
+                node.tunnel_connected = true;
+                node.tunnel_connected_at_unix_secs = now;
+                node.updated_at_unix_secs = now;
+            }
+
+            if let Some(value) = mutation.heartbeat_interval {
+                node.heartbeat_interval = value;
+            }
+            if let Some(value) = mutation.active_connections {
+                node.active_connections = value;
+            }
+            if let Some(value) = mutation.avg_latency_ms {
+                node.avg_latency_ms = Some(value);
+            }
+            let normalized_proxy_metadata = normalize_proxy_metadata(
+                mutation.proxy_metadata.as_ref(),
+                mutation.proxy_version.as_deref(),
+            );
+            if let Some(value) = normalized_proxy_metadata {
+                node.proxy_metadata = Some(value);
+            }
+            if let Some(value) = mutation.total_requests_delta.filter(|value| *value > 0) {
+                node.total_requests += value;
+            }
+            if let Some(value) = mutation.failed_requests_delta.filter(|value| *value > 0) {
+                node.failed_requests += value;
+            }
+            if let Some(value) = mutation.dns_failures_delta.filter(|value| *value > 0) {
+                node.dns_failures += value;
+            }
+            if let Some(value) = mutation.stream_errors_delta.filter(|value| *value > 0) {
+                node.stream_errors += value;
+            }
+            let reconciled_remote_config = reconcile_remote_config_after_heartbeat(
+                node.remote_config.as_ref(),
+                mutation.proxy_version.as_deref(),
+            );
+            if reconciled_remote_config != node.remote_config {
+                node.remote_config = reconciled_remote_config;
+                node.config_version = node.config_version.saturating_add(1);
+                node.updated_at_unix_secs = now;
+            }
+
+            let sample = build_tunnel_metrics_sample(
+                previous_proxy_metadata.as_ref(),
+                node.proxy_metadata.as_ref(),
+                node.active_connections,
+                node.tunnel_connected,
+            );
+            (node.clone(), sample, now_unix_secs)
         };
-        if !node.tunnel_mode {
-            return Err(DataLayerError::InvalidInput(
-                "non-tunnel mode is no longer supported, please upgrade aether-proxy to use tunnel mode"
-                    .to_string(),
-            ));
+
+        if let Some(sample) = sample.as_ref() {
+            Self::upsert_metrics_bucket(
+                &mut self.metrics_1m.write().expect("proxy node repository lock"),
+                &node.id,
+                bucket_start_unix_secs(now_unix_secs, ProxyNodeMetricsStep::OneMinute),
+                sample,
+            );
+            Self::upsert_metrics_bucket(
+                &mut self.metrics_1h.write().expect("proxy node repository lock"),
+                &node.id,
+                bucket_start_unix_secs(now_unix_secs, ProxyNodeMetricsStep::OneHour),
+                sample,
+            );
+
+            let mut events = self.events.write().expect("proxy node repository lock");
+            for error in &sample.recent_error_events {
+                let event_id = Self::next_event_id(&events);
+                events.push(StoredProxyNodeEvent {
+                    id: event_id,
+                    node_id: node.id.clone(),
+                    event_type: PROXY_NODE_EVENT_TYPE_TUNNEL_ERROR.to_string(),
+                    detail: Some(build_tunnel_error_event_detail(error)),
+                    event_metadata: Some(json!({
+                        "source": "heartbeat",
+                        "category": error.category,
+                        "message": error.message,
+                        "timestamp_unix_secs": error.timestamp_unix_secs,
+                    })),
+                    created_at_unix_ms: Some(if error.timestamp_unix_secs == 0 {
+                        now_unix_secs
+                    } else {
+                        error.timestamp_unix_secs
+                    }),
+                });
+            }
         }
 
-        let now = Self::now_unix_secs();
-        node.last_heartbeat_at_unix_secs = now;
-        if node.status != "online" || !node.tunnel_connected {
-            node.status = "online".to_string();
-            node.tunnel_connected = true;
-            node.tunnel_connected_at_unix_secs = now;
-            node.updated_at_unix_secs = now;
-        }
-
-        if let Some(value) = mutation.heartbeat_interval {
-            node.heartbeat_interval = value;
-        }
-        if let Some(value) = mutation.active_connections {
-            node.active_connections = value;
-        }
-        if let Some(value) = mutation.avg_latency_ms {
-            node.avg_latency_ms = Some(value);
-        }
-        let normalized_proxy_metadata = normalize_proxy_metadata(
-            mutation.proxy_metadata.as_ref(),
-            mutation.proxy_version.as_deref(),
-        );
-        if let Some(value) = normalized_proxy_metadata {
-            node.proxy_metadata = Some(value);
-        }
-        if let Some(value) = mutation.total_requests_delta.filter(|value| *value > 0) {
-            node.total_requests += value;
-        }
-        if let Some(value) = mutation.failed_requests_delta.filter(|value| *value > 0) {
-            node.failed_requests += value;
-        }
-        if let Some(value) = mutation.dns_failures_delta.filter(|value| *value > 0) {
-            node.dns_failures += value;
-        }
-        if let Some(value) = mutation.stream_errors_delta.filter(|value| *value > 0) {
-            node.stream_errors += value;
-        }
-        let reconciled_remote_config = reconcile_remote_config_after_heartbeat(
-            node.remote_config.as_ref(),
-            mutation.proxy_version.as_deref(),
-        );
-        if reconciled_remote_config != node.remote_config {
-            node.remote_config = reconciled_remote_config;
-            node.config_version = node.config_version.saturating_add(1);
-            node.updated_at_unix_secs = now;
-        }
-
-        Ok(Some(node.clone()))
+        Ok(Some(node))
     }
 
     async fn record_traffic(
@@ -490,6 +717,7 @@ impl ProxyNodeWriteRepository for InMemoryProxyNodeRepository {
                     node_id: mutation.node_id.clone(),
                     event_type: event_type.to_string(),
                     detail: Some(format!("[stale_ignored] {event_detail}")),
+                    event_metadata: None,
                     created_at_unix_ms: Self::now_unix_secs(),
                 });
                 return Ok(Some(node.clone()));
@@ -513,6 +741,7 @@ impl ProxyNodeWriteRepository for InMemoryProxyNodeRepository {
             node_id: mutation.node_id.clone(),
             event_type: event_type.to_string(),
             detail: Some(event_detail),
+            event_metadata: None,
             created_at_unix_ms: Some(event_time),
         });
         Ok(Some(node.clone()))
@@ -546,6 +775,14 @@ impl ProxyNodeWriteRepository for InMemoryProxyNodeRepository {
                 .write()
                 .expect("proxy node repository lock")
                 .retain(|event| event.node_id != node_id);
+            self.metrics_1m
+                .write()
+                .expect("proxy node repository lock")
+                .retain(|(metric_node_id, _), _| metric_node_id != node_id);
+            self.metrics_1h
+                .write()
+                .expect("proxy node repository lock")
+                .retain(|(metric_node_id, _), _| metric_node_id != node_id);
         }
         Ok(removed)
     }
@@ -597,6 +834,44 @@ impl ProxyNodeWriteRepository for InMemoryProxyNodeRepository {
             node.avg_latency_ms = Some(ms as f64);
         }
         Ok(())
+    }
+
+    async fn cleanup_proxy_node_metrics(
+        &self,
+        retain_1m_from_unix_secs: u64,
+        retain_1h_from_unix_secs: u64,
+        delete_limit: usize,
+    ) -> Result<ProxyNodeMetricsCleanupSummary, DataLayerError> {
+        let delete_limit = delete_limit.max(1);
+        let mut metrics_1m = self.metrics_1m.write().expect("proxy node repository lock");
+        let expired_1m_keys = metrics_1m
+            .keys()
+            .filter(|(_, bucket_start)| *bucket_start < retain_1m_from_unix_secs)
+            .take(delete_limit)
+            .cloned()
+            .collect::<Vec<_>>();
+        let deleted_1m_rows = expired_1m_keys
+            .iter()
+            .filter(|key| metrics_1m.remove(key).is_some())
+            .count();
+        drop(metrics_1m);
+
+        let mut metrics_1h = self.metrics_1h.write().expect("proxy node repository lock");
+        let expired_1h_keys = metrics_1h
+            .keys()
+            .filter(|(_, bucket_start)| *bucket_start < retain_1h_from_unix_secs)
+            .take(delete_limit)
+            .cloned()
+            .collect::<Vec<_>>();
+        let deleted_1h_rows = expired_1h_keys
+            .iter()
+            .filter(|key| metrics_1h.remove(key).is_some())
+            .count();
+
+        Ok(ProxyNodeMetricsCleanupSummary {
+            deleted_1m_rows,
+            deleted_1h_rows,
+        })
     }
 }
 
@@ -750,6 +1025,7 @@ mod tests {
                     node_id: "node-1".to_string(),
                     event_type: "connected".to_string(),
                     detail: Some("older".to_string()),
+                    event_metadata: None,
                     created_at_unix_ms: Some(1_710_000_000),
                 },
                 StoredProxyNodeEvent {
@@ -757,6 +1033,7 @@ mod tests {
                     node_id: "node-1".to_string(),
                     event_type: "disconnected".to_string(),
                     detail: Some("newer".to_string()),
+                    event_metadata: None,
                     created_at_unix_ms: Some(1_710_000_100),
                 },
             ],

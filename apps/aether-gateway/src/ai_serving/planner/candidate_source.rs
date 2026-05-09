@@ -159,6 +159,40 @@ pub(crate) async fn preselect_local_execution_candidates_with_serving(
             .into_iter()
             .map(str::to_string)
             .collect::<Vec<_>>();
+    preselect_local_execution_candidates_for_api_formats_with_serving(
+        state,
+        client_api_format,
+        requested_model,
+        require_streaming,
+        required_capabilities,
+        auth_snapshot,
+        client_session_affinity,
+        use_api_format_alias_match,
+        key_mode,
+        candidate_api_formats,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn preselect_local_execution_candidates_for_api_formats_with_serving(
+    state: PlannerAppState<'_>,
+    client_api_format: &str,
+    requested_model: &str,
+    require_streaming: bool,
+    required_capabilities: Option<&serde_json::Value>,
+    auth_snapshot: &GatewayAuthApiKeySnapshot,
+    client_session_affinity: Option<&ClientSessionAffinity>,
+    use_api_format_alias_match: bool,
+    key_mode: LocalCandidatePreselectionKeyMode,
+    candidate_api_formats: Vec<String>,
+) -> Result<
+    AiCandidatePreselectionOutcome<
+        SchedulerMinimalCandidateSelectionCandidate,
+        SkippedLocalExecutionCandidate,
+    >,
+    GatewayError,
+> {
     let mut model_directive_enabled_api_formats = BTreeSet::new();
     for api_format in &candidate_api_formats {
         if crate::system_features::reasoning_model_directive_enabled_for_api_format_and_model(

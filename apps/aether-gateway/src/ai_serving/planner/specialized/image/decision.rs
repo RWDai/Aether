@@ -10,7 +10,7 @@ use crate::ai_serving::transport::{
     resolve_transport_execution_timeouts, resolve_transport_profile,
 };
 use crate::ai_serving::{ai_local_execution_contract_for_formats, PlannerAppState};
-use crate::{AiExecutionDecision, AppState};
+use crate::{append_execution_contract_fields_to_value, AiExecutionDecision, AppState};
 
 use super::request::resolve_local_openai_image_candidate_payload_parts;
 use super::support::{LocalOpenAiImageCandidateAttempt, LocalOpenAiImageDecisionInput};
@@ -47,8 +47,12 @@ pub(super) async fn maybe_build_local_openai_image_decision_payload_for_candidat
     } = attempt;
     let candidate = eligible.candidate;
     let transport = resolved.transport;
-    let (execution_strategy, conversion_mode) =
-        ai_local_execution_contract_for_formats(spec_metadata.api_format, spec_metadata.api_format);
+    let provider_api_format = resolved.provider_api_format.clone();
+    let needs_conversion = provider_api_format != spec_metadata.api_format;
+    let (execution_strategy, conversion_mode) = ai_local_execution_contract_for_formats(
+        spec_metadata.api_format,
+        provider_api_format.as_str(),
+    );
     let proxy = planner_state
         .app()
         .resolve_transport_proxy_snapshot_with_tunnel_affinity(&transport)
@@ -84,41 +88,49 @@ pub(super) async fn maybe_build_local_openai_image_decision_payload_for_candidat
         .get("stream")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(spec_metadata.require_streaming);
-    let report_context = build_local_execution_report_context(LocalExecutionReportContextParts {
-        auth_context: &input.auth_context,
-        request_id: trace_id,
-        candidate_id: &candidate_id,
-        attempt_identity,
-        model: &resolved.requested_model,
-        provider_name: &transport.provider.name,
-        provider_id: &candidate.provider_id,
-        endpoint_id: &candidate.endpoint_id,
-        key_id: &candidate.key_id,
-        key_name: None,
-        model_id: Some(&candidate.model_id),
-        global_model_id: Some(&candidate.global_model_id),
-        global_model_name: Some(&candidate.global_model_name),
-        provider_api_format: spec_metadata.api_format,
-        client_api_format: spec_metadata.api_format,
-        mapped_model: Some(&resolved.mapped_model),
-        candidate_group_id: eligible.orchestration.candidate_group_id.as_deref(),
-        ranking: eligible.ranking.as_ref(),
-        upstream_url: Some(&resolved.upstream_url),
-        header_rules: transport.endpoint.header_rules.as_ref(),
-        body_rules: transport.endpoint.body_rules.as_ref(),
-        provider_request_method: Some(serde_json::Value::String(parts.method.to_string())),
-        provider_request_headers: Some(&resolved.provider_request_headers),
-        original_headers: &parts.headers,
-        request_origin: Some(crate::ai_serving::request_origin_from_parts(parts)),
-        original_request_body_json: Some(body_json),
-        original_request_body_base64: body_base64,
-        client_session_affinity: input.client_session_affinity.as_ref(),
-        client_requested_stream: spec_metadata.require_streaming,
-        upstream_is_stream,
-        has_envelope: false,
-        needs_conversion: false,
-        extra_fields,
-    });
+    let report_context = append_execution_contract_fields_to_value(
+        build_local_execution_report_context(LocalExecutionReportContextParts {
+            auth_context: &input.auth_context,
+            request_id: trace_id,
+            candidate_id: &candidate_id,
+            attempt_identity,
+            model: &resolved.requested_model,
+            provider_name: &transport.provider.name,
+            provider_id: &candidate.provider_id,
+            endpoint_id: &candidate.endpoint_id,
+            key_id: &candidate.key_id,
+            key_name: None,
+            model_id: Some(&candidate.model_id),
+            global_model_id: Some(&candidate.global_model_id),
+            global_model_name: Some(&candidate.global_model_name),
+            provider_api_format: provider_api_format.as_str(),
+            client_api_format: spec_metadata.api_format,
+            mapped_model: Some(&resolved.mapped_model),
+            candidate_group_id: eligible.orchestration.candidate_group_id.as_deref(),
+            ranking: eligible.ranking.as_ref(),
+            upstream_url: Some(&resolved.upstream_url),
+            header_rules: transport.endpoint.header_rules.as_ref(),
+            body_rules: transport.endpoint.body_rules.as_ref(),
+            provider_request_method: Some(serde_json::Value::String(parts.method.to_string())),
+            provider_request_headers: Some(&resolved.provider_request_headers),
+            original_headers: &parts.headers,
+            request_path: Some(parts.uri.path()),
+            request_query_string: parts.uri.query(),
+            request_origin: Some(crate::ai_serving::request_origin_from_parts(parts)),
+            original_request_body_json: Some(body_json),
+            original_request_body_base64: body_base64,
+            client_session_affinity: input.client_session_affinity.as_ref(),
+            client_requested_stream: spec_metadata.require_streaming,
+            upstream_is_stream,
+            has_envelope: false,
+            needs_conversion,
+            extra_fields,
+        }),
+        execution_strategy,
+        conversion_mode,
+        spec_metadata.api_format,
+        provider_api_format.as_str(),
+    );
 
     Some(build_ai_execution_decision_response(
         AiExecutionDecisionResponseParts {
@@ -137,7 +149,7 @@ pub(super) async fn maybe_build_local_openai_image_decision_payload_for_candidat
             provider_request_method: Some(parts.method.to_string()),
             auth_header: Some(resolved.auth_header),
             auth_value: Some(resolved.auth_value),
-            provider_api_format: spec_metadata.api_format.to_string(),
+            provider_api_format,
             client_api_format: spec_metadata.api_format.to_string(),
             model_name: resolved.requested_model,
             mapped_model: resolved.mapped_model,

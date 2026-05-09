@@ -3,7 +3,7 @@ use sqlx::Row;
 
 use crate::backend::stats_common::{stats_id, unix_ms, unix_secs, utc_from_unix_secs};
 use crate::backend::SqliteBackend;
-use crate::driver::sqlite::SqlitePool;
+use crate::driver::sqlite::{sqlite_real, SqlitePool};
 use crate::error::SqlResultExt;
 use crate::{
     DataLayerError, StatsDailyAggregationInput, StatsDailyAggregationSummary,
@@ -124,9 +124,9 @@ SELECT
   COALESCE(SUM(output_tokens), 0) AS output_tokens,
   COALESCE(SUM(cache_creation_input_tokens), 0) AS cache_creation_tokens,
   COALESCE(SUM(cache_read_input_tokens), 0) AS cache_read_tokens,
-  COALESCE(SUM(total_cost_usd), 0.0) AS total_cost,
-  COALESCE(SUM(actual_total_cost_usd), 0.0) AS actual_total_cost,
-  COALESCE(AVG(response_time_ms), 0.0) AS avg_response_time_ms
+  CAST(COALESCE(SUM(total_cost_usd), 0) AS REAL) AS total_cost,
+  CAST(COALESCE(SUM(actual_total_cost_usd), 0) AS REAL) AS actual_total_cost,
+  CAST(COALESCE(AVG(response_time_ms), 0) AS REAL) AS avg_response_time_ms
 FROM "usage"
 WHERE created_at_unix_ms >= ?
   AND created_at_unix_ms < ?
@@ -188,12 +188,9 @@ ON CONFLICT (hour_utc) DO UPDATE SET
             .map_sql_err()?,
     )
     .bind(row.try_get::<i64, _>("cache_read_tokens").map_sql_err()?)
-    .bind(row.try_get::<f64, _>("total_cost").map_sql_err()?)
-    .bind(row.try_get::<f64, _>("actual_total_cost").map_sql_err()?)
-    .bind(
-        row.try_get::<f64, _>("avg_response_time_ms")
-            .map_sql_err()?,
-    )
+    .bind(sqlite_real(&row, "total_cost")?)
+    .bind(sqlite_real(&row, "actual_total_cost")?)
+    .bind(sqlite_real(&row, "avg_response_time_ms")?)
     .bind(aggregated_at_unix_secs)
     .bind(aggregated_at_unix_secs)
     .bind(aggregated_at_unix_secs)
@@ -277,12 +274,9 @@ ON CONFLICT ("date") DO UPDATE SET
             .map_sql_err()?,
     )
     .bind(row.try_get::<i64, _>("cache_read_tokens").map_sql_err()?)
-    .bind(row.try_get::<f64, _>("total_cost").map_sql_err()?)
-    .bind(row.try_get::<f64, _>("actual_total_cost").map_sql_err()?)
-    .bind(
-        row.try_get::<f64, _>("avg_response_time_ms")
-            .map_sql_err()?,
-    )
+    .bind(sqlite_real(&row, "total_cost")?)
+    .bind(sqlite_real(&row, "actual_total_cost")?)
+    .bind(sqlite_real(&row, "avg_response_time_ms")?)
     .bind(unique_models)
     .bind(unique_providers)
     .bind(aggregated_at_unix_secs)

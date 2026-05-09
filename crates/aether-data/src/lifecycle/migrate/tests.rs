@@ -293,6 +293,8 @@ fn empty_database_snapshot_covers_current_cutoff_versions() {
             20260505130000,
             20260507000000,
             20260507120000,
+            20260508000000,
+            20260509000000,
         ]
     );
 }
@@ -510,8 +512,24 @@ fn mysql_and_sqlite_migrations_include_enabled_incrementals() {
         .map(|migration| migration.version)
         .collect::<Vec<_>>();
 
-    assert_eq!(mysql_versions, vec![20260403000000, 20260507120000]);
-    assert_eq!(sqlite_versions, vec![20260403000000, 20260507120000]);
+    assert_eq!(
+        mysql_versions,
+        vec![
+            20260403000000,
+            20260507120000,
+            20260508000000,
+            20260509000000
+        ]
+    );
+    assert_eq!(
+        sqlite_versions,
+        vec![
+            20260403000000,
+            20260507120000,
+            20260508000000,
+            20260509000000
+        ]
+    );
 }
 
 #[test]
@@ -1014,6 +1032,8 @@ fn pending_migrations_from_applied_skips_versions_already_applied() {
             20260505130000,
             20260507000000,
             20260507120000,
+            20260508000000,
+            20260509000000,
         ]
     );
 }

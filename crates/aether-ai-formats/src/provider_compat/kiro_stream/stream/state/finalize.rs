@@ -3,7 +3,7 @@ use crate::provider_compat::kiro_stream::{
     find_kiro_real_thinking_end_tag_at_buffer_end,
 };
 
-use crate::response::AiSurfaceFinalizeError;
+use crate::formats::shared::AiSurfaceFinalizeError;
 
 use super::super::KiroClaudeStreamState;
 

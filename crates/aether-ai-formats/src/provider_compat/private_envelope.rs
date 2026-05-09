@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
+use crate::formats::shared::AiSurfaceFinalizeError;
 use crate::provider_compat::kiro_stream::KiroToClaudeCliStreamState;
-use crate::response::AiSurfaceFinalizeError;
 
 use super::surfaces::{
     provider_adaptation_allows_sync_finalize_envelope, provider_adaptation_descriptor_for_envelope,

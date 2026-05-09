@@ -13,6 +13,9 @@ use crate::repository::auth_modules::{
     AuthModuleReadRepository, AuthModuleWriteRepository, MysqlAuthModuleReadRepository,
     MysqlAuthModuleRepository,
 };
+use crate::repository::background_tasks::{
+    BackgroundTaskReadRepository, BackgroundTaskWriteRepository, MysqlBackgroundTaskRepository,
+};
 use crate::repository::billing::{BillingReadRepository, MysqlBillingReadRepository};
 use crate::repository::candidate_selection::{
     MinimalCandidateSelectionReadRepository, MysqlMinimalCandidateSelectionReadRepository,
@@ -121,6 +124,14 @@ impl MysqlBackend {
 
     pub fn billing_read_repository(&self) -> Arc<dyn BillingReadRepository> {
         Arc::new(MysqlBillingReadRepository::new(self.pool_clone()))
+    }
+
+    pub fn background_task_read_repository(&self) -> Arc<dyn BackgroundTaskReadRepository> {
+        Arc::new(MysqlBackgroundTaskRepository::new(self.pool_clone()))
+    }
+
+    pub fn background_task_write_repository(&self) -> Arc<dyn BackgroundTaskWriteRepository> {
+        Arc::new(MysqlBackgroundTaskRepository::new(self.pool_clone()))
     }
 
     pub fn request_candidate_read_repository(&self) -> Arc<dyn RequestCandidateReadRepository> {

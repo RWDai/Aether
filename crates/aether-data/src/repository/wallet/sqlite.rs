@@ -27,7 +27,7 @@ use super::{
     StoredWalletDailyUsageLedgerPage, StoredWalletSnapshot, WalletLookupKey, WalletMutationOutcome,
     WalletReadRepository, WalletWriteRepository,
 };
-use crate::driver::sqlite::SqlitePool;
+use crate::driver::sqlite::{sqlite_optional_real, sqlite_real, SqlitePool};
 use crate::error::SqlResultExt;
 use crate::DataLayerError;
 
@@ -715,7 +715,7 @@ LIMIT 1
             tx.commit().await.map_sql_err()?;
             return Ok(CreateWalletRefundRequestOutcome::WalletMissing);
         };
-        let wallet_recharge_balance: f64 = get(&wallet_row, "balance")?;
+        let wallet_recharge_balance = sqlite_real(&wallet_row, "balance")?;
         let wallet_reserved_amount: f64 = sqlx::query_scalar(
             r#"
 SELECT COALESCE(SUM(amount_usd), 0.0)
@@ -779,7 +779,7 @@ WHERE payment_order_id = ?
             .fetch_one(&mut *tx)
             .await
             .map_sql_err()?;
-            let refundable_amount: f64 = get(&order_row, "refundable_amount_usd")?;
+            let refundable_amount = sqlite_real(&order_row, "refundable_amount_usd")?;
             if input.amount_usd > (refundable_amount - order_reserved_amount) {
                 tx.commit().await.map_sql_err()?;
                 return Ok(
@@ -946,7 +946,7 @@ VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'received', ?, NULL, ?, NULL)
         let order_no: String = get(&order_row, "order_no")?;
         let order_wallet_id: String = get(&order_row, "wallet_id")?;
         let order_payment_method: String = get(&order_row, "payment_method")?;
-        let order_amount_usd: f64 = get(&order_row, "amount_usd")?;
+        let order_amount_usd = sqlite_real(&order_row, "amount_usd")?;
         let order_status: String = get(&order_row, "status")?;
         let expires_at_unix_secs: Option<i64> = get(&order_row, "expires_at_unix_secs")?;
 
@@ -1070,8 +1070,8 @@ LIMIT 1
             });
         }
 
-        let before_recharge: f64 = get(&wallet_row, "balance")?;
-        let before_gift: f64 = get(&wallet_row, "gift_balance")?;
+        let before_recharge = sqlite_real(&wallet_row, "balance")?;
+        let before_gift = sqlite_real(&wallet_row, "gift_balance")?;
         let before_total = before_recharge + before_gift;
         let after_recharge = before_recharge + order_amount_usd;
         let after_total = after_recharge + before_gift;
@@ -1174,8 +1174,8 @@ WHERE id = ?
             return Ok(None);
         };
 
-        let before_recharge: f64 = get(&row, "balance")?;
-        let before_gift: f64 = get(&row, "gift_balance")?;
+        let before_recharge = sqlite_real(&row, "balance")?;
+        let before_gift = sqlite_real(&row, "gift_balance")?;
         let before_total = before_recharge + before_gift;
         let mut after_recharge = before_recharge;
         let mut after_gift = before_gift;
@@ -1278,8 +1278,8 @@ VALUES (?, ?, 'adjust', 'adjust_admin', ?, ?, ?, ?, ?, ?, ?, 'admin_action', ?, 
             return Ok(None);
         };
 
-        let before_recharge: f64 = get(&wallet_row, "balance")?;
-        let before_gift: f64 = get(&wallet_row, "gift_balance")?;
+        let before_recharge = sqlite_real(&wallet_row, "balance")?;
+        let before_gift = sqlite_real(&wallet_row, "gift_balance")?;
         let user_id: Option<String> = get(&wallet_row, "user_id")?;
         let order_id = uuid::Uuid::new_v4().to_string();
         let gateway_response = json_string(
@@ -1416,8 +1416,8 @@ VALUES (?, ?, 'recharge', ?, ?, ?, ?, ?, ?, ?, ?, 'payment_order', ?, ?, ?, ?)
                 "wallet not found".to_string(),
             ));
         };
-        let before_recharge: f64 = get(&wallet_row, "balance")?;
-        let before_gift: f64 = get(&wallet_row, "gift_balance")?;
+        let before_recharge = sqlite_real(&wallet_row, "balance")?;
+        let before_gift = sqlite_real(&wallet_row, "gift_balance")?;
         let before_total = before_recharge + before_gift;
         let amount_usd = refund.amount_usd;
         let after_recharge = before_recharge - amount_usd;
@@ -1437,7 +1437,7 @@ VALUES (?, ?, 'recharge', ?, ?, ?, ?, ?, ?, ?, ?, 'payment_order', ?, ?, ?, ?)
                     "payment order not found".to_string(),
                 ));
             };
-            let refundable_amount: f64 = get(&order_row, "refundable_amount_usd")?;
+            let refundable_amount = sqlite_real(&order_row, "refundable_amount_usd")?;
             if amount_usd > refundable_amount {
                 tx.commit().await.map_sql_err()?;
                 return Ok(WalletMutationOutcome::Invalid(
@@ -1665,8 +1665,8 @@ WHERE id = ? AND wallet_id = ?
             ));
         };
         let amount_usd = refund.amount_usd;
-        let before_recharge: f64 = get(&wallet_row, "balance")?;
-        let before_gift: f64 = get(&wallet_row, "gift_balance")?;
+        let before_recharge = sqlite_real(&wallet_row, "balance")?;
+        let before_gift = sqlite_real(&wallet_row, "gift_balance")?;
         let before_total = before_recharge + before_gift;
         let after_recharge = before_recharge + amount_usd;
 
@@ -1919,8 +1919,8 @@ WHERE id = ? AND wallet_id = ?
             ));
         }
 
-        let before_recharge: f64 = get(&wallet_row, "balance")?;
-        let before_gift: f64 = get(&wallet_row, "gift_balance")?;
+        let before_recharge = sqlite_real(&wallet_row, "balance")?;
+        let before_gift = sqlite_real(&wallet_row, "gift_balance")?;
         let before_total = before_recharge + before_gift;
         let after_recharge = before_recharge + order.amount_usd;
         sqlx::query(
@@ -2358,7 +2358,7 @@ LIMIT 1
         let batch_id: String = get(&code_row, "batch_id")?;
         let batch_name: String = get(&code_row, "batch_name")?;
         let balance_bucket: String = get(&code_row, "balance_bucket")?;
-        let amount_usd: f64 = get(&code_row, "amount_usd")?;
+        let amount_usd = sqlite_real(&code_row, "amount_usd")?;
         let credits_recharge_balance = redeem_code_credits_recharge_balance(&balance_bucket);
 
         let wallet_row = sqlite_wallet_by_user_id(&mut tx, &input.user_id).await?;
@@ -2374,7 +2374,10 @@ LIMIT 1
         };
 
         let (before_recharge, before_gift) = if let Some(row) = wallet_row.as_ref() {
-            (get(row, "balance")?, get(row, "gift_balance")?)
+            (
+                sqlite_real(row, "balance")?,
+                sqlite_real(row, "gift_balance")?,
+            )
         } else {
             sqlx::query(
                 r#"
@@ -2383,7 +2386,7 @@ INSERT INTO wallets (
   total_recharged, total_consumed, total_refunded, total_adjusted,
   created_at, updated_at
 )
-VALUES (?, ?, 0, 0, 'finite', 'USD', 'active', 0, 0, 0, 0, ?, ?)
+VALUES (?, ?, 0.0, 0.0, 'finite', 'USD', 'active', 0.0, 0.0, 0.0, 0.0, ?, ?)
 "#,
             )
             .bind(&wallet_id)
@@ -2557,15 +2560,15 @@ fn map_wallet_row(row: &SqliteRow) -> Result<StoredWalletSnapshot, DataLayerErro
         get(row, "id")?,
         get(row, "user_id")?,
         get(row, "api_key_id")?,
-        get(row, "balance")?,
-        get(row, "gift_balance")?,
+        sqlite_real(row, "balance")?,
+        sqlite_real(row, "gift_balance")?,
         get(row, "limit_mode")?,
         get(row, "currency")?,
         get(row, "status")?,
-        get(row, "total_recharged")?,
-        get(row, "total_consumed")?,
-        get(row, "total_refunded")?,
-        get(row, "total_adjusted")?,
+        sqlite_real(row, "total_recharged")?,
+        sqlite_real(row, "total_consumed")?,
+        sqlite_real(row, "total_refunded")?,
+        sqlite_real(row, "total_adjusted")?,
         get(row, "updated_at_unix_secs")?,
     )
 }
@@ -3159,12 +3162,12 @@ fn map_payment_order_row(row: &SqliteRow) -> Result<StoredAdminPaymentOrder, Dat
         order_no: get(row, "order_no")?,
         wallet_id: get(row, "wallet_id")?,
         user_id: get(row, "user_id")?,
-        amount_usd: get(row, "amount_usd")?,
-        pay_amount: get(row, "pay_amount")?,
+        amount_usd: sqlite_real(row, "amount_usd")?,
+        pay_amount: sqlite_optional_real(row, "pay_amount")?,
         pay_currency: get(row, "pay_currency")?,
-        exchange_rate: get(row, "exchange_rate")?,
-        refunded_amount_usd: get(row, "refunded_amount_usd")?,
-        refundable_amount_usd: get(row, "refundable_amount_usd")?,
+        exchange_rate: sqlite_optional_real(row, "exchange_rate")?,
+        refunded_amount_usd: sqlite_real(row, "refunded_amount_usd")?,
+        refundable_amount_usd: sqlite_real(row, "refundable_amount_usd")?,
         payment_method: get(row, "payment_method")?,
         gateway_order_id: get(row, "gateway_order_id")?,
         gateway_response: optional_json(
@@ -3223,13 +3226,13 @@ fn map_wallet_transaction_row(
         wallet_id: get(row, "wallet_id")?,
         category: get(row, "category")?,
         reason_code: get(row, "reason_code")?,
-        amount: get(row, "amount")?,
-        balance_before: get(row, "balance_before")?,
-        balance_after: get(row, "balance_after")?,
-        recharge_balance_before: get(row, "recharge_balance_before")?,
-        recharge_balance_after: get(row, "recharge_balance_after")?,
-        gift_balance_before: get(row, "gift_balance_before")?,
-        gift_balance_after: get(row, "gift_balance_after")?,
+        amount: sqlite_real(row, "amount")?,
+        balance_before: sqlite_real(row, "balance_before")?,
+        balance_after: sqlite_real(row, "balance_after")?,
+        recharge_balance_before: sqlite_real(row, "recharge_balance_before")?,
+        recharge_balance_after: sqlite_real(row, "recharge_balance_after")?,
+        gift_balance_before: sqlite_real(row, "gift_balance_before")?,
+        gift_balance_after: sqlite_real(row, "gift_balance_after")?,
         link_type: get(row, "link_type")?,
         link_id: get(row, "link_id")?,
         operator_id: get(row, "operator_id")?,
@@ -3253,7 +3256,7 @@ fn map_refund_row(row: &SqliteRow) -> Result<StoredAdminWalletRefund, DataLayerE
         source_type: get(row, "source_type")?,
         source_id: get(row, "source_id")?,
         refund_mode: get(row, "refund_mode")?,
-        amount_usd: get(row, "amount_usd")?,
+        amount_usd: sqlite_real(row, "amount_usd")?,
         status: get(row, "status")?,
         reason: get(row, "reason")?,
         failure_reason: get(row, "failure_reason")?,
@@ -3287,7 +3290,7 @@ fn map_redeem_batch_row(row: &SqliteRow) -> Result<StoredAdminRedeemCodeBatch, D
     Ok(StoredAdminRedeemCodeBatch {
         id: get(row, "id")?,
         name: get(row, "name")?,
-        amount_usd: get(row, "amount_usd")?,
+        amount_usd: sqlite_real(row, "amount_usd")?,
         currency: get(row, "currency")?,
         balance_bucket: get(row, "balance_bucket")?,
         total_count: nonnegative_u64(get(row, "total_count")?, "redeem_code_batches.total_count")?,
@@ -3352,7 +3355,7 @@ fn map_daily_usage_row(row: &SqliteRow) -> Result<StoredWalletDailyUsageLedger, 
         id: get(row, "id")?,
         billing_date: get(row, "billing_date")?,
         billing_timezone: get(row, "billing_timezone")?,
-        total_cost_usd: get(row, "total_cost_usd")?,
+        total_cost_usd: sqlite_real(row, "total_cost_usd")?,
         total_requests: nonnegative_u64(
             get(row, "total_requests")?,
             "wallet_daily_usage_ledgers.total_requests",

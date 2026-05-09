@@ -39,9 +39,10 @@ use crate::execution_runtime::{
 use crate::log_ids::short_request_id;
 use crate::orchestration::{
     apply_local_execution_effect, build_local_error_flow_metadata, with_error_flow_report_context,
-    LocalAdaptiveRateLimitEffect, LocalAdaptiveSuccessEffect, LocalAttemptFailureEffect,
-    LocalExecutionEffect, LocalExecutionEffectContext, LocalHealthFailureEffect,
-    LocalHealthSuccessEffect, LocalOAuthInvalidationEffect, LocalPoolErrorEffect,
+    with_upstream_response_report_context, LocalAdaptiveRateLimitEffect,
+    LocalAdaptiveSuccessEffect, LocalAttemptFailureEffect, LocalExecutionEffect,
+    LocalExecutionEffectContext, LocalHealthFailureEffect, LocalHealthSuccessEffect,
+    LocalOAuthInvalidationEffect, LocalPoolErrorEffect,
 };
 use crate::request_candidate_runtime::{
     ensure_execution_request_candidate_slot, record_local_request_candidate_status,
@@ -79,6 +80,27 @@ fn record_sync_terminal_usage(
     state
         .usage_runtime
         .record_sync_terminal(state.data.as_ref(), context_seed, payload_seed);
+}
+
+fn with_sync_error_trace_context(
+    report_context: Option<&serde_json::Value>,
+    status_code: u16,
+    headers: &BTreeMap<String, String>,
+    response_text: Option<&str>,
+    local_failover_analysis: crate::orchestration::LocalFailoverAnalysis,
+) -> Option<serde_json::Value> {
+    let upstream_context = with_upstream_response_report_context(
+        report_context,
+        status_code,
+        Some(headers),
+        None,
+        None,
+        None,
+    );
+    with_error_flow_report_context(
+        upstream_context.as_ref().or(report_context),
+        build_local_error_flow_metadata(status_code, response_text, local_failover_analysis),
+    )
 }
 
 fn build_sync_report_payload(
@@ -572,18 +594,17 @@ pub(crate) async fn execute_execution_runtime_sync(
         LocalFailoverDecision::RetryNextCandidate
     ) {
         let terminal_unix_secs = current_request_candidate_unix_ms();
-        let error_flow_report_context = with_error_flow_report_context(
+        let error_trace_report_context = with_sync_error_trace_context(
             report_context.as_ref(),
-            build_local_error_flow_metadata(
-                result.status_code,
-                local_failover_response_text.as_deref(),
-                local_failover_analysis,
-            ),
+            result.status_code,
+            &headers,
+            local_failover_response_text.as_deref(),
+            local_failover_analysis,
         );
         record_local_request_candidate_status(
             state,
             &plan,
-            error_flow_report_context
+            error_trace_report_context
                 .as_ref()
                 .or(report_context.as_ref()),
             SchedulerRequestCandidateStatusUpdate {
@@ -649,18 +670,17 @@ pub(crate) async fn execute_execution_runtime_sync(
         mapped_error_finalize_kind.is_some(),
     ) {
         let terminal_unix_secs = current_request_candidate_unix_ms();
-        let error_flow_report_context = with_error_flow_report_context(
+        let error_trace_report_context = with_sync_error_trace_context(
             report_context.as_ref(),
-            build_local_error_flow_metadata(
-                result.status_code,
-                local_failover_response_text.as_deref(),
-                local_failover_analysis,
-            ),
+            result.status_code,
+            &headers,
+            local_failover_response_text.as_deref(),
+            local_failover_analysis,
         );
         record_local_request_candidate_status(
             state,
             &plan,
-            error_flow_report_context
+            error_trace_report_context
                 .as_ref()
                 .or(report_context.as_ref()),
             SchedulerRequestCandidateStatusUpdate {
@@ -680,13 +700,12 @@ pub(crate) async fn execute_execution_runtime_sync(
     let terminal_unix_secs = current_request_candidate_unix_ms();
     let error_flow_report_context = (result.status_code >= 400)
         .then(|| {
-            with_error_flow_report_context(
+            with_sync_error_trace_context(
                 report_context.as_ref(),
-                build_local_error_flow_metadata(
-                    result.status_code,
-                    local_failover_response_text.as_deref(),
-                    local_failover_analysis,
-                ),
+                result.status_code,
+                &headers,
+                local_failover_response_text.as_deref(),
+                local_failover_analysis,
             )
         })
         .flatten();

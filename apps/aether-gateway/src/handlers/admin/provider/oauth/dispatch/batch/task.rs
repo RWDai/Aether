@@ -15,7 +15,14 @@ use crate::handlers::admin::provider::oauth::state::{
 };
 use crate::handlers::admin::provider::shared::paths::admin_provider_oauth_batch_import_task_provider_id;
 use crate::handlers::admin::request::{AdminAppState, AdminRequestContext};
+use crate::task_runtime::{
+    append_event_with_logging, now_unix_secs, task_definition, update_run_status,
+    upsert_run_with_logging, TASK_KEY_PROVIDER_OAUTH_BATCH_IMPORT,
+};
 use crate::GatewayError;
+use aether_data_contracts::repository::background_tasks::{
+    BackgroundTaskKind, BackgroundTaskStatus, UpsertBackgroundTaskRun,
+};
 use axum::{
     body::Bytes,
     http,
@@ -133,11 +140,7 @@ pub(in super::super) async fn handle_admin_provider_oauth_start_batch_import_tas
     }
 
     let task_id = Uuid::new_v4().to_string();
-    let created_at = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .ok()
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0);
+    let created_at = now_unix_secs();
     let submitted_state = build_admin_provider_oauth_batch_task_state(
         &task_id,
         &provider_id,
@@ -165,6 +168,50 @@ pub(in super::super) async fn handle_admin_provider_oauth_start_batch_import_tas
             http::StatusCode::SERVICE_UNAVAILABLE,
             "provider oauth batch task redis unavailable",
         ));
+    }
+
+    if state.has_background_task_data_writer() {
+        let max_attempts = task_definition(TASK_KEY_PROVIDER_OAUTH_BATCH_IMPORT)
+            .map(|item| item.retry_policy.max_attempts)
+            .unwrap_or(1);
+        let run = UpsertBackgroundTaskRun {
+            id: task_id.clone(),
+            task_key: TASK_KEY_PROVIDER_OAUTH_BATCH_IMPORT.to_string(),
+            kind: BackgroundTaskKind::OnDemand,
+            trigger: "manual".to_string(),
+            status: BackgroundTaskStatus::Queued,
+            attempt: 1,
+            max_attempts,
+            owner_instance: Some(state.app().tunnel.local_instance_id().to_string()),
+            progress_percent: 0,
+            progress_message: Some("provider oauth batch import queued".to_string()),
+            payload_json: Some(json!({
+                "provider_id": provider_id.clone(),
+                "provider_type": provider_type.clone(),
+                "total": total,
+            })),
+            result_json: None,
+            error_message: None,
+            cancel_requested: false,
+            created_by: Some("admin".to_string()),
+            created_at_unix_secs: created_at,
+            started_at_unix_secs: None,
+            finished_at_unix_secs: None,
+            updated_at_unix_secs: created_at,
+        };
+        let _ = upsert_run_with_logging(state.app(), run).await;
+        append_event_with_logging(
+            state.app(),
+            &task_id,
+            "queued",
+            "provider oauth batch import queued",
+            Some(json!({
+                "provider_id": provider_id.clone(),
+                "provider_type": provider_type.clone(),
+                "total": total,
+            })),
+        )
+        .await;
     }
 
     let task_state = state.cloned_app();
@@ -200,6 +247,27 @@ pub(in super::super) async fn handle_admin_provider_oauth_start_batch_import_tas
         let _ = AdminAppState::new(&task_state)
             .save_provider_oauth_batch_task_payload(&task_id_for_worker, &processing_state)
             .await;
+
+        let _ = update_run_status(
+            &task_state,
+            &task_id_for_worker,
+            BackgroundTaskStatus::Running,
+            Some(1),
+            Some("provider oauth batch import started".to_string()),
+            None,
+            None,
+            Some(started_at),
+            None,
+        )
+        .await;
+        append_event_with_logging(
+            &task_state,
+            &task_id_for_worker,
+            "running",
+            "provider oauth batch import started",
+            None,
+        )
+        .await;
 
         let mut progress_reporter = BatchTaskProgressReporter {
             app: task_state.clone(),
@@ -270,6 +338,34 @@ pub(in super::super) async fn handle_admin_provider_oauth_start_batch_import_tas
                 let _ = AdminAppState::new(&task_state)
                     .save_provider_oauth_batch_task_payload(&task_id_for_worker, &completed_state)
                     .await;
+                let _ = update_run_status(
+                    &task_state,
+                    &task_id_for_worker,
+                    BackgroundTaskStatus::Succeeded,
+                    Some(100),
+                    Some(message),
+                    Some(json!({
+                        "provider_id": provider_id_for_worker,
+                        "provider_type": provider_type_for_worker,
+                        "total": outcome.total,
+                        "success": outcome.success,
+                        "failed": outcome.failed,
+                        "created_count": created_count,
+                        "replaced_count": replaced_count,
+                    })),
+                    None,
+                    None,
+                    Some(finished_at),
+                )
+                .await;
+                append_event_with_logging(
+                    &task_state,
+                    &task_id_for_worker,
+                    "succeeded",
+                    "provider oauth batch import completed",
+                    None,
+                )
+                .await;
             }
             Err(err) => {
                 let finished_at = SystemTime::now()
@@ -299,6 +395,26 @@ pub(in super::super) async fn handle_admin_provider_oauth_start_batch_import_tas
                 let _ = AdminAppState::new(&task_state)
                     .save_provider_oauth_batch_task_payload(&task_id_for_worker, &failed_state)
                     .await;
+                let _ = update_run_status(
+                    &task_state,
+                    &task_id_for_worker,
+                    BackgroundTaskStatus::Failed,
+                    Some(100),
+                    Some("provider oauth batch import failed".to_string()),
+                    None,
+                    Some(error_message.clone()),
+                    None,
+                    Some(finished_at),
+                )
+                .await;
+                append_event_with_logging(
+                    &task_state,
+                    &task_id_for_worker,
+                    "failed",
+                    "provider oauth batch import failed",
+                    Some(json!({ "error": error_message.clone() })),
+                )
+                .await;
                 tracing::warn!(
                     task_id = %task_id_for_worker,
                     provider_id = %provider_id_for_worker,

@@ -2,11 +2,35 @@ extern crate self as aether_ai_formats;
 
 pub mod api;
 pub mod contracts;
+pub mod formats;
 pub mod protocol;
 pub mod provider_compat;
-pub mod request;
-pub mod response;
 
+pub use formats::context::{FormatContext, FormatError};
+pub use formats::id::{
+    api_format_alias_matches, api_format_storage_aliases, api_format_uses_body_stream_field,
+    is_openai_responses_compact_format, is_openai_responses_family_format,
+    is_openai_responses_format, normalize_api_format_alias, FormatFamily, FormatId, FormatProfile,
+};
+pub use formats::matrix::{
+    is_embedding_api_format, is_rerank_api_format, request_candidate_api_format_preference,
+    request_candidate_api_formats, request_conversion_kind,
+    request_conversion_requires_enable_flag, sync_chat_response_conversion_kind,
+    sync_cli_response_conversion_kind, RequestConversionKind, SyncChatResponseConversionKind,
+    SyncCliResponseConversionKind,
+};
+pub use formats::registry::{build_stream_transcoder, convert_request, convert_response};
+pub use formats::shared::model_directives::{
+    apply_model_directive_mapping_patch, apply_model_directive_overrides_from_model,
+    apply_model_directive_overrides_from_request, claude_model_uses_adaptive_effort,
+    extract_gemini_model_from_path, gemini_model_uses_thinking_level, model_directive_base_model,
+    normalize_model_directive_model, parse_model_directive, ModelDirective, ModelOverride,
+    ReasoningEffort,
+};
+pub use formats::shared::request::{
+    endpoint_config_forces_upstream_stream_policy, enforce_request_body_stream_field,
+    resolve_upstream_is_stream_from_endpoint_config,
+};
 pub use protocol::canonical::{
     canonical_request_unknown_block_count, canonical_response_unknown_block_count,
     canonical_to_claude_request, canonical_to_claude_response, canonical_to_embedding_response,
@@ -24,25 +48,4 @@ pub use protocol::canonical::{
     CanonicalResponse, CanonicalResponseFormat, CanonicalResponseOutput, CanonicalRole,
     CanonicalStopReason, CanonicalStreamEvent, CanonicalStreamFrame, CanonicalThinkingConfig,
     CanonicalToolChoice, CanonicalToolDefinition, CanonicalUsage,
-};
-pub use protocol::context::{FormatContext, FormatError};
-pub use protocol::formats::{
-    api_format_alias_matches, api_format_storage_aliases, is_openai_responses_compact_format,
-    is_openai_responses_family_format, is_openai_responses_format, normalize_api_format_alias,
-    FormatFamily, FormatId, FormatProfile,
-};
-pub use protocol::matrix::{
-    is_embedding_api_format, is_rerank_api_format, request_candidate_api_format_preference,
-    request_candidate_api_formats, request_conversion_kind,
-    request_conversion_requires_enable_flag, sync_chat_response_conversion_kind,
-    sync_cli_response_conversion_kind, RequestConversionKind, SyncChatResponseConversionKind,
-    SyncCliResponseConversionKind,
-};
-pub use protocol::registry::{build_stream_transcoder, convert_request, convert_response};
-pub use request::model_directives::{
-    apply_model_directive_mapping_patch, apply_model_directive_overrides_from_model,
-    apply_model_directive_overrides_from_request, claude_model_uses_adaptive_effort,
-    extract_gemini_model_from_path, gemini_model_uses_thinking_level, model_directive_base_model,
-    normalize_model_directive_model, parse_model_directive, ModelDirective, ModelOverride,
-    ReasoningEffort,
 };

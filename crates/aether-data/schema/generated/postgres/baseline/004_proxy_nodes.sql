@@ -40,8 +40,51 @@ CREATE TABLE IF NOT EXISTS public.proxy_node_events (
     node_id character varying(64) NOT NULL,
     event_type character varying(64) NOT NULL,
     detail character varying(500),
+    event_metadata jsonb,
     created_at bigint NOT NULL
 );
 
 ALTER TABLE ONLY public.proxy_node_events ADD CONSTRAINT proxy_node_events_pkey PRIMARY KEY (id);
+
+CREATE TABLE IF NOT EXISTS public.proxy_node_metrics_1m (
+    node_id character varying(64) NOT NULL,
+    bucket_start_unix_secs bigint NOT NULL,
+    samples bigint DEFAULT 0 NOT NULL,
+    uptime_samples bigint DEFAULT 0 NOT NULL,
+    active_connections_sum bigint DEFAULT 0 NOT NULL,
+    active_connections_max bigint DEFAULT 0 NOT NULL,
+    heartbeat_rtt_ms_sum bigint DEFAULT 0 NOT NULL,
+    heartbeat_rtt_ms_max bigint DEFAULT 0 NOT NULL,
+    connect_errors_delta bigint DEFAULT 0 NOT NULL,
+    disconnects_delta bigint DEFAULT 0 NOT NULL,
+    error_events_delta bigint DEFAULT 0 NOT NULL,
+    ws_in_bytes_delta bigint DEFAULT 0 NOT NULL,
+    ws_out_bytes_delta bigint DEFAULT 0 NOT NULL,
+    ws_in_frames_delta bigint DEFAULT 0 NOT NULL,
+    ws_out_frames_delta bigint DEFAULT 0 NOT NULL
+);
+
+ALTER TABLE ONLY public.proxy_node_metrics_1m ADD CONSTRAINT proxy_node_metrics_1m_pkey PRIMARY KEY (node_id, bucket_start_unix_secs);
+CREATE INDEX IF NOT EXISTS idx_proxy_node_metrics_1m_bucket_start ON public.proxy_node_metrics_1m USING btree (bucket_start_unix_secs);
+
+CREATE TABLE IF NOT EXISTS public.proxy_node_metrics_1h (
+    node_id character varying(64) NOT NULL,
+    bucket_start_unix_secs bigint NOT NULL,
+    samples bigint DEFAULT 0 NOT NULL,
+    uptime_samples bigint DEFAULT 0 NOT NULL,
+    active_connections_sum bigint DEFAULT 0 NOT NULL,
+    active_connections_max bigint DEFAULT 0 NOT NULL,
+    heartbeat_rtt_ms_sum bigint DEFAULT 0 NOT NULL,
+    heartbeat_rtt_ms_max bigint DEFAULT 0 NOT NULL,
+    connect_errors_delta bigint DEFAULT 0 NOT NULL,
+    disconnects_delta bigint DEFAULT 0 NOT NULL,
+    error_events_delta bigint DEFAULT 0 NOT NULL,
+    ws_in_bytes_delta bigint DEFAULT 0 NOT NULL,
+    ws_out_bytes_delta bigint DEFAULT 0 NOT NULL,
+    ws_in_frames_delta bigint DEFAULT 0 NOT NULL,
+    ws_out_frames_delta bigint DEFAULT 0 NOT NULL
+);
+
+ALTER TABLE ONLY public.proxy_node_metrics_1h ADD CONSTRAINT proxy_node_metrics_1h_pkey PRIMARY KEY (node_id, bucket_start_unix_secs);
+CREATE INDEX IF NOT EXISTS idx_proxy_node_metrics_1h_bucket_start ON public.proxy_node_metrics_1h USING btree (bucket_start_unix_secs);
 

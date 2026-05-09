@@ -4,6 +4,7 @@ use super::quota::codex::refresh_codex_provider_quota_locally;
 use super::quota::kiro::refresh_kiro_provider_quota_locally;
 use crate::handlers::admin::request::AdminAppState;
 use crate::provider_key_auth::provider_key_is_oauth_managed;
+use crate::task_runtime::{spawn_fire_and_forget, TASK_KEY_PROVIDER_OAUTH_ACCOUNT_REFRESH};
 use crate::{AppState, GatewayError};
 use aether_contracts::ProxySnapshot;
 use aether_data_contracts::repository::provider_catalog::{
@@ -170,7 +171,7 @@ pub(crate) fn spawn_provider_oauth_account_state_refresh_after_update(
     key_id: String,
     proxy_override: Option<ProxySnapshot>,
 ) {
-    tokio::spawn(async move {
+    spawn_fire_and_forget(TASK_KEY_PROVIDER_OAUTH_ACCOUNT_REFRESH, async move {
         let _ = refresh_provider_oauth_account_state_after_update(
             &AdminAppState::new(&app),
             &provider,

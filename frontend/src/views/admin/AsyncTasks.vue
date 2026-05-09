@@ -28,12 +28,12 @@
           <div class="w-10 h-10 rounded-lg bg-blue-500/10 flex items-center justify-center">
             <Loader2
               class="w-5 h-5 text-blue-500"
-              :class="{ 'animate-spin': (stats?.processing_count ?? 0) > 0 }"
+              :class="{ 'animate-spin': runningCount > 0 }"
             />
           </div>
           <div>
             <p class="text-2xl font-bold">
-              {{ stats?.processing_count ?? stats?.by_status?.processing ?? '-' }}
+              {{ runningCount || '-' }}
             </p>
             <p class="text-xs text-muted-foreground">
               处理中
@@ -51,7 +51,7 @@
           </div>
           <div>
             <p class="text-2xl font-bold">
-              {{ stats?.by_status?.completed ?? '-' }}
+              {{ stats?.by_status?.succeeded ?? '-' }}
             </p>
             <p class="text-xs text-muted-foreground">
               已完成
@@ -69,10 +69,10 @@
           </div>
           <div>
             <p class="text-2xl font-bold">
-              {{ stats?.today_count ?? '-' }}
+              {{ stats?.registered_tasks ?? '-' }}
             </p>
             <p class="text-xs text-muted-foreground">
-              今日任务
+              已注册
             </p>
           </div>
         </div>
@@ -102,14 +102,17 @@
                 <SelectItem value="all">
                   全部状态
                 </SelectItem>
-                <SelectItem value="submitted">
-                  已提交
+                <SelectItem value="queued">
+                  排队中
                 </SelectItem>
-                <SelectItem value="processing">
-                  处理中
+                <SelectItem value="running">
+                  运行中
                 </SelectItem>
-                <SelectItem value="completed">
-                  已完成
+                <SelectItem value="retrying">
+                  重试中
+                </SelectItem>
+                <SelectItem value="succeeded">
+                  成功
                 </SelectItem>
                 <SelectItem value="failed">
                   失败
@@ -117,13 +120,16 @@
                 <SelectItem value="cancelled">
                   已取消
                 </SelectItem>
+                <SelectItem value="skipped">
+                  已跳过
+                </SelectItem>
               </SelectContent>
             </Select>
             <!-- 模型筛选 -->
             <Input
               v-model="filterModel"
               type="text"
-              placeholder="模型..."
+              placeholder="任务 Key..."
               class="w-32 h-8 text-xs"
             />
             <!-- 刷新按钮 -->
@@ -207,13 +213,13 @@
                     v-if="isVideoTask(task)"
                     class="w-4 h-4 text-muted-foreground shrink-0"
                   />
-                  <span class="font-medium text-sm truncate">{{ task.model }}</span>
+                  <span class="font-medium text-sm truncate">{{ displayTaskName(task) }}</span>
                 </div>
                 <p
                   class="text-xs text-muted-foreground truncate max-w-[280px]"
-                  :title="task.prompt"
+                  :title="displayTaskDescription(task)"
                 >
-                  {{ task.prompt }}
+                  {{ displayTaskDescription(task) }}
                 </p>
               </div>
             </TableCell>
@@ -229,7 +235,7 @@
                 </div>
                 <div class="flex items-center gap-1.5 text-muted-foreground">
                   <Server class="w-3 h-3" />
-                  <span class="truncate max-w-[100px]">{{ task.provider_name }}</span>
+                  <span class="truncate max-w-[100px]">{{ displayTaskSource(task) }}</span>
                 </div>
               </div>
             </TableCell>
@@ -243,7 +249,7 @@
                   {{ getStatusLabel(task.status) }}
                 </Badge>
                 <div
-                  v-if="task.progress_percent > 0 && task.status === 'processing'"
+                  v-if="task.progress_percent > 0 && isRunningStatus(task.status)"
                   class="w-full"
                 >
                   <div class="flex items-center gap-2">
@@ -262,11 +268,11 @@
             <TableCell>
               <div class="text-xs space-y-0.5 text-muted-foreground">
                 <div
-                  v-if="task.duration_seconds"
+                  v-if="task.duration_seconds || task.attempt"
                   class="flex items-center gap-1"
                 >
                   <Timer class="w-3 h-3" />
-                  <span>{{ task.duration_seconds }}s</span>
+                  <span>{{ task.duration_seconds ? `${task.duration_seconds}s` : `${task.attempt}/${task.max_attempts ?? 1}` }}</span>
                 </div>
                 <div v-if="task.resolution">
                   {{ task.resolution }}
@@ -284,11 +290,11 @@
                   <span>{{ formatDate(task.created_at) }}</span>
                 </div>
                 <div
-                  v-if="task.completed_at"
+                  v-if="finishTime(task)"
                   class="flex items-center gap-1.5 text-green-600 dark:text-green-400"
                 >
                   <CheckCircle class="w-3 h-3" />
-                  <span>{{ formatDate(task.completed_at) }}</span>
+                  <span>{{ formatDate(finishTime(task)) }}</span>
                 </div>
               </div>
             </TableCell>
@@ -305,6 +311,7 @@
                   <Eye class="w-4 h-4" />
                 </Button>
                 <Button
+                  v-if="isVideoTask(task)"
                   variant="ghost"
                   size="icon"
                   class="h-7 w-7"
@@ -337,7 +344,7 @@
                 v-if="isVideoTask(task)"
                 class="w-4 h-4 text-muted-foreground shrink-0"
               />
-              <span class="font-medium text-sm truncate">{{ task.model }}</span>
+              <span class="font-medium text-sm truncate">{{ displayTaskName(task) }}</span>
             </div>
             <Badge
               :variant="getStatusVariant(task.status)"
@@ -349,7 +356,7 @@
 
           <!-- 进度条（如果有） -->
           <div
-            v-if="task.progress_percent > 0 && task.status === 'processing'"
+            v-if="task.progress_percent > 0 && isRunningStatus(task.status)"
             class="space-y-1"
           >
             <div class="h-1.5 bg-muted rounded-full overflow-hidden">
@@ -365,7 +372,7 @@
 
           <!-- Prompt -->
           <p class="text-sm text-muted-foreground line-clamp-2">
-            {{ task.prompt }}
+            {{ displayTaskDescription(task) }}
           </p>
 
           <!-- 信息网格 -->
@@ -379,24 +386,25 @@
             </div>
             <div class="flex items-center gap-1.5 text-muted-foreground">
               <Server class="w-3 h-3" />
-              <span class="truncate">{{ task.provider_name }}</span>
+              <span class="truncate">{{ displayTaskSource(task) }}</span>
             </div>
             <div class="flex items-center gap-1.5 text-muted-foreground">
               <Clock class="w-3 h-3" />
               <span>{{ formatDate(task.created_at) }}</span>
             </div>
             <div
-              v-if="task.duration_seconds"
+              v-if="task.duration_seconds || task.attempt"
               class="flex items-center gap-1.5 text-muted-foreground"
             >
               <Timer class="w-3 h-3" />
-              <span>{{ task.duration_seconds }}s</span>
+              <span>{{ task.duration_seconds ? `${task.duration_seconds}s` : `${task.attempt}/${task.max_attempts ?? 1}` }}</span>
             </div>
           </div>
 
           <!-- 操作按钮 -->
           <div class="flex justify-end gap-2">
             <Button
+              v-if="isVideoTask(task)"
               variant="outline"
               size="sm"
               class="h-7 text-xs"
@@ -459,7 +467,7 @@
                       v-if="isVideoTask(selectedTask)"
                       class="w-3.5 h-3.5 mr-1"
                     />
-                    <span>{{ selectedTask.model }}</span>
+                    <span>{{ displayTaskName(selectedTask) }}</span>
                   </div>
                   <Badge :variant="getStatusVariant(selectedTask.status)">
                     {{ getStatusLabel(selectedTask.status) }}
@@ -503,11 +511,11 @@
                   <span>用户: {{ selectedTask.username }}</span>
                 </template>
                 <span class="opacity-40">|</span>
-                <span>Provider: {{ selectedTask.provider_name }}</span>
+                  <span>{{ displayTaskSource(selectedTask) }}</span>
               </div>
               <!-- 进度条 -->
               <div
-                v-if="selectedTask.progress_percent > 0 && selectedTask.status === 'processing'"
+                v-if="selectedTask.progress_percent > 0 && isRunningStatus(selectedTask.status)"
                 class="mt-3"
               >
                 <div class="flex items-center gap-3">
@@ -641,7 +649,7 @@
 
               <!-- 任务完成但无视频 -->
               <div
-                v-else-if="selectedTask.status === 'completed'"
+                v-else-if="isSucceededStatus(selectedTask.status) && isVideoTask(selectedTask)"
                 class="p-4 bg-amber-50 dark:bg-amber-900/20 rounded-lg border border-amber-200 dark:border-amber-800 text-center"
               >
                 <Video class="w-8 h-8 mx-auto mb-2 text-amber-500" />
@@ -660,14 +668,14 @@
                     variant="outline"
                     size="sm"
                     class="h-6 px-2 text-xs"
-                    @click="copyToClipboard(selectedTask.prompt)"
+                    @click="copyToClipboard(displayTaskDescription(selectedTask))"
                   >
                     <Copy class="w-3 h-3 mr-1" />
                     复制
                   </Button>
                 </div>
                 <div class="p-3 bg-muted/50 rounded-lg border border-border/60 text-sm whitespace-pre-wrap break-words max-h-32 overflow-y-auto leading-relaxed">
-                  {{ selectedTask.prompt }}
+                  {{ displayTaskDescription(selectedTask) }}
                 </div>
               </div>
 
@@ -738,7 +746,7 @@
                       轮询
                     </p>
                     <p class="text-sm font-medium">
-                      {{ selectedTask.poll_count }} / {{ selectedTask.max_poll_count }}
+                      {{ selectedTask.poll_count ?? selectedTask.attempt ?? 0 }} / {{ selectedTask.max_poll_count ?? selectedTask.max_attempts ?? 1 }}
                     </p>
                   </div>
                   <div class="p-3 bg-muted/30 rounded-lg">
@@ -746,7 +754,7 @@
                       重试
                     </p>
                     <p class="text-sm font-medium">
-                      {{ selectedTask.retry_count }} / {{ selectedTask.max_retries }}
+                      {{ selectedTask.retry_count ?? 0 }} / {{ selectedTask.max_retries ?? selectedTask.max_attempts ?? 1 }}
                     </p>
                   </div>
                   <div class="p-3 bg-muted/30 rounded-lg">
@@ -754,7 +762,7 @@
                       轮询间隔
                     </p>
                     <p class="text-sm font-medium">
-                      {{ selectedTask.poll_interval_seconds }}s
+                      {{ selectedTask.poll_interval_seconds ? `${selectedTask.poll_interval_seconds}s` : selectedTask.trigger ?? '-' }}
                     </p>
                   </div>
                   <div
@@ -780,13 +788,13 @@
                   <span>{{ formatTimeWithMs(selectedTask.created_at) }}</span>
                   <span class="time-arrow-container">
                     <span
-                      v-if="selectedTask.completed_at"
+                      v-if="finishTime(selectedTask)"
                       class="time-duration"
-                    >+{{ calcDuration(selectedTask.created_at, selectedTask.completed_at) }}</span>
+                    >+{{ calcDuration(selectedTask.created_at, finishTime(selectedTask) || selectedTask.created_at) }}</span>
                     <span class="time-arrow">→</span>
                   </span>
-                  <template v-if="selectedTask.completed_at">
-                    <span>{{ formatTimeWithMs(selectedTask.completed_at) }}</span>
+                  <template v-if="finishTime(selectedTask)">
+                    <span>{{ formatTimeWithMs(finishTime(selectedTask)) }}</span>
                   </template>
                   <span
                     v-else
@@ -917,10 +925,47 @@ let overviewRefreshInFlight = false
 // 使用记录详情抽屉状态
 const usageDetailOpen = ref(false)
 const usageRequestId = ref<string | null>(null)
+const runningCount = computed(() => {
+  return stats.value?.running_count
+    ?? stats.value?.processing_count
+    ?? stats.value?.by_status?.running
+    ?? stats.value?.by_status?.processing
+    ?? 0
+})
 
 // 判断是否为视频任务
 function isVideoTask(task: AsyncTaskItem): boolean {
-  return task.task_type === 'video' || !!task.video_url || !!task.duration_seconds
+  return task.task_type === 'video' || !!task.video_url || !!task.duration_seconds || task.task_key === 'video.task.poller'
+}
+
+function displayTaskName(task: AsyncTaskItem | AsyncTaskDetail): string {
+  return task.model || task.task_key || task.id
+}
+
+function displayTaskDescription(task: AsyncTaskItem | AsyncTaskDetail): string {
+  if (task.prompt) return task.prompt
+  if (task.progress_message) return task.progress_message
+  if (task.error_message) return task.error_message
+  if (task.payload) return formatJson(task.payload)
+  return task.trigger || task.kind || '-'
+}
+
+function displayTaskSource(task: AsyncTaskItem | AsyncTaskDetail): string {
+  if (task.provider_name) return `Provider: ${task.provider_name}`
+  if (task.kind || task.trigger) return `${task.kind ?? 'task'} / ${task.trigger ?? '-'}`
+  return task.owner_instance || '-'
+}
+
+function finishTime(task: AsyncTaskItem | AsyncTaskDetail): string | null {
+  return task.finished_at || task.completed_at || null
+}
+
+function isRunningStatus(status: string): boolean {
+  return ['running', 'retrying', 'processing', 'submitted', 'pending', 'queued'].includes(status)
+}
+
+function isSucceededStatus(status: string): boolean {
+  return status === 'succeeded' || status === 'completed'
 }
 
 // 获取任务列表
@@ -929,7 +974,7 @@ async function fetchTasks() {
   try {
     const response = await asyncTasksApi.list({
       status: filterStatus.value !== 'all' ? filterStatus.value as AsyncTaskStatus : undefined,
-      model: filterModel.value || undefined,
+      task_key: filterModel.value || undefined,
       page: currentPage.value,
       page_size: pageSize.value,
     })
@@ -1085,6 +1130,7 @@ async function cancelTask(task: AsyncTaskItem | AsyncTaskDetail) {
 // 状态相关
 function getStatusVariant(status: string): 'default' | 'secondary' | 'destructive' | 'outline' {
   switch (status) {
+    case 'succeeded':
     case 'completed':
       return 'default'
     case 'failed':
@@ -1101,16 +1147,20 @@ function getStatusLabel(status: string): string {
     pending: '待处理',
     submitted: '已提交',
     queued: '排队中',
+    running: '运行中',
+    retrying: '重试中',
     processing: '处理中',
+    succeeded: '成功',
     completed: '已完成',
     failed: '失败',
     cancelled: '已取消',
+    skipped: '已跳过',
   }
   return labels[status] || status
 }
 
 function canCancel(status: string): boolean {
-  return ['pending', 'submitted', 'queued', 'processing'].includes(status)
+  return ['pending', 'submitted', 'queued', 'processing', 'running', 'retrying'].includes(status)
 }
 
 // 格式化日期（简短格式，用于表格列表）
@@ -1229,7 +1279,7 @@ watch(filterModel, () => {
 // 检查是否有进行中的任务
 const hasProcessingTasks = computed(() => {
   return tasks.value.some(t =>
-    ['pending', 'submitted', 'queued', 'processing'].includes(t.status)
+    ['pending', 'submitted', 'queued', 'processing', 'running', 'retrying'].includes(t.status)
   )
 })
 

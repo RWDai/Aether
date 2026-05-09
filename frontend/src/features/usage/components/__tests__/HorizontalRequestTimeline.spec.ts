@@ -45,8 +45,14 @@ vi.mock('../JsonContentPanel.vue', async () => {
   return {
     default: defineComponent({
       name: 'JsonContentPanelStub',
-      setup() {
-        return () => h('div')
+      props: {
+        data: {
+          type: null,
+          default: null,
+        },
+      },
+      setup(props) {
+        return () => h('pre', JSON.stringify(props.data))
       },
     }),
   }
@@ -99,12 +105,16 @@ function buildTrace(candidates: CandidateRecord[]): RequestTrace {
   }
 }
 
-function mountTimeline(traceData: RequestTrace) {
+function mountTimeline(
+  traceData: RequestTrace,
+  extraProps: Record<string, unknown> = {},
+) {
   const root = document.createElement('div')
   document.body.appendChild(root)
   const app = createApp(HorizontalRequestTimeline, {
     requestId: traceData.request_id,
     traceData,
+    ...extraProps,
   })
   app.mount(root)
   mountedApps.push({ app, root })
@@ -268,5 +278,130 @@ describe('HorizontalRequestTimeline', () => {
     expect(nodeDots[0].classList.contains('status-failed')).toBe(true)
     expect(nodeDots[0].classList.contains('status-success')).toBe(false)
     expect(nodeDots[1].classList.contains('status-success')).toBe(true)
+  })
+
+  it('treats 3xx terminal responses as failed for node display', async () => {
+    const trace = buildTrace([
+      buildCandidate({
+        id: 'cand-redirect',
+        provider_id: 'provider-redirect',
+        provider_name: 'Provider Redirect',
+        key_id: 'key-redirect',
+        key_name: 'Redirect Key',
+        candidate_index: 0,
+        status: 'success',
+        status_code: 302,
+      }),
+    ])
+
+    const root = mountTimeline(trace)
+    await nextTick()
+
+    const nodeDot = root.querySelector<HTMLElement>('.node-dot')
+    expect(nodeDot?.classList.contains('status-failed')).toBe(true)
+    expect(nodeDot?.classList.contains('status-success')).toBe(false)
+  })
+
+  it('shows request path from request metadata', async () => {
+    const trace = buildTrace([
+      buildCandidate({
+        id: 'cand-path',
+        provider_id: 'provider-path',
+        provider_name: 'Provider Path',
+        key_id: 'key-path',
+        key_name: 'Path Key',
+        candidate_index: 0,
+        status: 'failed',
+      }),
+    ])
+
+    const root = mountTimeline(trace, {
+      requestMetadata: {
+        request_path: '/v1beta/models/gemini-2.5-pro:generateContent',
+        request_query_string: 'alt=sse',
+      },
+    })
+    await nextTick()
+
+    expect(root.textContent).toContain('请求路径')
+    const requestPathCode = root.querySelector<HTMLElement>('.request-path-code')
+    expect(requestPathCode?.textContent).toContain('/v1beta/models/gemini-2.5-pro:generateContent?alt=sse')
+  })
+
+  it('shows request path from trace payload', async () => {
+    const trace: RequestTrace = {
+      ...buildTrace([
+        buildCandidate({
+          id: 'cand-trace-path',
+          provider_id: 'provider-path',
+          provider_name: 'Provider Path',
+          key_id: 'key-path',
+          key_name: 'Path Key',
+          candidate_index: 0,
+          status: 'failed',
+        }),
+      ]),
+      request_path: '/v1/images/generations',
+    }
+
+    const root = mountTimeline(trace)
+    await nextTick()
+
+    expect(root.textContent).toContain('请求路径')
+    const requestPathCode = root.querySelector<HTMLElement>('.request-path-code')
+    expect(requestPathCode?.textContent).toContain('/v1/images/generations')
+  })
+
+  it('shows upstream response JSON inside the error block on trace nodes', async () => {
+    const trace = buildTrace([
+      buildCandidate({
+        id: 'cand-upstream-response',
+        provider_id: 'provider-upstream',
+        provider_name: 'Provider Upstream',
+        key_id: 'key-upstream',
+        key_name: 'Upstream Key',
+        candidate_index: 0,
+        status: 'failed',
+        error_message: 'execution runtime stream returned non-success status 302',
+        extra_data: {
+          upstream_response: {
+            status_code: 302,
+            headers: { location: '/' },
+          },
+          error_flow: {
+            source: 'upstream_response',
+            status_code: 302,
+            classification: 'use_default',
+            decision: 'use_default',
+            propagation: 'none',
+            retryable: false,
+            safe_to_expose: false,
+            message: 'execution runtime stream returned non-success status 302',
+          },
+          client_response: {
+            status_code: 502,
+            headers: { 'content-type': 'application/json' },
+          },
+        },
+      }),
+    ])
+
+    const root = mountTimeline(trace)
+    await nextTick()
+
+    expect(root.textContent).toContain('错误信息')
+    expect(root.textContent).toContain('HTTP 302')
+    expect(root.textContent).not.toContain('上游返回非成功状态 302')
+    expect(root.querySelector('.error-block .error-json')?.textContent).toContain('"status_code":302')
+    expect(root.querySelector('.error-block .error-json')?.textContent).toContain('"headers"')
+    expect(root.textContent).not.toContain('上游真实响应')
+    expect(root.textContent).not.toContain('execution runtime stream returned non-success status 302')
+    expect(root.textContent).not.toContain('真实请求错误')
+    expect(root.textContent).not.toContain('返回客户端响应')
+    expect(root.textContent).not.toContain('上游响应')
+    expect(root.textContent).not.toContain('默认处理')
+    expect(root.textContent).not.toContain('none')
+    expect(root.textContent).not.toContain('不再重试')
+    expect(root.textContent).not.toContain('该错误被标记为敏感上游错误')
   })
 })

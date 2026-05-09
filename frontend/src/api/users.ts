@@ -3,6 +3,29 @@ import { cachedRequest } from '@/utils/cache'
 import type { UserSession as SessionRecord } from '@/types/session'
 
 export type UserRole = 'admin' | 'user'
+export type ListPolicyMode = 'inherit' | 'unrestricted' | 'specific' | 'deny_all'
+export type RateLimitPolicyMode = 'inherit' | 'system' | 'custom'
+
+export interface UserGroupSummary {
+  id: string
+  name: string
+  priority: number
+}
+
+export interface EffectivePolicyField<T> {
+  mode: string
+  value: T | null
+  source: 'user' | 'group' | 'fallback' | string
+  group_id?: string | null
+  group_name?: string | null
+}
+
+export interface UserEffectivePolicy {
+  allowed_providers?: EffectivePolicyField<string[]>
+  allowed_api_formats?: EffectivePolicyField<string[]>
+  allowed_models?: EffectivePolicyField<string[]>
+  rate_limit?: EffectivePolicyField<number>
+}
 
 export interface User {
   id: string // UUID
@@ -12,9 +35,15 @@ export interface User {
   is_active: boolean
   unlimited: boolean
   allowed_providers: string[] | null  // 允许使用的提供商 ID 列表
+  allowed_providers_mode?: ListPolicyMode
   allowed_api_formats: string[] | null  // 允许使用的 API 格式列表
+  allowed_api_formats_mode?: ListPolicyMode
   allowed_models: string[] | null  // 允许使用的模型名称列表
+  allowed_models_mode?: ListPolicyMode
   rate_limit?: number | null  // null = 跟随系统默认，0 = 不限制
+  rate_limit_mode?: RateLimitPolicyMode
+  groups?: UserGroupSummary[]
+  effective_policy?: UserEffectivePolicy
   created_at: string
   updated_at?: string
   last_login_at?: string | null
@@ -30,9 +59,14 @@ export interface CreateUserRequest {
   initial_gift_usd?: number | null
   unlimited?: boolean
   allowed_providers?: string[] | null
+  allowed_providers_mode?: ListPolicyMode
   allowed_api_formats?: string[] | null
+  allowed_api_formats_mode?: ListPolicyMode
   allowed_models?: string[] | null
+  allowed_models_mode?: ListPolicyMode
   rate_limit?: number | null
+  rate_limit_mode?: RateLimitPolicyMode
+  group_ids?: string[]
 }
 
 export interface UpdateUserRequest {
@@ -42,19 +76,26 @@ export interface UpdateUserRequest {
   unlimited?: boolean
   password?: string
   allowed_providers?: string[] | null
+  allowed_providers_mode?: ListPolicyMode
   allowed_api_formats?: string[] | null
+  allowed_api_formats_mode?: ListPolicyMode
   allowed_models?: string[] | null
+  allowed_models_mode?: ListPolicyMode
   rate_limit?: number | null
+  rate_limit_mode?: RateLimitPolicyMode
+  group_ids?: string[]
 }
 
 export interface UserBatchSelectionFilters {
   search?: string
   role?: UserRole
   is_active?: boolean
+  group_id?: string
 }
 
 export interface UserBatchSelection {
   user_ids?: string[]
+  group_ids?: string[]
   filters?: UserBatchSelectionFilters | null
 }
 
@@ -64,11 +105,19 @@ export interface UserBatchSelectionItem {
   email?: string | null
   role: UserRole
   is_active: boolean
+  matched_by?: string[]
+}
+
+export interface UserBatchSelectionWarning {
+  type: string
+  group_id?: string | null
+  message: string
 }
 
 export interface ResolveUserBatchSelectionResponse {
   total: number
   items: UserBatchSelectionItem[]
+  warnings?: UserBatchSelectionWarning[]
 }
 
 export interface UserBatchAccessControlPayload {
@@ -120,8 +169,58 @@ export interface UserBatchActionResponse {
   success: number
   failed: number
   failures: UserBatchActionFailure[]
+  warnings?: UserBatchSelectionWarning[]
   action?: string
   modified_fields?: string[]
+}
+
+export interface UserGroup {
+  id: string
+  name: string
+  normalized_name?: string
+  description?: string | null
+  priority: number
+  allowed_providers?: string[] | null
+  allowed_providers_mode: ListPolicyMode
+  allowed_api_formats?: string[] | null
+  allowed_api_formats_mode: ListPolicyMode
+  allowed_models?: string[] | null
+  allowed_models_mode: ListPolicyMode
+  rate_limit?: number | null
+  rate_limit_mode: RateLimitPolicyMode
+  is_default?: boolean
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface UpsertUserGroupRequest {
+  name: string
+  description?: string | null
+  priority?: number
+  allowed_providers?: string[] | null
+  allowed_providers_mode?: ListPolicyMode
+  allowed_api_formats?: string[] | null
+  allowed_api_formats_mode?: ListPolicyMode
+  allowed_models?: string[] | null
+  allowed_models_mode?: ListPolicyMode
+  rate_limit?: number | null
+  rate_limit_mode?: RateLimitPolicyMode
+}
+
+export interface UserGroupMember {
+  group_id: string
+  user_id: string
+  username: string
+  email?: string | null
+  role: UserRole
+  is_active: boolean
+  is_deleted: boolean
+  created_at?: string | null
+}
+
+export interface ListUserGroupsResponse {
+  items: UserGroup[]
+  default_group_id?: string | null
 }
 
 export interface ApiKey {
@@ -151,6 +250,9 @@ export type UserSession = SessionRecord
 
 export interface GetAllUsersOptions {
   search?: string
+  role?: UserRole
+  is_active?: boolean
+  group_id?: string
   skip?: number
   limit?: number
   cacheTtlMs?: number
@@ -163,6 +265,9 @@ export const usersApi = {
     const search = options.search?.trim()
 
     if (search) params.search = search
+    if (options.role) params.role = options.role
+    if (options.is_active !== undefined) params.is_active = options.is_active ? 'true' : 'false'
+    if (options.group_id) params.group_id = options.group_id
     if (options.skip !== undefined) params.skip = options.skip
     if (options.limit !== undefined) params.limit = options.limit
 
@@ -171,6 +276,9 @@ export const usersApi = {
       : [
           'admin:users:list',
           search ?? '',
+          options.role ?? '',
+          options.is_active ?? '',
+          options.group_id ?? '',
           options.skip ?? '',
           options.limit ?? '',
         ].join(':')
@@ -216,6 +324,46 @@ export const usersApi = {
     const response = await apiClient.post<UserBatchActionResponse>(
       '/api/admin/users/batch-action',
       request
+    )
+    return response.data
+  },
+
+  async listUserGroups(): Promise<ListUserGroupsResponse> {
+    const response = await apiClient.get<ListUserGroupsResponse>('/api/admin/user-groups')
+    return response.data
+  },
+
+  async createUserGroup(payload: UpsertUserGroupRequest): Promise<UserGroup> {
+    const response = await apiClient.post<UserGroup>('/api/admin/user-groups', payload)
+    return response.data
+  },
+
+  async updateUserGroup(groupId: string, payload: UpsertUserGroupRequest): Promise<UserGroup> {
+    const response = await apiClient.put<UserGroup>(`/api/admin/user-groups/${groupId}`, payload)
+    return response.data
+  },
+
+  async deleteUserGroup(groupId: string): Promise<void> {
+    await apiClient.delete(`/api/admin/user-groups/${groupId}`)
+  },
+
+  async listUserGroupMembers(groupId: string): Promise<UserGroupMember[]> {
+    const response = await apiClient.get<{ items: UserGroupMember[] }>(`/api/admin/user-groups/${groupId}/members`)
+    return response.data.items
+  },
+
+  async replaceUserGroupMembers(groupId: string, userIds: string[]): Promise<UserGroupMember[]> {
+    const response = await apiClient.put<{ items: UserGroupMember[] }>(
+      `/api/admin/user-groups/${groupId}/members`,
+      { user_ids: userIds },
+    )
+    return response.data.items
+  },
+
+  async setDefaultUserGroup(groupId: string | null): Promise<{ default_group_id?: string | null }> {
+    const response = await apiClient.put<{ default_group_id?: string | null }>(
+      '/api/admin/user-groups/default',
+      { group_id: groupId },
     )
     return response.data
   },

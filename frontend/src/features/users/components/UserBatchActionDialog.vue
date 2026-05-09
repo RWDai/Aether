@@ -52,6 +52,20 @@
       </div>
 
       <div class="space-y-2.5">
+        <div class="grid gap-2 rounded-xl border border-border/70 bg-muted/20 p-3 sm:grid-cols-[9rem_minmax(0,1fr)] sm:items-start">
+          <div>
+            <Label class="text-sm font-medium">按分组选择</Label>
+            <p class="mt-1 text-[11px] text-muted-foreground">可与直接用户或筛选条件混合</p>
+          </div>
+          <MultiSelect
+            v-model="selectedGroupIds"
+            :options="groupOptions"
+            :search-threshold="0"
+            placeholder="选择一个或多个分组"
+            empty-text="暂无用户分组"
+          />
+        </div>
+
         <div class="flex items-center justify-between gap-3">
           <Label class="text-sm font-medium">选择批量动作</Label>
           <span class="text-[11px] text-muted-foreground">只会提交当前动作对应的字段</span>
@@ -339,6 +353,7 @@ import type {
   UserBatchSelectionFilters,
   UserBatchSelectionItem,
   UserRole,
+  UserGroup,
 } from '@/api/users'
 
 type AccessFieldMode = 'skip' | 'unrestricted' | 'specific'
@@ -358,6 +373,7 @@ const props = defineProps<{
   selectAllFiltered: boolean
   selectedCount: number
   filters: UserBatchSelectionFilters
+  groups: UserGroup[]
 }>()
 
 const emit = defineEmits<{
@@ -408,6 +424,7 @@ const apiFormatMode = ref<AccessFieldMode>('skip')
 const modelMode = ref<AccessFieldMode>('skip')
 const rateLimitMode = ref<RateLimitMode>('skip')
 const quotaMode = ref<QuotaMode>('skip')
+const selectedGroupIds = ref<string[]>([])
 const allowedProviders = ref<string[]>([])
 const allowedApiFormats = ref<string[]>([])
 const allowedModels = ref<string[]>([])
@@ -418,8 +435,13 @@ const resolvedTotal = ref<number | null>(null)
 const executing = ref(false)
 const lastResult = ref<UserBatchActionResponse | null>(null)
 
+const groupOptions = computed(() => props.groups.map((group) => ({
+  label: `${group.name}${group.is_default ? '（默认）' : ''}`,
+  value: group.id,
+})))
+const hasAnyTarget = computed(() => props.selectedCount > 0 || selectedGroupIds.value.length > 0)
 const impactCount = computed(() => resolvedTotal.value ?? props.selectedCount)
-const canExecute = computed(() => props.selectedCount > 0 && !previewLoading.value && !executing.value)
+const canExecute = computed(() => hasAnyTarget.value && !previewLoading.value && !executing.value)
 const selectedActionLabel = computed(() => (
   actionOptions.find((action) => action.value === selectedAction.value)?.label ?? '批量操作'
 ))
@@ -456,6 +478,7 @@ function resetLocalState(): void {
   modelMode.value = 'skip'
   rateLimitMode.value = 'skip'
   quotaMode.value = 'skip'
+  selectedGroupIds.value = []
   allowedProviders.value = []
   allowedApiFormats.value = []
   allowedModels.value = []
@@ -482,14 +505,15 @@ function actionIconClass(action: UserBatchAction): string {
 }
 
 function buildSelection(): UserBatchSelection {
+  const group_ids = selectedGroupIds.value.length > 0 ? [...selectedGroupIds.value] : undefined
   if (props.selectAllFiltered) {
-    return { filters: props.filters }
+    return { filters: props.filters, group_ids }
   }
-  return { user_ids: [...props.selectedIds] }
+  return { user_ids: [...props.selectedIds], group_ids }
 }
 
 async function resolvePreview(): Promise<void> {
-  if (props.selectedCount === 0) {
+  if (!hasAnyTarget.value) {
     resolvedTotal.value = 0
     previewItems.value = []
     return
@@ -507,6 +531,10 @@ async function resolvePreview(): Promise<void> {
     previewLoading.value = false
   }
 }
+
+watch(selectedGroupIds, () => {
+  if (props.open) void resolvePreview()
+})
 
 function buildAccessControlPayload(): UserBatchAccessControlPayload | null {
   const payload: UserBatchAccessControlPayload = {}

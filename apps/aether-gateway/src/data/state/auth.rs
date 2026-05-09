@@ -86,6 +86,139 @@ impl GatewayDataState {
         }
     }
 
+    pub(crate) async fn list_user_groups(
+        &self,
+    ) -> Result<Vec<aether_data::repository::users::StoredUserGroup>, DataLayerError> {
+        match &self.user_reader {
+            Some(repository) => repository.list_user_groups().await,
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn find_user_group_by_id(
+        &self,
+        group_id: &str,
+    ) -> Result<Option<aether_data::repository::users::StoredUserGroup>, DataLayerError> {
+        match &self.user_reader {
+            Some(repository) => repository.find_user_group_by_id(group_id).await,
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn list_user_groups_by_ids(
+        &self,
+        group_ids: &[String],
+    ) -> Result<Vec<aether_data::repository::users::StoredUserGroup>, DataLayerError> {
+        match &self.user_reader {
+            Some(repository) => repository.list_user_groups_by_ids(group_ids).await,
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn create_user_group(
+        &self,
+        record: aether_data::repository::users::UpsertUserGroupRecord,
+    ) -> Result<Option<aether_data::repository::users::StoredUserGroup>, DataLayerError> {
+        match &self.user_reader {
+            Some(repository) => repository.create_user_group(record).await,
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn update_user_group(
+        &self,
+        group_id: &str,
+        record: aether_data::repository::users::UpsertUserGroupRecord,
+    ) -> Result<Option<aether_data::repository::users::StoredUserGroup>, DataLayerError> {
+        match &self.user_reader {
+            Some(repository) => repository.update_user_group(group_id, record).await,
+            None => Ok(None),
+        }
+    }
+
+    pub(crate) async fn delete_user_group(&self, group_id: &str) -> Result<bool, DataLayerError> {
+        match &self.user_reader {
+            Some(repository) => repository.delete_user_group(group_id).await,
+            None => Ok(false),
+        }
+    }
+
+    pub(crate) async fn list_user_group_members(
+        &self,
+        group_id: &str,
+    ) -> Result<Vec<aether_data::repository::users::StoredUserGroupMember>, DataLayerError> {
+        match &self.user_reader {
+            Some(repository) => repository.list_user_group_members(group_id).await,
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn replace_user_group_members(
+        &self,
+        group_id: &str,
+        user_ids: &[String],
+    ) -> Result<Vec<aether_data::repository::users::StoredUserGroupMember>, DataLayerError> {
+        match &self.user_reader {
+            Some(repository) => {
+                repository
+                    .replace_user_group_members(group_id, user_ids)
+                    .await
+            }
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn list_user_groups_for_user(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<aether_data::repository::users::StoredUserGroup>, DataLayerError> {
+        match &self.user_reader {
+            Some(repository) => repository.list_user_groups_for_user(user_id).await,
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn list_user_group_memberships_by_user_ids(
+        &self,
+        user_ids: &[String],
+    ) -> Result<Vec<aether_data::repository::users::StoredUserGroupMembership>, DataLayerError>
+    {
+        match &self.user_reader {
+            Some(repository) => {
+                repository
+                    .list_user_group_memberships_by_user_ids(user_ids)
+                    .await
+            }
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn replace_user_groups_for_user(
+        &self,
+        user_id: &str,
+        group_ids: &[String],
+    ) -> Result<Vec<aether_data::repository::users::StoredUserGroup>, DataLayerError> {
+        match &self.user_reader {
+            Some(repository) => {
+                repository
+                    .replace_user_groups_for_user(user_id, group_ids)
+                    .await
+            }
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) async fn add_user_to_group(
+        &self,
+        group_id: &str,
+        user_id: &str,
+    ) -> Result<bool, DataLayerError> {
+        match &self.user_reader {
+            Some(repository) => repository.add_user_to_group(group_id, user_id).await,
+            None => Ok(false),
+        }
+    }
+
     pub(crate) async fn list_user_oauth_links(
         &self,
         user_id: &str,
@@ -420,6 +553,28 @@ impl GatewayDataState {
                 rate_limit_present,
                 rate_limit,
                 is_active,
+            )
+            .await
+    }
+
+    pub(crate) async fn update_local_auth_user_policy_modes(
+        &self,
+        user_id: &str,
+        allowed_providers_mode: Option<String>,
+        allowed_api_formats_mode: Option<String>,
+        allowed_models_mode: Option<String>,
+        rate_limit_mode: Option<String>,
+    ) -> Result<Option<StoredUserAuthRecord>, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(None);
+        };
+        repository
+            .update_local_auth_user_policy_modes(
+                user_id,
+                allowed_providers_mode,
+                allowed_api_formats_mode,
+                allowed_models_mode,
+                rate_limit_mode,
             )
             .await
     }
@@ -1470,13 +1625,14 @@ impl GatewayDataState {
         api_key_id: &str,
         now_unix_secs: u64,
     ) -> Result<Option<GatewayAuthApiKeySnapshot>, DataLayerError> {
-        read_resolved_auth_api_key_snapshot_by_user_api_key_ids(
+        let snapshot = read_resolved_auth_api_key_snapshot_by_user_api_key_ids(
             self,
             user_id,
             api_key_id,
             now_unix_secs,
         )
-        .await
+        .await?;
+        self.apply_user_group_effective_policies(snapshot).await
     }
 
     pub(crate) async fn read_auth_api_key_snapshot_by_key_hash(
@@ -1484,7 +1640,148 @@ impl GatewayDataState {
         key_hash: &str,
         now_unix_secs: u64,
     ) -> Result<Option<GatewayAuthApiKeySnapshot>, DataLayerError> {
-        read_resolved_auth_api_key_snapshot_by_key_hash(self, key_hash, now_unix_secs).await
+        let snapshot =
+            read_resolved_auth_api_key_snapshot_by_key_hash(self, key_hash, now_unix_secs).await?;
+        self.apply_user_group_effective_policies(snapshot).await
+    }
+
+    async fn apply_user_group_effective_policies(
+        &self,
+        snapshot: Option<GatewayAuthApiKeySnapshot>,
+    ) -> Result<Option<GatewayAuthApiKeySnapshot>, DataLayerError> {
+        let Some(mut snapshot) = snapshot else {
+            return Ok(None);
+        };
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(Some(snapshot));
+        };
+        let Some(user) = repository.find_user_auth_by_id(&snapshot.user_id).await? else {
+            return Ok(Some(snapshot));
+        };
+        let export_row = repository.find_export_user_by_id(&snapshot.user_id).await?;
+        let mut groups = repository
+            .list_user_groups_for_user(&snapshot.user_id)
+            .await?;
+        groups.sort_by(|left, right| {
+            right
+                .priority
+                .cmp(&left.priority)
+                .then_with(|| left.name.cmp(&right.name))
+                .then_with(|| left.id.cmp(&right.id))
+        });
+
+        let allowed_providers = resolve_effective_list_policy(
+            user.allowed_providers,
+            &user.allowed_providers_mode,
+            &groups,
+            |group| {
+                (
+                    &group.allowed_providers_mode,
+                    group.allowed_providers.clone(),
+                )
+            },
+        );
+        let allowed_api_formats = resolve_effective_list_policy(
+            user.allowed_api_formats,
+            &user.allowed_api_formats_mode,
+            &groups,
+            |group| {
+                (
+                    &group.allowed_api_formats_mode,
+                    group.allowed_api_formats.clone(),
+                )
+            },
+        );
+        let allowed_models = resolve_effective_list_policy(
+            user.allowed_models,
+            &user.allowed_models_mode,
+            &groups,
+            |group| (&group.allowed_models_mode, group.allowed_models.clone()),
+        );
+        let snapshot_user_rate_limit = snapshot.user_rate_limit;
+        let export_user_rate_limit = export_row.as_ref().and_then(|row| row.rate_limit);
+        let user_rate_limit_mode = match export_row.as_ref() {
+            Some(row)
+                if row.rate_limit.is_none()
+                    && row.rate_limit_mode == "system"
+                    && snapshot_user_rate_limit.is_some() =>
+            {
+                "custom"
+            }
+            Some(row) => row.rate_limit_mode.as_str(),
+            None if snapshot_user_rate_limit.is_some() => "custom",
+            None => "system",
+        };
+        let user_rate_limit = resolve_effective_rate_limit_policy(
+            export_user_rate_limit.or(snapshot_user_rate_limit),
+            user_rate_limit_mode,
+            &groups,
+        );
+        snapshot.apply_user_policy(
+            allowed_providers,
+            allowed_api_formats,
+            allowed_models,
+            user_rate_limit,
+        );
+        Ok(Some(snapshot))
+    }
+}
+
+fn resolve_effective_list_policy(
+    user_values: Option<Vec<String>>,
+    user_mode: &str,
+    groups: &[aether_data::repository::users::StoredUserGroup],
+    group_field: impl Fn(
+        &aether_data::repository::users::StoredUserGroup,
+    ) -> (&str, Option<Vec<String>>),
+) -> Option<Vec<String>> {
+    match user_mode {
+        "unrestricted" => None,
+        "specific" => Some(user_values.unwrap_or_default()),
+        "deny_all" => Some(Vec::new()),
+        "inherit" => groups
+            .iter()
+            .find_map(|group| {
+                let (mode, values) = group_field(group);
+                match mode {
+                    "unrestricted" => Some(None),
+                    "specific" => Some(Some(values.unwrap_or_default())),
+                    "deny_all" => Some(Some(Vec::new())),
+                    _ => None,
+                }
+            })
+            .flatten_or_unrestricted(),
+        _ => None,
+    }
+}
+
+trait FlattenPolicyOption<T> {
+    fn flatten_or_unrestricted(self) -> Option<T>;
+}
+
+impl<T> FlattenPolicyOption<T> for Option<Option<T>> {
+    fn flatten_or_unrestricted(self) -> Option<T> {
+        self.unwrap_or_default()
+    }
+}
+
+fn resolve_effective_rate_limit_policy(
+    user_rate_limit: Option<i32>,
+    user_mode: &str,
+    groups: &[aether_data::repository::users::StoredUserGroup],
+) -> Option<i32> {
+    match user_mode {
+        "custom" => Some(user_rate_limit.unwrap_or(0)),
+        "system" => None,
+        "inherit" => groups
+            .iter()
+            .find_map(|group| match group.rate_limit_mode.as_str() {
+                "custom" => Some(Some(group.rate_limit.unwrap_or(0))),
+                "system" => Some(None),
+                _ => None,
+            })
+            .flatten_or_unrestricted(),
+        _ => None,
     }
 }
 

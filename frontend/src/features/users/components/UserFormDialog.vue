@@ -180,6 +180,18 @@
               </Select>
             </div>
           </div>
+
+          <div class="space-y-2">
+            <Label class="text-sm font-medium">所属分组</Label>
+            <MultiSelect
+              v-model="form.group_ids"
+              :options="groupOptions"
+              :search-threshold="0"
+              placeholder="可选择多个分组"
+              empty-text="暂无分组"
+              no-results-text="未找到匹配的分组"
+            />
+          </div>
         </div>
 
         <!-- 右侧：访问限制 -->
@@ -191,22 +203,27 @@
           <!-- 提供商 -->
           <div class="space-y-2">
             <Label class="text-sm font-medium">允许的提供商</Label>
-            <div class="flex items-center gap-3">
-              <div class="flex-1 min-w-0">
-                <MultiSelect
-                  v-model="form.allowed_providers"
-                  :options="providerOptions"
-                  :search-threshold="0"
-                  :disabled="form.provider_unrestricted"
-                  :placeholder="form.provider_unrestricted ? '不限制' : '未选择（全部禁用）'"
-                  empty-text="暂无可用提供商"
-                  no-results-text="未找到匹配的提供商"
-                  search-placeholder="搜索提供商名称..."
-                />
-              </div>
-              <Switch
-                v-model="form.provider_unrestricted"
-                class="shrink-0"
+            <div class="grid gap-2 sm:grid-cols-[7rem_minmax(0,1fr)]">
+              <Select v-model="form.allowed_providers_mode">
+                <SelectTrigger class="h-10">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="inherit">继承</SelectItem>
+                  <SelectItem value="unrestricted">不限制</SelectItem>
+                  <SelectItem value="specific">指定列表</SelectItem>
+                  <SelectItem value="deny_all">全部禁用</SelectItem>
+                </SelectContent>
+              </Select>
+              <MultiSelect
+                v-model="form.allowed_providers"
+                :options="providerOptions"
+                :search-threshold="0"
+                :disabled="form.allowed_providers_mode !== 'specific'"
+                placeholder="未选择时表示全部禁用"
+                empty-text="暂无可用提供商"
+                no-results-text="未找到匹配的提供商"
+                search-placeholder="搜索提供商名称..."
               />
             </div>
           </div>
@@ -214,22 +231,27 @@
           <!-- 端点 -->
           <div class="space-y-2">
             <Label class="text-sm font-medium">允许的端点</Label>
-            <div class="flex items-center gap-3">
-              <div class="flex-1 min-w-0">
-                <MultiSelect
-                  v-model="form.allowed_api_formats"
-                  :options="apiFormatOptions"
-                  :search-threshold="0"
-                  :disabled="form.api_format_unrestricted"
-                  :placeholder="form.api_format_unrestricted ? '不限制' : '未选择（全部禁用）'"
-                  empty-text="暂无可用端点"
-                  no-results-text="未找到匹配的端点"
-                  search-placeholder="搜索端点..."
-                />
-              </div>
-              <Switch
-                v-model="form.api_format_unrestricted"
-                class="shrink-0"
+            <div class="grid gap-2 sm:grid-cols-[7rem_minmax(0,1fr)]">
+              <Select v-model="form.allowed_api_formats_mode">
+                <SelectTrigger class="h-10">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="inherit">继承</SelectItem>
+                  <SelectItem value="unrestricted">不限制</SelectItem>
+                  <SelectItem value="specific">指定列表</SelectItem>
+                  <SelectItem value="deny_all">全部禁用</SelectItem>
+                </SelectContent>
+              </Select>
+              <MultiSelect
+                v-model="form.allowed_api_formats"
+                :options="apiFormatOptions"
+                :search-threshold="0"
+                :disabled="form.allowed_api_formats_mode !== 'specific'"
+                placeholder="未选择时表示全部禁用"
+                empty-text="暂无可用端点"
+                no-results-text="未找到匹配的端点"
+                search-placeholder="搜索端点..."
               />
             </div>
           </div>
@@ -237,22 +259,27 @@
           <!-- 模型 -->
           <div class="space-y-2">
             <Label class="text-sm font-medium">允许的模型</Label>
-            <div class="flex items-center gap-3">
-              <div class="flex-1 min-w-0">
-                <MultiSelect
-                  v-model="form.allowed_models"
-                  :options="modelOptions"
-                  :search-threshold="0"
-                  :disabled="form.model_unrestricted"
-                  :placeholder="form.model_unrestricted ? '不限制' : '未选择（全部禁用）'"
-                  empty-text="暂无可用模型"
-                  no-results-text="未找到匹配的模型"
-                  search-placeholder="输入模型名搜索..."
-                />
-              </div>
-              <Switch
-                v-model="form.model_unrestricted"
-                class="shrink-0"
+            <div class="grid gap-2 sm:grid-cols-[7rem_minmax(0,1fr)]">
+              <Select v-model="form.allowed_models_mode">
+                <SelectTrigger class="h-10">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="inherit">继承</SelectItem>
+                  <SelectItem value="unrestricted">不限制</SelectItem>
+                  <SelectItem value="specific">指定列表</SelectItem>
+                  <SelectItem value="deny_all">全部禁用</SelectItem>
+                </SelectContent>
+              </Select>
+              <MultiSelect
+                v-model="form.allowed_models"
+                :options="modelOptions"
+                :search-threshold="0"
+                :disabled="form.allowed_models_mode !== 'specific'"
+                placeholder="未选择时表示全部禁用"
+                empty-text="暂无可用模型"
+                no-results-text="未找到匹配的模型"
+                search-placeholder="输入模型名搜索..."
               />
             </div>
           </div>
@@ -263,9 +290,18 @@
               class="text-sm font-medium"
             >速率限制 (请求/分钟)</Label>
             <div class="flex items-center gap-3">
+              <Select v-model="form.rate_limit_mode">
+                <SelectTrigger class="h-10 w-28">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="inherit">继承</SelectItem>
+                  <SelectItem value="system">系统默认</SelectItem>
+                  <SelectItem value="custom">指定数值</SelectItem>
+                </SelectContent>
+              </Select>
               <div class="flex-1 min-w-0">
                 <Input
-                  v-if="!form.rate_limit_inherited"
                   id="form-rate-limit"
                   :model-value="form.rate_limit ?? ''"
                   type="number"
@@ -273,17 +309,10 @@
                   max="10000"
                   placeholder="0 = 不限速"
                   class="h-10"
+                  :disabled="form.rate_limit_mode !== 'custom'"
                   @update:model-value="(v) => form.rate_limit = parseNumberInput(v, { min: 0, max: 10000 })"
                 />
-                <span
-                  v-else
-                  class="flex h-10 w-full items-center rounded-lg border bg-background px-3 text-sm text-muted-foreground opacity-60"
-                >跟随系统默认</span>
               </div>
-              <Switch
-                v-model="form.rate_limit_inherited"
-                class="shrink-0"
-              />
             </div>
           </div>
 
@@ -366,6 +395,7 @@ import {
   validatePasswordByPolicy,
   type PasswordPolicyLevel,
 } from '@/utils/passwordPolicy'
+import type { ListPolicyMode, RateLimitPolicyMode, UserGroup } from '@/api/users'
 
 export interface UserFormData {
   id?: string
@@ -376,14 +406,20 @@ export interface UserFormData {
   role: 'admin' | 'user'
   is_active?: boolean
   allowed_providers?: string[] | null
+  allowed_providers_mode?: ListPolicyMode
   allowed_api_formats?: string[] | null
+  allowed_api_formats_mode?: ListPolicyMode
   allowed_models?: string[] | null
+  allowed_models_mode?: ListPolicyMode
   rate_limit?: number | null
+  rate_limit_mode?: RateLimitPolicyMode
+  group_ids?: string[]
 }
 
 const props = defineProps<{
   open: boolean
   user: UserFormData | null
+  groups?: UserGroup[]
 }>()
 
 const emit = defineEmits<{
@@ -413,15 +449,21 @@ const form = ref({
   role: 'user' as 'admin' | 'user',
   unlimited: false,
   is_active: true,
-  provider_unrestricted: true,
-  api_format_unrestricted: true,
-  model_unrestricted: true,
-  rate_limit_inherited: true,
+  allowed_providers_mode: 'unrestricted' as ListPolicyMode,
+  allowed_api_formats_mode: 'unrestricted' as ListPolicyMode,
+  allowed_models_mode: 'unrestricted' as ListPolicyMode,
+  rate_limit_mode: 'system' as RateLimitPolicyMode,
   allowed_providers: [] as string[],
   allowed_api_formats: [] as string[],
   allowed_models: [] as string[],
   rate_limit: undefined as number | undefined,
+  group_ids: [] as string[],
 })
+
+const groupOptions = computed(() => (props.groups || []).map((group) => ({
+  label: group.name,
+  value: group.id,
+})))
 
 function createFieldNonce(): string {
   return Math.random().toString(36).slice(2, 10)
@@ -438,14 +480,15 @@ function resetForm() {
     role: 'user',
     unlimited: false,
     is_active: true,
-    provider_unrestricted: true,
-    api_format_unrestricted: true,
-    model_unrestricted: true,
-    rate_limit_inherited: true,
+    allowed_providers_mode: 'unrestricted',
+    allowed_api_formats_mode: 'unrestricted',
+    allowed_models_mode: 'unrestricted',
+    rate_limit_mode: 'system',
     allowed_providers: [],
     allowed_api_formats: [],
     allowed_models: [],
     rate_limit: undefined,
+    group_ids: [],
   }
 }
 
@@ -462,14 +505,15 @@ function loadUserData() {
     role: props.user.role,
     unlimited: props.user.unlimited ?? false,
     is_active: props.user.is_active ?? true,
-    provider_unrestricted: props.user.allowed_providers == null,
-    api_format_unrestricted: props.user.allowed_api_formats == null,
-    model_unrestricted: props.user.allowed_models == null,
-    rate_limit_inherited: props.user.rate_limit == null,
+    allowed_providers_mode: props.user.allowed_providers_mode ?? (props.user.allowed_providers == null ? 'unrestricted' : 'specific'),
+    allowed_api_formats_mode: props.user.allowed_api_formats_mode ?? (props.user.allowed_api_formats == null ? 'unrestricted' : 'specific'),
+    allowed_models_mode: props.user.allowed_models_mode ?? (props.user.allowed_models == null ? 'unrestricted' : 'specific'),
+    rate_limit_mode: props.user.rate_limit_mode ?? (props.user.rate_limit == null ? 'system' : 'custom'),
     allowed_providers: props.user.allowed_providers ? [...props.user.allowed_providers] : [],
     allowed_api_formats: props.user.allowed_api_formats ? [...props.user.allowed_api_formats] : [],
     allowed_models: props.user.allowed_models ? [...props.user.allowed_models] : [],
     rate_limit: props.user.rate_limit ?? undefined,
+    group_ids: props.user.group_ids ? [...props.user.group_ids] : [],
   }
 }
 
@@ -545,16 +589,21 @@ async function handleSubmit() {
       email: form.value.email.trim() || '',
       unlimited: form.value.unlimited,
       role: form.value.role,
-      allowed_providers: form.value.provider_unrestricted
-        ? null
-        : [...form.value.allowed_providers],
-      allowed_api_formats: form.value.api_format_unrestricted
-        ? null
-        : [...form.value.allowed_api_formats],
-      allowed_models: form.value.model_unrestricted
-        ? null
-        : [...form.value.allowed_models],
-      rate_limit: form.value.rate_limit_inherited ? null : (form.value.rate_limit ?? 0),
+      allowed_providers: form.value.allowed_providers_mode === 'specific'
+        ? [...form.value.allowed_providers]
+        : null,
+      allowed_providers_mode: form.value.allowed_providers_mode,
+      allowed_api_formats: form.value.allowed_api_formats_mode === 'specific'
+        ? [...form.value.allowed_api_formats]
+        : null,
+      allowed_api_formats_mode: form.value.allowed_api_formats_mode,
+      allowed_models: form.value.allowed_models_mode === 'specific'
+        ? [...form.value.allowed_models]
+        : null,
+      allowed_models_mode: form.value.allowed_models_mode,
+      rate_limit: form.value.rate_limit_mode === 'custom' ? (form.value.rate_limit ?? 0) : null,
+      rate_limit_mode: form.value.rate_limit_mode,
+      group_ids: [...form.value.group_ids],
     }
 
     if (isEditMode.value && props.user?.id) {

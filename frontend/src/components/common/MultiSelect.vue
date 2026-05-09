@@ -54,7 +54,7 @@
         </div>
       </div>
 
-      <div class="max-h-48 overflow-y-auto">
+      <div class="max-h-64 overflow-y-auto">
         <div
           v-if="hasOptions"
           class="sticky top-0 z-10 flex cursor-pointer items-center gap-2 border-b bg-popover/95 px-3 py-2 backdrop-blur hover:bg-muted/50 supports-[backdrop-filter]:bg-popover/85"

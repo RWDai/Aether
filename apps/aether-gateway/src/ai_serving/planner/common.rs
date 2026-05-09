@@ -1,8 +1,11 @@
 use axum::body::Bytes;
 
 use crate::ai_serving::{
+    endpoint_config_forces_upstream_stream_policy as endpoint_config_forces_upstream_stream_policy_impl,
+    enforce_request_body_stream_field as enforce_request_body_stream_field_impl,
     force_upstream_streaming_for_provider as force_upstream_streaming_for_provider_impl,
     is_json_request, parse_direct_request_body as parse_direct_request_body_impl,
+    resolve_upstream_is_stream_from_endpoint_config as resolve_upstream_is_stream_from_endpoint_config_impl,
 };
 pub(crate) use crate::ai_serving::{
     CLAUDE_CHAT_STREAM_PLAN_KIND, CLAUDE_CHAT_SYNC_PLAN_KIND, CLAUDE_CLI_STREAM_PLAN_KIND,
@@ -46,7 +49,7 @@ pub(crate) fn resolve_upstream_is_stream_for_provider(
 ) -> bool {
     let hard_requires_streaming = hard_requires_streaming
         || force_upstream_streaming_for_provider(provider_type, provider_api_format);
-    aether_ai_formats::resolve_upstream_is_stream_from_endpoint_config(
+    resolve_upstream_is_stream_from_endpoint_config_impl(
         endpoint_config,
         client_is_stream,
         hard_requires_streaming,
@@ -56,7 +59,7 @@ pub(crate) fn resolve_upstream_is_stream_for_provider(
 pub(crate) fn endpoint_config_forces_body_stream_field(
     endpoint_config: Option<&serde_json::Value>,
 ) -> bool {
-    aether_ai_formats::endpoint_config_forces_upstream_stream_policy(endpoint_config)
+    endpoint_config_forces_upstream_stream_policy_impl(endpoint_config)
 }
 
 pub(crate) fn request_requires_body_stream_field(
@@ -75,7 +78,7 @@ pub(crate) fn enforce_provider_body_stream_policy(
     upstream_is_stream: bool,
     require_body_stream_field: bool,
 ) {
-    aether_ai_formats::enforce_request_body_stream_field(
+    enforce_request_body_stream_field_impl(
         provider_request_body,
         provider_api_format,
         upstream_is_stream,

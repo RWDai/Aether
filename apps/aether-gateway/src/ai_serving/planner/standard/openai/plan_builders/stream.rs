@@ -18,6 +18,18 @@ use crate::ai_serving::transport::{
 };
 use crate::{AiExecutionDecision, GatewayError};
 
+fn effective_stream_accept_mode(
+    payload_upstream_is_stream: bool,
+    provider_request_body: &serde_json::Value,
+) -> bool {
+    payload_upstream_is_stream
+        || provider_request_body
+            .as_object()
+            .and_then(|body| body.get("stream"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+}
+
 pub(crate) fn build_openai_chat_stream_plan_from_decision(
     parts: &http::request::Parts,
     body_json: &serde_json::Value,
@@ -80,6 +92,8 @@ pub(crate) fn build_openai_chat_stream_plan_from_decision(
         }
         provider_request_body
     };
+    let effective_upstream_is_stream =
+        effective_stream_accept_mode(payload.upstream_is_stream, &provider_request_body_value);
     let extra_headers = std::mem::take(&mut payload.extra_headers);
     let mut provider_request_headers =
         build_standard_plan_fallback_headers(StandardPlanFallbackHeadersInput {
@@ -93,9 +107,9 @@ pub(crate) fn build_openai_chat_stream_plan_from_decision(
             content_type: payload.content_type.as_deref(),
             provider_api_format: core.provider_api_format.as_str(),
             client_api_format: core.client_api_format.as_str(),
-            upstream_is_stream: payload.upstream_is_stream,
+            upstream_is_stream: effective_upstream_is_stream,
             build_from_request_when_empty: true,
-            accept_policy: StandardPlanFallbackAcceptPolicy::TextEventStreamIfStreaming,
+            accept_policy: StandardPlanFallbackAcceptPolicy::TextEventStreamIfStreamingOrWildcard,
         });
     let content_type = payload
         .content_type
@@ -168,14 +182,18 @@ pub(crate) fn build_openai_responses_stream_plan_from_decision(
         .as_ref()
         .and_then(|context| context.get("envelope_name"))
         .and_then(serde_json::Value::as_str);
-    let accept_policy = if payload.upstream_is_stream
+    let effective_upstream_is_stream =
+        effective_stream_accept_mode(payload.upstream_is_stream, &provider_request_body_value);
+    let accept_policy = if effective_upstream_is_stream
         && provider_adaptation_requires_eventstream_accept(
             envelope_name,
             core.provider_api_format.as_str(),
         ) {
         StandardPlanFallbackAcceptPolicy::ProviderEventStreamIfMissing
-    } else {
+    } else if envelope_name.is_some() {
         StandardPlanFallbackAcceptPolicy::TextEventStreamIfStreaming
+    } else {
+        StandardPlanFallbackAcceptPolicy::TextEventStreamIfStreamingOrWildcard
     };
     let mut provider_request_headers =
         build_standard_plan_fallback_headers(StandardPlanFallbackHeadersInput {
@@ -189,7 +207,7 @@ pub(crate) fn build_openai_responses_stream_plan_from_decision(
             content_type: payload.content_type.as_deref(),
             provider_api_format: core.provider_api_format.as_str(),
             client_api_format: core.client_api_format.as_str(),
-            upstream_is_stream: payload.upstream_is_stream,
+            upstream_is_stream: effective_upstream_is_stream,
             build_from_request_when_empty: false,
             accept_policy,
         });
@@ -231,7 +249,7 @@ pub(crate) fn build_openai_responses_stream_plan_from_decision(
         plan_url = %plan.url,
         client_api_format = %plan.client_api_format,
         provider_api_format = %plan.provider_api_format,
-        upstream_is_stream = payload.upstream_is_stream,
+        upstream_is_stream = effective_upstream_is_stream,
         compact,
         "gateway built local openai responses stream execution plan"
     );

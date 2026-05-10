@@ -183,7 +183,9 @@ pub fn resolve_provider_model_name_with_model_directives(
         for pattern in global_model_mappings {
             if matches_model_mapping(pattern, allowed_model) {
                 let allowed_model = allowed_model.to_owned();
-                return Some((allowed_model.clone(), Some(allowed_model)));
+                // Regex mappings prove the key can serve this global model; they do not
+                // override the provider model chosen from the Provider model mapping.
+                return Some((selected_provider_model_name.clone(), Some(allowed_model)));
             }
         }
     }
@@ -392,7 +394,9 @@ mod tests {
         resolve_requested_global_model_name_with_model_directives, row_supports_requested_model,
         row_supports_requested_model_with_model_directives,
     };
-    use aether_data_contracts::repository::candidate_selection::StoredMinimalCandidateSelectionRow;
+    use aether_data_contracts::repository::candidate_selection::{
+        StoredMinimalCandidateSelectionRow, StoredProviderModelMapping,
+    };
 
     #[test]
     fn model_mapping_match_is_case_insensitive() {
@@ -409,6 +413,25 @@ mod tests {
     #[test]
     fn invalid_model_mapping_pattern_returns_false() {
         assert!(!matches_model_mapping("([a-z", "gpt-4o"));
+    }
+
+    #[test]
+    fn regex_allowed_model_does_not_replace_selected_provider_model_name() {
+        let mut row = sample_row("gpt-5", "gpt-5-upstream");
+        row.key_allowed_models = Some(vec!["gpt-5.4".to_string()]);
+        row.global_model_mappings = Some(vec!["gpt-5(?:\\.\\d+)?".to_string()]);
+        row.model_provider_model_mappings = Some(vec![StoredProviderModelMapping {
+            name: "gpt-5-canonical-upstream".to_string(),
+            priority: 1,
+            api_formats: Some(vec!["openai:chat".to_string()]),
+            endpoint_ids: None,
+        }]);
+
+        let resolved = resolve_provider_model_name(&row, "gpt-5", "openai:chat")
+            .expect("regex-matched allowed model should allow the key");
+
+        assert_eq!(resolved.0, "gpt-5-canonical-upstream");
+        assert_eq!(resolved.1.as_deref(), Some("gpt-5.4"));
     }
 
     #[test]

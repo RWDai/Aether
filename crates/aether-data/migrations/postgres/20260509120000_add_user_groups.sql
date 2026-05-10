@@ -83,12 +83,14 @@ VALUES (
 )
 ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO public.system_configs (id, key, value, description)
+INSERT INTO public.system_configs (id, key, value, description, created_at, updated_at)
 VALUES (
     '00000000-0000-0000-0000-000000000002',
     'default_user_group_id',
     '"00000000-0000-0000-0000-000000000001"'::json,
-    'Default unrestricted user group'
+    'Default unrestricted user group',
+    now(),
+    now()
 )
 ON CONFLICT (key) DO NOTHING;
 

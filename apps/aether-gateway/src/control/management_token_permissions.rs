@@ -524,4 +524,83 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn catalog_covers_admin_route_signatures_from_route_sources() {
+        let route_sources = [
+            ("route/admin.rs", include_str!("route/admin.rs")),
+            ("route/oauth.rs", include_str!("route/oauth.rs")),
+            (
+                "route/public_support.rs",
+                include_str!("route/public_support.rs"),
+            ),
+            (
+                "route/admin/basic_families.rs",
+                include_str!("route/admin/basic_families.rs"),
+            ),
+            (
+                "route/admin/endpoints_families.rs",
+                include_str!("route/admin/endpoints_families.rs"),
+            ),
+            (
+                "route/admin/model_provider_families.rs",
+                include_str!("route/admin/model_provider_families.rs"),
+            ),
+            (
+                "route/admin/observability_families.rs",
+                include_str!("route/admin/observability_families.rs"),
+            ),
+            (
+                "route/admin/operations_families.rs",
+                include_str!("route/admin/operations_families.rs"),
+            ),
+            (
+                "route/admin/provider_ops_routes.rs",
+                include_str!("route/admin/provider_ops_routes.rs"),
+            ),
+            (
+                "route/admin/system_families.rs",
+                include_str!("route/admin/system_families.rs"),
+            ),
+        ];
+        let mut route_scopes = BTreeSet::new();
+
+        for (file, source) in route_sources {
+            for scope in extract_admin_route_scopes(source) {
+                assert!(
+                    is_known_management_token_permission_scope(scope),
+                    "missing management token permission scope {scope} referenced by {file}"
+                );
+                route_scopes.insert(scope);
+            }
+        }
+
+        assert!(
+            !route_scopes.is_empty(),
+            "admin route scope scanner did not find any route signatures"
+        );
+    }
+
+    fn extract_admin_route_scopes(source: &'static str) -> BTreeSet<&'static str> {
+        let mut scopes = BTreeSet::new();
+        let mut remaining = source;
+
+        while let Some(start) = remaining.find("\"admin:") {
+            let signature_start = start + 1;
+            let after_start = &remaining[signature_start..];
+            let Some(end) = after_start.find('"') else {
+                break;
+            };
+            let signature = &after_start[..end];
+            let mut parts = signature.split(':');
+            if parts.next() == Some("admin") {
+                if let (Some(scope), None) = (parts.next(), parts.next()) {
+                    scopes.insert(scope);
+                }
+            }
+            remaining = &after_start[end + 1..];
+        }
+
+        scopes
+    }
 }

@@ -1024,7 +1024,7 @@ pub fn normalize_rate_limit_policy_mode(
 }
 
 fn legacy_list_policy_mode(values: &Option<Vec<String>>) -> String {
-    if values.is_some() {
+    if values.as_ref().is_some_and(|items| !items.is_empty()) {
         "specific".to_string()
     } else {
         "unrestricted".to_string()
@@ -1096,8 +1096,8 @@ mod tests {
     use serde_json::Value;
 
     use super::{
-        StoredUserAuthRecord, StoredUserExportRow, StoredUserPreferenceRecord,
-        StoredUserSessionRecord,
+        legacy_list_policy_mode, StoredUserAuthRecord, StoredUserExportRow,
+        StoredUserPreferenceRecord, StoredUserSessionRecord,
     };
 
     #[test]
@@ -1206,6 +1206,16 @@ mod tests {
             Some(vec!["openai:chat".to_string()])
         );
         assert_eq!(row.allowed_models, Some(vec!["gpt-4.1".to_string()]));
+    }
+
+    #[test]
+    fn legacy_policy_mode_treats_empty_lists_as_unrestricted() {
+        assert_eq!(legacy_list_policy_mode(&None), "unrestricted");
+        assert_eq!(legacy_list_policy_mode(&Some(Vec::new())), "unrestricted");
+        assert_eq!(
+            legacy_list_policy_mode(&Some(vec!["openai".to_string()])),
+            "specific"
+        );
     }
 
     #[test]

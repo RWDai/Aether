@@ -300,7 +300,7 @@ pub(crate) fn normalize_admin_rate_limit_policy_mode(value: &str) -> Result<Stri
 }
 
 pub(super) fn legacy_admin_list_policy_mode(values: &Option<Vec<String>>) -> String {
-    if values.is_some() {
+    if values.as_ref().is_some_and(|items| !items.is_empty()) {
         "specific".to_string()
     } else {
         "unrestricted".to_string()

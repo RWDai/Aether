@@ -1351,7 +1351,11 @@ impl UserReadRepository for InMemoryUserReadRepository {
         }
         if allowed_providers_present {
             user.allowed_providers = allowed_providers;
-            user.allowed_providers_mode = if user.allowed_providers.is_some() {
+            user.allowed_providers_mode = if user
+                .allowed_providers
+                .as_ref()
+                .is_some_and(|values| !values.is_empty())
+            {
                 "specific".to_string()
             } else {
                 "unrestricted".to_string()
@@ -1359,7 +1363,11 @@ impl UserReadRepository for InMemoryUserReadRepository {
         }
         if allowed_api_formats_present {
             user.allowed_api_formats = allowed_api_formats;
-            user.allowed_api_formats_mode = if user.allowed_api_formats.is_some() {
+            user.allowed_api_formats_mode = if user
+                .allowed_api_formats
+                .as_ref()
+                .is_some_and(|values| !values.is_empty())
+            {
                 "specific".to_string()
             } else {
                 "unrestricted".to_string()
@@ -1367,7 +1375,11 @@ impl UserReadRepository for InMemoryUserReadRepository {
         }
         if allowed_models_present {
             user.allowed_models = allowed_models;
-            user.allowed_models_mode = if user.allowed_models.is_some() {
+            user.allowed_models_mode = if user
+                .allowed_models
+                .as_ref()
+                .is_some_and(|values| !values.is_empty())
+            {
                 "specific".to_string()
             } else {
                 "unrestricted".to_string()

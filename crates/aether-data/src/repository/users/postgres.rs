@@ -1482,17 +1482,26 @@ WHERE id = $1
         rate_limit: Option<i32>,
         is_active: Option<bool>,
     ) -> Result<Option<StoredUserAuthRecord>, DataLayerError> {
-        let allowed_providers_mode = if allowed_providers.is_some() {
+        let allowed_providers_mode = if allowed_providers
+            .as_ref()
+            .is_some_and(|values| !values.is_empty())
+        {
             "specific"
         } else {
             "unrestricted"
         };
-        let allowed_api_formats_mode = if allowed_api_formats.is_some() {
+        let allowed_api_formats_mode = if allowed_api_formats
+            .as_ref()
+            .is_some_and(|values| !values.is_empty())
+        {
             "specific"
         } else {
             "unrestricted"
         };
-        let allowed_models_mode = if allowed_models.is_some() {
+        let allowed_models_mode = if allowed_models
+            .as_ref()
+            .is_some_and(|values| !values.is_empty())
+        {
             "specific"
         } else {
             "unrestricted"
@@ -1696,17 +1705,26 @@ VALUES (
         rate_limit: Option<i32>,
     ) -> Result<Option<StoredUserAuthRecord>, DataLayerError> {
         let user_id = uuid::Uuid::new_v4().to_string();
-        let allowed_providers_mode = if allowed_providers.is_some() {
+        let allowed_providers_mode = if allowed_providers
+            .as_ref()
+            .is_some_and(|values| !values.is_empty())
+        {
             "specific"
         } else {
             "unrestricted"
         };
-        let allowed_api_formats_mode = if allowed_api_formats.is_some() {
+        let allowed_api_formats_mode = if allowed_api_formats
+            .as_ref()
+            .is_some_and(|values| !values.is_empty())
+        {
             "specific"
         } else {
             "unrestricted"
         };
-        let allowed_models_mode = if allowed_models.is_some() {
+        let allowed_models_mode = if allowed_models
+            .as_ref()
+            .is_some_and(|values| !values.is_empty())
+        {
             "specific"
         } else {
             "unrestricted"

@@ -27,12 +27,12 @@ WHERE table_schema = 'public'
     'gemini_file_mappings',
     'global_models',
     'oauth_providers',
-	    'provider_api_keys',
-	    'proxy_nodes',
-	    'user_groups',
-	    'usage_routing_snapshots',
-	    'usage_settlement_snapshots'
-	  )
+    'provider_api_keys',
+    'proxy_nodes',
+    'user_groups',
+    'usage_routing_snapshots',
+    'usage_settlement_snapshots'
+  )
 "#;
 const INSERT_APPLIED_MIGRATION_SQL: &str = r#"
 INSERT INTO _sqlx_migrations (

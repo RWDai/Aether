@@ -1,7 +1,7 @@
 <template>
   <Dialog
     :model-value="isOpen"
-    size="2xl"
+    size="xl"
     @update:model-value="handleDialogUpdate"
   >
     <template #header>
@@ -35,13 +35,8 @@
       autocomplete="off"
       @submit.prevent="handleSubmit"
     >
-      <div class="grid grid-cols-2 gap-0">
-        <!-- 左侧：基础设置 -->
-        <div class="pr-6 space-y-4">
-          <div class="flex items-center gap-2 pb-2 border-b border-border/60">
-            <span class="text-sm font-medium">基础设置</span>
-          </div>
-
+      <div class="space-y-5">
+        <div class="grid gap-4 sm:grid-cols-2">
           <div class="space-y-2">
             <Label
               for="form-username"
@@ -63,97 +58,6 @@
             >
               {{ usernameError }}
             </p>
-            <p
-              v-else
-              class="text-xs text-muted-foreground"
-            >
-              3-30个字符，允许字母、数字、下划线、连字符和点号
-            </p>
-          </div>
-
-          <div class="space-y-2">
-            <Label class="text-sm font-medium">
-              {{ isEditMode ? '新密码 (留空保持不变)' : '密码' }}
-              <span
-                v-if="!isEditMode"
-                class="text-muted-foreground"
-              >*</span>
-            </Label>
-            <Input
-              :id="`pwd-${formNonce}`"
-              v-model="form.password"
-              type="text"
-              masked
-              autocomplete="new-password"
-              disable-autofill
-              :name="`field-${formNonce}`"
-              :required="!isEditMode"
-              minlength="6"
-              :placeholder="isEditMode ? '留空保持原密码' : getPasswordPolicyPlaceholder(passwordPolicyLevel)"
-              class="h-10"
-              :class="[
-                passwordError ? 'border-destructive' : '',
-              ]"
-            />
-            <p
-              v-if="passwordError"
-              class="text-xs text-destructive"
-            >
-              {{ passwordError }}
-            </p>
-            <p
-              v-else-if="!isEditMode"
-              class="text-xs text-muted-foreground"
-            >
-              {{ passwordHint }}
-            </p>
-          </div>
-
-          <div
-            v-if="isEditMode && form.password.length > 0"
-            class="space-y-2"
-          >
-            <Label class="text-sm font-medium">
-              确认新密码 <span class="text-muted-foreground">*</span>
-            </Label>
-            <Input
-              :id="`pwd-confirm-${formNonce}`"
-              v-model="form.confirmPassword"
-              type="text"
-              masked
-              autocomplete="new-password"
-              data-form-type="other"
-              data-lpignore="true"
-              :name="`confirm-${formNonce}`"
-              required
-              minlength="6"
-              placeholder="再次输入新密码"
-              class="h-10"
-            />
-            <p
-              v-if="
-                form.confirmPassword.length > 0 &&
-                  form.password !== form.confirmPassword
-              "
-              class="text-xs text-destructive"
-            >
-              两次输入的密码不一致
-            </p>
-          </div>
-
-          <div class="space-y-2">
-            <Label
-              for="form-email"
-              class="text-sm font-medium"
-            >邮箱</Label>
-            <Input
-              id="form-email"
-              v-model="form.email"
-              type="email"
-              autocomplete="off"
-              data-form-type="other"
-              class="h-10"
-            />
           </div>
 
           <div class="space-y-2">
@@ -180,168 +84,129 @@
               </Select>
             </div>
           </div>
-
-          <div class="space-y-2">
-            <Label class="text-sm font-medium">所属分组</Label>
-            <MultiSelect
-              v-model="form.group_ids"
-              :options="groupOptions"
-              :search-threshold="0"
-              placeholder="可选择多个分组"
-              empty-text="暂无分组"
-              no-results-text="未找到匹配的分组"
-            />
-          </div>
         </div>
 
-        <!-- 右侧：访问限制 -->
-        <div class="pl-6 space-y-4 border-l border-border">
-          <div class="flex items-center gap-2 pb-2 border-b border-border/60">
-            <span class="text-sm font-medium">访问限制</span>
-          </div>
+        <div class="space-y-2">
+          <Label
+            for="form-email"
+            class="text-sm font-medium"
+          >邮箱</Label>
+          <Input
+            id="form-email"
+            v-model="form.email"
+            type="email"
+            autocomplete="off"
+            data-form-type="other"
+            class="h-10"
+          />
+        </div>
 
-          <!-- 提供商 -->
-          <div class="space-y-2">
-            <Label class="text-sm font-medium">允许的提供商</Label>
-            <div class="grid gap-2 sm:grid-cols-[7rem_minmax(0,1fr)]">
-              <Select v-model="form.allowed_providers_mode">
-                <SelectTrigger class="h-10">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="inherit">继承</SelectItem>
-                  <SelectItem value="unrestricted">不限制</SelectItem>
-                  <SelectItem value="specific">指定列表</SelectItem>
-                  <SelectItem value="deny_all">全部禁用</SelectItem>
-                </SelectContent>
-              </Select>
-              <MultiSelect
-                v-model="form.allowed_providers"
-                :options="providerOptions"
-                :search-threshold="0"
-                :disabled="form.allowed_providers_mode !== 'specific'"
-                placeholder="未选择时表示全部禁用"
-                empty-text="暂无可用提供商"
-                no-results-text="未找到匹配的提供商"
-                search-placeholder="搜索提供商名称..."
+        <div class="space-y-2">
+          <Label class="text-sm font-medium">
+            {{ isEditMode ? '新密码 (留空保持不变)' : '密码' }}
+            <span
+              v-if="!isEditMode"
+              class="text-muted-foreground"
+            >*</span>
+          </Label>
+          <Input
+            :id="`pwd-${formNonce}`"
+            v-model="form.password"
+            type="text"
+            masked
+            autocomplete="new-password"
+            disable-autofill
+            :name="`field-${formNonce}`"
+            :required="!isEditMode"
+            minlength="6"
+            :placeholder="isEditMode ? '留空保持原密码' : getPasswordPolicyPlaceholder(passwordPolicyLevel)"
+            class="h-10"
+            :class="[
+              passwordError ? 'border-destructive' : '',
+            ]"
+          />
+          <p
+            v-if="passwordError"
+            class="text-xs text-destructive"
+          >
+            {{ passwordError }}
+          </p>
+          <p
+            v-else-if="!isEditMode"
+            class="text-xs text-muted-foreground"
+          >
+            {{ passwordHint }}
+          </p>
+        </div>
+
+        <div
+          v-if="isEditMode && form.password.length > 0"
+          class="space-y-2"
+        >
+          <Label class="text-sm font-medium">
+            确认新密码 <span class="text-muted-foreground">*</span>
+          </Label>
+          <Input
+            :id="`pwd-confirm-${formNonce}`"
+            v-model="form.confirmPassword"
+            type="text"
+            masked
+            autocomplete="new-password"
+            data-form-type="other"
+            data-lpignore="true"
+            :name="`confirm-${formNonce}`"
+            required
+            minlength="6"
+            placeholder="再次输入新密码"
+            class="h-10"
+          />
+          <p
+            v-if="
+              form.confirmPassword.length > 0 &&
+                form.password !== form.confirmPassword
+            "
+            class="text-xs text-destructive"
+          >
+            两次输入的密码不一致
+          </p>
+        </div>
+
+        <div class="space-y-2">
+          <Label class="text-sm font-medium">所属分组</Label>
+          <MultiSelect
+            v-model="form.group_ids"
+            :options="groupOptions"
+            :search-threshold="0"
+            placeholder="可选择多个分组"
+            empty-text="暂无分组"
+            no-results-text="未找到匹配的分组"
+          />
+        </div>
+
+        <div class="space-y-2">
+          <Label class="text-sm font-medium">额度</Label>
+          <div class="flex items-center gap-3">
+            <div class="flex-1 min-w-0">
+              <Input
+                v-if="!isEditMode && !form.unlimited"
+                id="form-initial-gift"
+                :model-value="form.initial_gift_usd ?? ''"
+                type="number"
+                step="0.01"
+                min="0.01"
+                placeholder="初始额度 (USD)"
+                class="h-10"
+                @update:model-value="(v) => form.initial_gift_usd = parseNumberInput(v, { allowFloat: true, min: 0.01 })"
               />
+              <span
+                v-else
+                class="flex h-10 w-full items-center rounded-lg border bg-background px-3 text-sm text-muted-foreground opacity-60"
+              >{{ form.unlimited ? '无限制' : '按钱包余额限制' }}</span>
             </div>
-          </div>
-
-          <!-- 端点 -->
-          <div class="space-y-2">
-            <Label class="text-sm font-medium">允许的端点</Label>
-            <div class="grid gap-2 sm:grid-cols-[7rem_minmax(0,1fr)]">
-              <Select v-model="form.allowed_api_formats_mode">
-                <SelectTrigger class="h-10">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="inherit">继承</SelectItem>
-                  <SelectItem value="unrestricted">不限制</SelectItem>
-                  <SelectItem value="specific">指定列表</SelectItem>
-                  <SelectItem value="deny_all">全部禁用</SelectItem>
-                </SelectContent>
-              </Select>
-              <MultiSelect
-                v-model="form.allowed_api_formats"
-                :options="apiFormatOptions"
-                :search-threshold="0"
-                :disabled="form.allowed_api_formats_mode !== 'specific'"
-                placeholder="未选择时表示全部禁用"
-                empty-text="暂无可用端点"
-                no-results-text="未找到匹配的端点"
-                search-placeholder="搜索端点..."
-              />
-            </div>
-          </div>
-
-          <!-- 模型 -->
-          <div class="space-y-2">
-            <Label class="text-sm font-medium">允许的模型</Label>
-            <div class="grid gap-2 sm:grid-cols-[7rem_minmax(0,1fr)]">
-              <Select v-model="form.allowed_models_mode">
-                <SelectTrigger class="h-10">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="inherit">继承</SelectItem>
-                  <SelectItem value="unrestricted">不限制</SelectItem>
-                  <SelectItem value="specific">指定列表</SelectItem>
-                  <SelectItem value="deny_all">全部禁用</SelectItem>
-                </SelectContent>
-              </Select>
-              <MultiSelect
-                v-model="form.allowed_models"
-                :options="modelOptions"
-                :search-threshold="0"
-                :disabled="form.allowed_models_mode !== 'specific'"
-                placeholder="未选择时表示全部禁用"
-                empty-text="暂无可用模型"
-                no-results-text="未找到匹配的模型"
-                search-placeholder="输入模型名搜索..."
-              />
-            </div>
-          </div>
-
-          <div class="space-y-2">
-            <Label
-              for="form-rate-limit"
-              class="text-sm font-medium"
-            >速率限制 (请求/分钟)</Label>
-            <div class="flex items-center gap-3">
-              <Select v-model="form.rate_limit_mode">
-                <SelectTrigger class="h-10 w-28">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="inherit">继承</SelectItem>
-                  <SelectItem value="system">系统默认</SelectItem>
-                  <SelectItem value="custom">指定数值</SelectItem>
-                </SelectContent>
-              </Select>
-              <div class="flex-1 min-w-0">
-                <Input
-                  id="form-rate-limit"
-                  :model-value="form.rate_limit ?? ''"
-                  type="number"
-                  min="0"
-                  max="10000"
-                  placeholder="0 = 不限速"
-                  class="h-10"
-                  :disabled="form.rate_limit_mode !== 'custom'"
-                  @update:model-value="(v) => form.rate_limit = parseNumberInput(v, { min: 0, max: 10000 })"
-                />
-              </div>
-            </div>
-          </div>
-
-          <!-- 额度 -->
-          <div class="space-y-2">
-            <Label class="text-sm font-medium">额度</Label>
-            <div class="flex items-center gap-3">
-              <div class="flex-1 min-w-0">
-                <Input
-                  v-if="!isEditMode && !form.unlimited"
-                  id="form-initial-gift"
-                  :model-value="form.initial_gift_usd ?? ''"
-                  type="number"
-                  step="0.01"
-                  min="0.01"
-                  placeholder="初始额度 (USD)"
-                  class="h-10"
-                  @update:model-value="(v) => form.initial_gift_usd = parseNumberInput(v, { allowFloat: true, min: 0.01 })"
-                />
-                <span
-                  v-else
-                  class="flex h-10 w-full items-center rounded-lg border bg-background px-3 text-sm text-muted-foreground opacity-60"
-                >{{ form.unlimited ? '无限制' : '按钱包余额限制' }}</span>
-              </div>
-              <Switch
-                v-model="form.unlimited"
-                class="shrink-0"
-              />
-            </div>
+            <Switch
+              v-model="form.unlimited"
+              class="shrink-0"
+            />
           </div>
         </div>
       </div>
@@ -387,7 +252,6 @@ import { MultiSelect } from '@/components/common'
 import { adminApi } from '@/api/admin'
 import { log } from '@/utils/logger'
 import { parseNumberInput } from '@/utils/form'
-import { useUserAccessControlOptions } from '@/features/users/composables/useUserAccessControlOptions'
 import {
   getPasswordPolicyHint,
   getPasswordPolicyPlaceholder,
@@ -395,7 +259,7 @@ import {
   validatePasswordByPolicy,
   type PasswordPolicyLevel,
 } from '@/utils/passwordPolicy'
-import type { ListPolicyMode, RateLimitPolicyMode, UserGroup } from '@/api/users'
+import type { UserGroup } from '@/api/users'
 
 export interface UserFormData {
   id?: string
@@ -405,14 +269,6 @@ export interface UserFormData {
   unlimited?: boolean
   role: 'admin' | 'user'
   is_active?: boolean
-  allowed_providers?: string[] | null
-  allowed_providers_mode?: ListPolicyMode
-  allowed_api_formats?: string[] | null
-  allowed_api_formats_mode?: ListPolicyMode
-  allowed_models?: string[] | null
-  allowed_models_mode?: ListPolicyMode
-  rate_limit?: number | null
-  rate_limit_mode?: RateLimitPolicyMode
   group_ids?: string[]
 }
 
@@ -432,13 +288,6 @@ const saving = ref(false)
 const formNonce = ref(createFieldNonce())
 const passwordPolicyLevel = ref<PasswordPolicyLevel>('weak')
 
-const {
-  providerOptions,
-  apiFormatOptions,
-  modelOptions,
-  loadAccessControlOptions: loadAccessControlOptionLists,
-} = useUserAccessControlOptions()
-
 // 表单数据
 const form = ref({
   username: '',
@@ -449,14 +298,6 @@ const form = ref({
   role: 'user' as 'admin' | 'user',
   unlimited: false,
   is_active: true,
-  allowed_providers_mode: 'unrestricted' as ListPolicyMode,
-  allowed_api_formats_mode: 'unrestricted' as ListPolicyMode,
-  allowed_models_mode: 'unrestricted' as ListPolicyMode,
-  rate_limit_mode: 'system' as RateLimitPolicyMode,
-  allowed_providers: [] as string[],
-  allowed_api_formats: [] as string[],
-  allowed_models: [] as string[],
-  rate_limit: undefined as number | undefined,
   group_ids: [] as string[],
 })
 
@@ -480,14 +321,6 @@ function resetForm() {
     role: 'user',
     unlimited: false,
     is_active: true,
-    allowed_providers_mode: 'unrestricted',
-    allowed_api_formats_mode: 'unrestricted',
-    allowed_models_mode: 'unrestricted',
-    rate_limit_mode: 'system',
-    allowed_providers: [],
-    allowed_api_formats: [],
-    allowed_models: [],
-    rate_limit: undefined,
     group_ids: [],
   }
 }
@@ -505,14 +338,6 @@ function loadUserData() {
     role: props.user.role,
     unlimited: props.user.unlimited ?? false,
     is_active: props.user.is_active ?? true,
-    allowed_providers_mode: props.user.allowed_providers_mode ?? (props.user.allowed_providers == null ? 'unrestricted' : 'specific'),
-    allowed_api_formats_mode: props.user.allowed_api_formats_mode ?? (props.user.allowed_api_formats == null ? 'unrestricted' : 'specific'),
-    allowed_models_mode: props.user.allowed_models_mode ?? (props.user.allowed_models == null ? 'unrestricted' : 'specific'),
-    rate_limit_mode: props.user.rate_limit_mode ?? (props.user.rate_limit == null ? 'system' : 'custom'),
-    allowed_providers: props.user.allowed_providers ? [...props.user.allowed_providers] : [],
-    allowed_api_formats: props.user.allowed_api_formats ? [...props.user.allowed_api_formats] : [],
-    allowed_models: props.user.allowed_models ? [...props.user.allowed_models] : [],
-    rate_limit: props.user.rate_limit ?? undefined,
     group_ids: props.user.group_ids ? [...props.user.group_ids] : [],
   }
 }
@@ -566,16 +391,14 @@ const isFormValid = computed(() => {
 })
 
 
-// 加载访问控制选项
-async function loadAccessControlOptions(): Promise<void> {
+async function loadPasswordPolicy(): Promise<void> {
   try {
-    const [, passwordPolicyResponse] = await Promise.all([
-      loadAccessControlOptionLists(),
-      adminApi.getSystemConfig('password_policy_level').catch(() => ({ value: 'weak' })),
-    ])
+    const passwordPolicyResponse = await adminApi
+      .getSystemConfig('password_policy_level')
+      .catch(() => ({ value: 'weak' }))
     passwordPolicyLevel.value = normalizePasswordPolicyLevel(passwordPolicyResponse.value)
   } catch (err) {
-    log.error('加载访问限制选项失败:', err)
+    log.error('加载密码策略失败:', err)
     passwordPolicyLevel.value = 'weak'
   }
 }
@@ -589,20 +412,6 @@ async function handleSubmit() {
       email: form.value.email.trim() || '',
       unlimited: form.value.unlimited,
       role: form.value.role,
-      allowed_providers: form.value.allowed_providers_mode === 'specific'
-        ? [...form.value.allowed_providers]
-        : null,
-      allowed_providers_mode: form.value.allowed_providers_mode,
-      allowed_api_formats: form.value.allowed_api_formats_mode === 'specific'
-        ? [...form.value.allowed_api_formats]
-        : null,
-      allowed_api_formats_mode: form.value.allowed_api_formats_mode,
-      allowed_models: form.value.allowed_models_mode === 'specific'
-        ? [...form.value.allowed_models]
-        : null,
-      allowed_models_mode: form.value.allowed_models_mode,
-      rate_limit: form.value.rate_limit_mode === 'custom' ? (form.value.rate_limit ?? 0) : null,
-      rate_limit_mode: form.value.rate_limit_mode,
       group_ids: [...form.value.group_ids],
     }
 
@@ -638,7 +447,7 @@ function setSaving(value: boolean) {
 // 监听打开状态，加载选项数据
 watch(isOpen, (val) => {
   if (val) {
-    loadAccessControlOptions()
+    loadPasswordPolicy()
   }
 })
 

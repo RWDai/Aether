@@ -248,7 +248,12 @@ pub(in super::super) async fn build_admin_update_user_response(
         None
     };
     let group_ids = if field_presence.contains("group_ids") {
-        Some(normalize_admin_user_group_ids(payload.group_ids))
+        let requested_group_ids = normalize_admin_user_group_ids(payload.group_ids);
+        Some(
+            state
+                .include_default_user_group_ids(&requested_group_ids)
+                .await?,
+        )
     } else {
         None
     };
@@ -292,29 +297,6 @@ pub(in super::super) async fn build_admin_update_user_response(
     if email.is_some() || username.is_some() {
         if state
             .update_local_auth_user_profile(&user_id, email.clone(), username.clone())
-            .await?
-            .is_none()
-        {
-            return Ok((
-                http::StatusCode::NOT_FOUND,
-                Json(json!({ "detail": "用户不存在" })),
-            )
-                .into_response());
-        }
-    }
-    if allowed_providers_mode.is_some()
-        || allowed_api_formats_mode.is_some()
-        || allowed_models_mode.is_some()
-        || rate_limit_mode.is_some()
-    {
-        if state
-            .update_local_auth_user_policy_modes(
-                &user_id,
-                allowed_providers_mode,
-                allowed_api_formats_mode,
-                allowed_models_mode,
-                rate_limit_mode,
-            )
             .await?
             .is_none()
         {
@@ -383,6 +365,29 @@ pub(in super::super) async fn build_admin_update_user_response(
                 field_presence.contains("rate_limit"),
                 payload.rate_limit,
                 payload.is_active,
+            )
+            .await?
+            .is_none()
+        {
+            return Ok((
+                http::StatusCode::NOT_FOUND,
+                Json(json!({ "detail": "用户不存在" })),
+            )
+                .into_response());
+        }
+    }
+    if allowed_providers_mode.is_some()
+        || allowed_api_formats_mode.is_some()
+        || allowed_models_mode.is_some()
+        || rate_limit_mode.is_some()
+    {
+        if state
+            .update_local_auth_user_policy_modes(
+                &user_id,
+                allowed_providers_mode,
+                allowed_api_formats_mode,
+                allowed_models_mode,
+                rate_limit_mode,
             )
             .await?
             .is_none()

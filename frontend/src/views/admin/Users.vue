@@ -1552,6 +1552,10 @@ function formatUserEffectiveRateLimitSource(user: User): string {
   if (source.source === 'group' && source.group_name) {
     return `继承自分组：${source.group_name}`
   }
+  if (source.source === 'combined') {
+    const groupNames = Array.isArray(source.group_names) ? source.group_names.join('、') : ''
+    return groupNames ? `用户额外限制与分组叠加：${groupNames}` : '用户额外限制与分组叠加'
+  }
   if (source.source === 'user') {
     return '用户单独配置'
   }
@@ -1596,14 +1600,6 @@ function editUser(user: User) {
     unlimited: user.unlimited,
     role: user.role,
     is_active: user.is_active,
-    allowed_providers: user.allowed_providers == null ? null : [...user.allowed_providers],
-    allowed_api_formats: user.allowed_api_formats == null ? null : [...user.allowed_api_formats],
-    allowed_models: user.allowed_models == null ? null : [...user.allowed_models],
-    rate_limit: user.rate_limit ?? null,
-    allowed_providers_mode: user.allowed_providers_mode ?? (user.allowed_providers == null ? 'unrestricted' : 'specific'),
-    allowed_api_formats_mode: user.allowed_api_formats_mode ?? (user.allowed_api_formats == null ? 'unrestricted' : 'specific'),
-    allowed_models_mode: user.allowed_models_mode ?? (user.allowed_models == null ? 'unrestricted' : 'specific'),
-    rate_limit_mode: user.rate_limit_mode ?? (user.rate_limit == null ? 'system' : 'custom'),
     group_ids: (user.groups || []).map(group => group.id),
   }
   showUserFormDialog.value = true
@@ -1624,14 +1620,6 @@ async function handleUserFormSubmit(data: UserFormData & { password?: string; un
         email: data.email || undefined,
         unlimited: data.unlimited,
         role: data.role,
-        allowed_providers: data.allowed_providers,
-        allowed_providers_mode: data.allowed_providers_mode,
-        allowed_api_formats: data.allowed_api_formats,
-        allowed_api_formats_mode: data.allowed_api_formats_mode,
-        allowed_models: data.allowed_models,
-        allowed_models_mode: data.allowed_models_mode,
-        rate_limit: data.rate_limit ?? null,
-        rate_limit_mode: data.rate_limit_mode,
         group_ids: data.group_ids ?? [],
       }
       if (data.password) {
@@ -1649,14 +1637,6 @@ async function handleUserFormSubmit(data: UserFormData & { password?: string; un
         initial_gift_usd: data.initial_gift_usd,
         unlimited: data.unlimited,
         role: data.role,
-        allowed_providers: data.allowed_providers,
-        allowed_providers_mode: data.allowed_providers_mode,
-        allowed_api_formats: data.allowed_api_formats,
-        allowed_api_formats_mode: data.allowed_api_formats_mode,
-        allowed_models: data.allowed_models,
-        allowed_models_mode: data.allowed_models_mode,
-        rate_limit: data.rate_limit ?? null,
-        rate_limit_mode: data.rate_limit_mode,
         group_ids: data.group_ids ?? [],
       })
       // 如果创建时指定为禁用，则更新状态

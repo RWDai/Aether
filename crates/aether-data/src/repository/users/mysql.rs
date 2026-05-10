@@ -370,7 +370,7 @@ WHERE is_deleted = 0
 
     async fn list_user_groups(&self) -> Result<Vec<StoredUserGroup>, DataLayerError> {
         let mut builder = QueryBuilder::<MySql>::new(USER_GROUP_COLUMNS);
-        builder.push(" ORDER BY priority DESC, name ASC, id ASC");
+        builder.push(" ORDER BY name ASC, id ASC");
         self.fetch_group_rows(builder).await
     }
 
@@ -401,7 +401,7 @@ WHERE is_deleted = 0
                 separated.push_bind(group_id);
             }
         }
-        builder.push(") ORDER BY priority DESC, name ASC, id ASC");
+        builder.push(") ORDER BY name ASC, id ASC");
         self.fetch_group_rows(builder).await
     }
 
@@ -568,7 +568,7 @@ WHERE id = ?
         builder
             .push(" WHERE id IN (SELECT group_id FROM user_group_members WHERE user_id = ")
             .push_bind(user_id)
-            .push(") ORDER BY priority DESC, name ASC, id ASC");
+            .push(") ORDER BY name ASC, id ASC");
         self.fetch_group_rows(builder).await
     }
 
@@ -598,7 +598,9 @@ WHERE user_group_members.user_id IN (
                 separated.push_bind(user_id);
             }
         }
-        builder.push(") ORDER BY user_group_members.user_id ASC, user_groups.priority DESC, user_groups.name ASC, user_groups.id ASC");
+        builder.push(
+            ") ORDER BY user_group_members.user_id ASC, user_groups.name ASC, user_groups.id ASC",
+        );
         let rows = builder.build().fetch_all(&self.pool).await.map_sql_err()?;
         rows.iter().map(map_user_group_membership_row).collect()
     }

@@ -145,6 +145,31 @@ impl<'a> AdminAppState<'a> {
             .await
     }
 
+    pub(crate) async fn include_default_user_group_ids(
+        &self,
+        group_ids: &[String],
+    ) -> Result<Vec<String>, GatewayError> {
+        self.app.include_default_user_group_ids(group_ids).await
+    }
+
+    pub(crate) async fn effective_default_user_group_id(
+        &self,
+    ) -> Result<Option<String>, GatewayError> {
+        self.app.effective_default_user_group_id().await
+    }
+
+    pub(crate) async fn add_user_to_group(
+        &self,
+        group_id: &str,
+        user_id: &str,
+    ) -> Result<bool, GatewayError> {
+        self.app.add_user_to_group(group_id, user_id).await
+    }
+
+    pub(crate) async fn add_all_users_to_group(&self, group_id: &str) -> Result<(), GatewayError> {
+        self.app.add_all_users_to_group(group_id).await
+    }
+
     pub(crate) async fn is_other_user_auth_email_taken(
         &self,
         email: &str,

@@ -3,6 +3,7 @@ use super::{
     format_optional_datetime_iso8601, normalize_admin_user_api_formats,
     normalize_admin_user_string_list,
 };
+use crate::constants::DEFAULT_USER_GROUP_CONFIG_KEY;
 use crate::handlers::admin::request::{AdminAppState, AdminRequestContext};
 use crate::handlers::admin::shared::attach_admin_audit_response;
 use crate::GatewayError;
@@ -14,15 +15,11 @@ use axum::{
 };
 use serde_json::json;
 
-const DEFAULT_USER_GROUP_CONFIG_KEY: &str = "default_user_group_id";
-
 #[derive(Debug, serde::Deserialize)]
 struct AdminUserGroupPayload {
     name: String,
     #[serde(default)]
     description: Option<String>,
-    #[serde(default)]
-    priority: Option<i32>,
     #[serde(default)]
     allowed_providers: Option<Vec<String>>,
     #[serde(default = "default_list_mode")]
@@ -121,6 +118,11 @@ pub(in super::super) async fn build_admin_update_user_group_response(
         Ok(value) => value,
         Err(detail) => return Ok(bad_request_owned(detail)),
     };
+    if read_default_user_group_id(state).await?.as_deref() == Some(group_id.as_str())
+        && !is_unrestricted_default_group_record(&record)
+    {
+        return Ok(bad_request_owned("默认用户组不能配置访问限制".to_string()));
+    }
     let group = match state.update_user_group(&group_id, record).await {
         Ok(Some(group)) => group,
         Ok(None) => return Ok(not_found("用户分组不存在")),
@@ -152,9 +154,7 @@ pub(in super::super) async fn build_admin_delete_user_group_response(
         return Ok(build_admin_users_bad_request_response("缺少 group_id"));
     };
     if read_default_user_group_id(state).await?.as_deref() == Some(group_id.as_str()) {
-        state
-            .delete_system_config_value(DEFAULT_USER_GROUP_CONFIG_KEY)
-            .await?;
+        return Ok(bad_request_owned("默认用户组不能删除".to_string()));
     }
     if !state.delete_user_group(&group_id).await? {
         return Ok(not_found("用户分组不存在"));
@@ -214,6 +214,9 @@ pub(in super::super) async fn build_admin_replace_user_group_members_response(
     if state.find_user_group_by_id(&group_id).await?.is_none() {
         return Ok(not_found("用户分组不存在"));
     }
+    if read_default_user_group_id(state).await?.as_deref() == Some(group_id.as_str()) {
+        return Ok(bad_request_owned("默认用户组成员由系统维护".to_string()));
+    }
     let payload = match parse_members_payload(request_body) {
         Ok(value) => value,
         Err(detail) => return Ok(bad_request_owned(detail)),
@@ -272,8 +275,11 @@ pub(in super::super) async fn build_admin_set_default_user_group_response(
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
     if let Some(group_id) = group_id.as_deref() {
-        if state.find_user_group_by_id(group_id).await?.is_none() {
+        let Some(group) = state.find_user_group_by_id(group_id).await? else {
             return Ok(bad_request_owned("默认用户组不存在".to_string()));
+        };
+        if !is_unrestricted_default_group(&group) {
+            return Ok(bad_request_owned("默认用户组不能配置访问限制".to_string()));
         }
         state
             .upsert_system_config_json_value(
@@ -287,18 +293,23 @@ pub(in super::super) async fn build_admin_set_default_user_group_response(
             .delete_system_config_value(DEFAULT_USER_GROUP_CONFIG_KEY)
             .await?;
     }
-    Ok(Json(json!({ "default_group_id": group_id })).into_response())
+    let effective_group_id = read_default_user_group_id(state).await?;
+    if let Some(group_id) = effective_group_id.as_deref() {
+        state.add_all_users_to_group(group_id).await?;
+    }
+    Ok(attach_admin_audit_response(
+        Json(json!({ "default_group_id": effective_group_id })).into_response(),
+        "admin_default_user_group_set",
+        "set_default_user_group",
+        "user_group",
+        group_id.as_deref().unwrap_or("default_user_group"),
+    ))
 }
 
 pub(crate) async fn read_default_user_group_id(
     state: &AdminAppState<'_>,
 ) -> Result<Option<String>, GatewayError> {
-    Ok(state
-        .read_system_config_json_value(DEFAULT_USER_GROUP_CONFIG_KEY)
-        .await?
-        .and_then(|value| value.as_str().map(str::to_string))
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty()))
+    state.effective_default_user_group_id().await
 }
 
 fn parse_group_record(
@@ -327,7 +338,7 @@ fn parse_group_record(
             .description
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty()),
-        priority: payload.priority.unwrap_or_default(),
+        priority: 0,
         allowed_providers,
         allowed_providers_mode: normalize_list_mode(&payload.allowed_providers_mode)?,
         allowed_api_formats,
@@ -358,7 +369,6 @@ fn user_group_payload(
         "name": group.name,
         "normalized_name": group.normalized_name,
         "description": group.description,
-        "priority": group.priority,
         "allowed_providers": group.allowed_providers,
         "allowed_providers_mode": group.allowed_providers_mode,
         "allowed_api_formats": group.allowed_api_formats,
@@ -405,6 +415,30 @@ fn normalize_ids(values: Vec<String>) -> Vec<String> {
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
         .collect()
+}
+
+fn is_unrestricted_default_group(group: &aether_data::repository::users::StoredUserGroup) -> bool {
+    list_mode_has_no_restriction(&group.allowed_providers_mode)
+        && list_mode_has_no_restriction(&group.allowed_api_formats_mode)
+        && list_mode_has_no_restriction(&group.allowed_models_mode)
+        && rate_mode_has_no_restriction(&group.rate_limit_mode)
+}
+
+fn is_unrestricted_default_group_record(
+    record: &aether_data::repository::users::UpsertUserGroupRecord,
+) -> bool {
+    list_mode_has_no_restriction(&record.allowed_providers_mode)
+        && list_mode_has_no_restriction(&record.allowed_api_formats_mode)
+        && list_mode_has_no_restriction(&record.allowed_models_mode)
+        && rate_mode_has_no_restriction(&record.rate_limit_mode)
+}
+
+fn list_mode_has_no_restriction(mode: &str) -> bool {
+    matches!(mode, "inherit" | "unrestricted")
+}
+
+fn rate_mode_has_no_restriction(mode: &str) -> bool {
+    matches!(mode, "inherit" | "system")
 }
 
 fn user_group_id_from_path(request_path: &str) -> Option<String> {

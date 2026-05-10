@@ -356,6 +356,41 @@ fn memory_group_members(
         .collect()
 }
 
+fn memory_export_row_from_auth_user(
+    repository: &InMemoryUserReadRepository,
+    user: &StoredUserAuthRecord,
+) -> Result<StoredUserExportRow, DataLayerError> {
+    let model_capability_settings = repository
+        .model_settings_by_user_id
+        .read()
+        .expect("user repository lock")
+        .get(&user.id)
+        .cloned();
+    StoredUserExportRow::new(
+        user.id.clone(),
+        user.email.clone(),
+        user.email_verified,
+        user.username.clone(),
+        user.password_hash.clone(),
+        user.role.clone(),
+        user.auth_source.clone(),
+        user.allowed_providers.clone().map(serde_json::Value::from),
+        user.allowed_api_formats
+            .clone()
+            .map(serde_json::Value::from),
+        user.allowed_models.clone().map(serde_json::Value::from),
+        None,
+        model_capability_settings,
+        user.is_active,
+    )?
+    .with_policy_modes(
+        user.allowed_providers_mode.clone(),
+        user.allowed_api_formats_mode.clone(),
+        user.allowed_models_mode.clone(),
+        "system".to_string(),
+    )
+}
+
 #[async_trait]
 impl UserReadRepository for InMemoryUserReadRepository {
     async fn list_users_by_ids(
@@ -395,22 +430,36 @@ impl UserReadRepository for InMemoryUserReadRepository {
     async fn list_non_admin_export_users(
         &self,
     ) -> Result<Vec<StoredUserExportRow>, DataLayerError> {
+        let rows = self.export_rows.read().expect("user repository lock");
+        if !rows.is_empty() {
+            return Ok(rows
+                .iter()
+                .filter(|row| !row.role.eq_ignore_ascii_case("admin"))
+                .cloned()
+                .collect());
+        }
         Ok(self
-            .export_rows
+            .auth_by_id
             .read()
             .expect("user repository lock")
             .iter()
-            .filter(|row| !row.role.eq_ignore_ascii_case("admin"))
-            .cloned()
-            .collect())
+            .filter(|(_, user)| !user.role.eq_ignore_ascii_case("admin"))
+            .map(|(_, user)| memory_export_row_from_auth_user(self, user))
+            .collect::<Result<Vec<_>, _>>()?)
     }
 
     async fn list_export_users(&self) -> Result<Vec<StoredUserExportRow>, DataLayerError> {
+        let rows = self.export_rows.read().expect("user repository lock");
+        if !rows.is_empty() {
+            return Ok(rows.clone());
+        }
         Ok(self
-            .export_rows
+            .auth_by_id
             .read()
             .expect("user repository lock")
-            .clone())
+            .values()
+            .map(|user| memory_export_row_from_auth_user(self, user))
+            .collect::<Result<Vec<_>, _>>()?)
     }
 
     async fn list_export_users_page(
@@ -500,10 +549,8 @@ impl UserReadRepository for InMemoryUserReadRepository {
             .cloned()
             .collect::<Vec<_>>();
         groups.sort_by(|left, right| {
-            right
-                .priority
-                .cmp(&left.priority)
-                .then_with(|| left.name.cmp(&right.name))
+            left.name
+                .cmp(&right.name)
                 .then_with(|| left.id.cmp(&right.id))
         });
         Ok(groups)
@@ -687,7 +734,6 @@ impl UserReadRepository for InMemoryUserReadRepository {
         memberships.sort_by(|left, right| {
             left.user_id
                 .cmp(&right.user_id)
-                .then_with(|| right.group_priority.cmp(&left.group_priority))
                 .then_with(|| left.group_name.cmp(&right.group_name))
                 .then_with(|| left.group_id.cmp(&right.group_id))
         });

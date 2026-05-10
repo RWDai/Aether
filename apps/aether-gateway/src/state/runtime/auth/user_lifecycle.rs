@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::constants::{BUILTIN_DEFAULT_USER_GROUP_ID, DEFAULT_USER_GROUP_CONFIG_KEY};
 use crate::{AppState, GatewayError};
 
 impl AppState {
@@ -7,24 +8,69 @@ impl AppState {
         &self,
         user_id: &str,
     ) -> Result<(), GatewayError> {
-        let group_id = self
-            .read_system_config_json_value("default_user_group_id")
-            .await?
-            .and_then(|value| value.as_str().map(str::to_string))
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty());
+        let group_id = self.effective_default_user_group_id().await?;
         let Some(group_id) = group_id else {
             return Ok(());
         };
-        if self.find_user_group_by_id(&group_id).await?.is_none() {
-            return Err(GatewayError::Internal(format!(
-                "default_user_group_id points to missing group: {group_id}"
-            )));
-        }
         if !self.add_user_to_group(&group_id, user_id).await? {
             return Err(GatewayError::Internal(format!(
                 "failed to add user {user_id} to default group {group_id}"
             )));
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn configured_default_user_group_id(
+        &self,
+    ) -> Result<Option<String>, GatewayError> {
+        Ok(self
+            .read_system_config_json_value(DEFAULT_USER_GROUP_CONFIG_KEY)
+            .await?
+            .and_then(|value| value.as_str().map(str::to_string))
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()))
+    }
+
+    pub(crate) async fn effective_default_user_group_id(
+        &self,
+    ) -> Result<Option<String>, GatewayError> {
+        if let Some(group_id) = self.configured_default_user_group_id().await? {
+            if self.find_user_group_by_id(&group_id).await?.is_none() {
+                return Err(GatewayError::Internal(format!(
+                    "{DEFAULT_USER_GROUP_CONFIG_KEY} points to missing group: {group_id}"
+                )));
+            }
+            return Ok(Some(group_id));
+        }
+        if self
+            .find_user_group_by_id(BUILTIN_DEFAULT_USER_GROUP_ID)
+            .await?
+            .is_some()
+        {
+            return Ok(Some(BUILTIN_DEFAULT_USER_GROUP_ID.to_string()));
+        }
+        Ok(None)
+    }
+
+    pub(crate) async fn include_default_user_group_ids(
+        &self,
+        group_ids: &[String],
+    ) -> Result<Vec<String>, GatewayError> {
+        let mut group_ids = group_ids
+            .iter()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .collect::<BTreeSet<_>>();
+        if let Some(default_group_id) = self.effective_default_user_group_id().await? {
+            group_ids.insert(default_group_id);
+        }
+        Ok(group_ids.into_iter().collect())
+    }
+
+    pub(crate) async fn add_all_users_to_group(&self, group_id: &str) -> Result<(), GatewayError> {
+        for user in self.list_export_users().await? {
+            self.add_user_to_group(group_id, &user.id).await?;
         }
         Ok(())
     }

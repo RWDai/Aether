@@ -9,7 +9,6 @@ export type RateLimitPolicyMode = 'inherit' | 'system' | 'custom'
 export interface UserGroupSummary {
   id: string
   name: string
-  priority: number
 }
 
 export interface EffectivePolicyField<T> {
@@ -18,6 +17,8 @@ export interface EffectivePolicyField<T> {
   source: 'user' | 'group' | 'fallback' | string
   group_id?: string | null
   group_name?: string | null
+  group_ids?: string[]
+  group_names?: string[]
 }
 
 export interface UserEffectivePolicy {
@@ -58,14 +59,6 @@ export interface CreateUserRequest {
   role?: UserRole
   initial_gift_usd?: number | null
   unlimited?: boolean
-  allowed_providers?: string[] | null
-  allowed_providers_mode?: ListPolicyMode
-  allowed_api_formats?: string[] | null
-  allowed_api_formats_mode?: ListPolicyMode
-  allowed_models?: string[] | null
-  allowed_models_mode?: ListPolicyMode
-  rate_limit?: number | null
-  rate_limit_mode?: RateLimitPolicyMode
   group_ids?: string[]
 }
 
@@ -75,14 +68,6 @@ export interface UpdateUserRequest {
   role?: UserRole
   unlimited?: boolean
   password?: string
-  allowed_providers?: string[] | null
-  allowed_providers_mode?: ListPolicyMode
-  allowed_api_formats?: string[] | null
-  allowed_api_formats_mode?: ListPolicyMode
-  allowed_models?: string[] | null
-  allowed_models_mode?: ListPolicyMode
-  rate_limit?: number | null
-  rate_limit_mode?: RateLimitPolicyMode
   group_ids?: string[]
 }
 
@@ -121,10 +106,6 @@ export interface ResolveUserBatchSelectionResponse {
 }
 
 export interface UserBatchAccessControlPayload {
-  allowed_providers?: string[] | null
-  allowed_api_formats?: string[] | null
-  allowed_models?: string[] | null
-  rate_limit?: number | null
   unlimited?: boolean
 }
 
@@ -179,7 +160,6 @@ export interface UserGroup {
   name: string
   normalized_name?: string
   description?: string | null
-  priority: number
   allowed_providers?: string[] | null
   allowed_providers_mode: ListPolicyMode
   allowed_api_formats?: string[] | null
@@ -196,7 +176,6 @@ export interface UserGroup {
 export interface UpsertUserGroupRequest {
   name: string
   description?: string | null
-  priority?: number
   allowed_providers?: string[] | null
   allowed_providers_mode?: ListPolicyMode
   allowed_api_formats?: string[] | null

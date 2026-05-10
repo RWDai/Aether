@@ -684,7 +684,7 @@ impl SqlxUserReadRepository {
 
     pub async fn list_user_groups(&self) -> Result<Vec<StoredUserGroup>, DataLayerError> {
         let mut builder = QueryBuilder::<Postgres>::new(USER_GROUP_COLUMNS);
-        builder.push(" ORDER BY priority DESC, name ASC, id ASC");
+        builder.push(" ORDER BY name ASC, id ASC");
         collect_query_rows(builder.build().fetch(&self.pool), map_user_group_row).await
     }
 
@@ -720,7 +720,7 @@ impl SqlxUserReadRepository {
                 separated.push_bind(group_id);
             }
         }
-        builder.push(") ORDER BY priority DESC, name ASC, id ASC");
+        builder.push(") ORDER BY name ASC, id ASC");
         collect_query_rows(builder.build().fetch(&self.pool), map_user_group_row).await
     }
 
@@ -872,7 +872,7 @@ WHERE id = $1
         builder
             .push(" WHERE id IN (SELECT group_id FROM user_group_members WHERE user_id = ")
             .push_bind(user_id)
-            .push(") ORDER BY priority DESC, name ASC, id ASC");
+            .push(") ORDER BY name ASC, id ASC");
         collect_query_rows(builder.build().fetch(&self.pool), map_user_group_row).await
     }
 
@@ -902,7 +902,9 @@ WHERE user_group_members.user_id IN (
                 separated.push_bind(user_id);
             }
         }
-        builder.push(") ORDER BY user_group_members.user_id ASC, user_groups.priority DESC, user_groups.name ASC, user_groups.id ASC");
+        builder.push(
+            ") ORDER BY user_group_members.user_id ASC, user_groups.name ASC, user_groups.id ASC",
+        );
         collect_query_rows(
             builder.build().fetch(&self.pool),
             map_user_group_membership_row,

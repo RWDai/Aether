@@ -190,7 +190,10 @@ pub(in super::super) async fn build_admin_create_user_response(
         },
         None => legacy_admin_rate_limit_policy_mode(payload.rate_limit),
     };
-    let group_ids = normalize_admin_user_group_ids(payload.group_ids);
+    let requested_group_ids = normalize_admin_user_group_ids(payload.group_ids);
+    let group_ids = state
+        .include_default_user_group_ids(&requested_group_ids)
+        .await?;
     let groups = if group_ids.is_empty() {
         Vec::new()
     } else {

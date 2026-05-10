@@ -58,3 +58,42 @@ CREATE INDEX IF NOT EXISTS user_group_members_user_id_idx
 
 CREATE INDEX IF NOT EXISTS user_groups_priority_name_idx
     ON public.user_groups (priority DESC, name ASC, id ASC);
+
+INSERT INTO public.user_groups (
+    id,
+    name,
+    normalized_name,
+    description,
+    priority,
+    allowed_providers_mode,
+    allowed_api_formats_mode,
+    allowed_models_mode,
+    rate_limit_mode
+)
+VALUES (
+    '00000000-0000-0000-0000-000000000001',
+    'Default',
+    'default',
+    'Default unrestricted group for all users',
+    0,
+    'unrestricted',
+    'unrestricted',
+    'unrestricted',
+    'system'
+)
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO public.system_configs (id, key, value, description)
+VALUES (
+    '00000000-0000-0000-0000-000000000002',
+    'default_user_group_id',
+    '"00000000-0000-0000-0000-000000000001"'::json,
+    'Default unrestricted user group'
+)
+ON CONFLICT (key) DO NOTHING;
+
+INSERT INTO public.user_group_members (group_id, user_id)
+SELECT '00000000-0000-0000-0000-000000000001', id
+FROM public.users
+WHERE is_deleted IS FALSE
+ON CONFLICT (group_id, user_id) DO NOTHING;

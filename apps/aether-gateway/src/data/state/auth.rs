@@ -1663,14 +1663,12 @@ impl GatewayDataState {
             .list_user_groups_for_user(&snapshot.user_id)
             .await?;
         groups.sort_by(|left, right| {
-            right
-                .priority
-                .cmp(&left.priority)
-                .then_with(|| left.name.cmp(&right.name))
+            left.name
+                .cmp(&right.name)
                 .then_with(|| left.id.cmp(&right.id))
         });
 
-        let allowed_providers = resolve_effective_list_policy(
+        let mut allowed_providers = resolve_effective_list_policy(
             user.allowed_providers,
             &user.allowed_providers_mode,
             &groups,
@@ -1681,7 +1679,7 @@ impl GatewayDataState {
                 )
             },
         );
-        let allowed_api_formats = resolve_effective_list_policy(
+        let mut allowed_api_formats = resolve_effective_list_policy(
             user.allowed_api_formats,
             &user.allowed_api_formats_mode,
             &groups,
@@ -1692,7 +1690,7 @@ impl GatewayDataState {
                 )
             },
         );
-        let allowed_models = resolve_effective_list_policy(
+        let mut allowed_models = resolve_effective_list_policy(
             user.allowed_models,
             &user.allowed_models_mode,
             &groups,
@@ -1717,6 +1715,20 @@ impl GatewayDataState {
             user_rate_limit_mode,
             &groups,
         );
+        if !snapshot.api_key_is_standalone {
+            constrain_api_key_list_policy_to_user_policy(
+                &mut allowed_providers,
+                &mut snapshot.api_key_allowed_providers,
+            );
+            constrain_api_key_list_policy_to_user_policy(
+                &mut allowed_api_formats,
+                &mut snapshot.api_key_allowed_api_formats,
+            );
+            constrain_api_key_list_policy_to_user_policy(
+                &mut allowed_models,
+                &mut snapshot.api_key_allowed_models,
+            );
+        }
         snapshot.apply_user_policy(
             allowed_providers,
             allowed_api_formats,
@@ -1735,33 +1747,19 @@ fn resolve_effective_list_policy(
         &aether_data::repository::users::StoredUserGroup,
     ) -> (&str, Option<Vec<String>>),
 ) -> Option<Vec<String>> {
-    match user_mode {
-        "unrestricted" => None,
-        "specific" => Some(user_values.unwrap_or_default()),
+    let group_policy = groups.iter().fold(None, |effective, group| {
+        let (mode, values) = group_field(group);
+        intersect_list_policies(effective, list_restriction_from_mode(mode, values))
+    });
+    let user_policy = list_restriction_from_mode(user_mode, user_values);
+    intersect_list_policies(group_policy, user_policy)
+}
+
+fn list_restriction_from_mode(mode: &str, values: Option<Vec<String>>) -> Option<Vec<String>> {
+    match mode {
+        "specific" => Some(values.unwrap_or_default()),
         "deny_all" => Some(Vec::new()),
-        "inherit" => groups
-            .iter()
-            .find_map(|group| {
-                let (mode, values) = group_field(group);
-                match mode {
-                    "unrestricted" => Some(None),
-                    "specific" => Some(Some(values.unwrap_or_default())),
-                    "deny_all" => Some(Some(Vec::new())),
-                    _ => None,
-                }
-            })
-            .flatten_or_unrestricted(),
         _ => None,
-    }
-}
-
-trait FlattenPolicyOption<T> {
-    fn flatten_or_unrestricted(self) -> Option<T>;
-}
-
-impl<T> FlattenPolicyOption<T> for Option<Option<T>> {
-    fn flatten_or_unrestricted(self) -> Option<T> {
-        self.unwrap_or_default()
     }
 }
 
@@ -1770,29 +1768,114 @@ fn resolve_effective_rate_limit_policy(
     user_mode: &str,
     groups: &[aether_data::repository::users::StoredUserGroup],
 ) -> Option<i32> {
-    match user_mode {
-        "custom" => Some(user_rate_limit.unwrap_or(0)),
-        "system" => None,
-        "inherit" => groups
-            .iter()
-            .find_map(|group| match group.rate_limit_mode.as_str() {
-                "custom" => Some(Some(group.rate_limit.unwrap_or(0))),
-                "system" => Some(None),
-                _ => None,
-            })
-            .flatten_or_unrestricted(),
+    let group_policy = groups.iter().fold(None, |effective, group| {
+        intersect_rate_limit_policies(
+            effective,
+            rate_limit_restriction_from_mode(&group.rate_limit_mode, group.rate_limit),
+        )
+    });
+    let user_policy = rate_limit_restriction_from_mode(user_mode, user_rate_limit);
+    rate_limit_policy_value(intersect_rate_limit_policies(group_policy, user_policy))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RateLimitRestriction {
+    Unlimited,
+    Limited(i32),
+}
+
+fn rate_limit_restriction_from_mode(
+    mode: &str,
+    rate_limit: Option<i32>,
+) -> Option<RateLimitRestriction> {
+    match mode {
+        "custom" => {
+            let rate_limit = rate_limit.unwrap_or(0).max(0);
+            if rate_limit == 0 {
+                Some(RateLimitRestriction::Unlimited)
+            } else {
+                Some(RateLimitRestriction::Limited(rate_limit))
+            }
+        }
         _ => None,
     }
+}
+
+fn intersect_list_policies(
+    left: Option<Vec<String>>,
+    right: Option<Vec<String>>,
+) -> Option<Vec<String>> {
+    match (left, right) {
+        (None, None) => None,
+        (Some(values), None) | (None, Some(values)) => Some(values),
+        (Some(left_values), Some(right_values)) => {
+            let right_values = right_values
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>();
+            Some(
+                left_values
+                    .into_iter()
+                    .filter(|value| right_values.contains(value))
+                    .collect(),
+            )
+        }
+    }
+}
+
+fn intersect_rate_limit_policies(
+    left: Option<RateLimitRestriction>,
+    right: Option<RateLimitRestriction>,
+) -> Option<RateLimitRestriction> {
+    match (left, right) {
+        (None, None) => None,
+        (Some(value), None) | (None, Some(value)) => Some(value),
+        (Some(RateLimitRestriction::Unlimited), Some(RateLimitRestriction::Unlimited)) => {
+            Some(RateLimitRestriction::Unlimited)
+        }
+        (Some(RateLimitRestriction::Limited(value)), Some(RateLimitRestriction::Unlimited))
+        | (Some(RateLimitRestriction::Unlimited), Some(RateLimitRestriction::Limited(value))) => {
+            Some(RateLimitRestriction::Limited(value))
+        }
+        (Some(RateLimitRestriction::Limited(left)), Some(RateLimitRestriction::Limited(right))) => {
+            Some(RateLimitRestriction::Limited(left.min(right)))
+        }
+    }
+}
+
+fn rate_limit_policy_value(policy: Option<RateLimitRestriction>) -> Option<i32> {
+    match policy {
+        None => None,
+        Some(RateLimitRestriction::Unlimited) => Some(0),
+        Some(RateLimitRestriction::Limited(value)) => Some(value),
+    }
+}
+
+fn constrain_api_key_list_policy_to_user_policy(
+    user_policy: &mut Option<Vec<String>>,
+    api_key_policy: &mut Option<Vec<String>>,
+) {
+    let Some(api_key_values) = api_key_policy.as_ref().filter(|values| !values.is_empty()) else {
+        return;
+    };
+    let Some(user_values) = user_policy.clone() else {
+        return;
+    };
+    let effective = intersect_list_policies(Some(api_key_values.to_vec()), Some(user_values))
+        .unwrap_or_default();
+    *user_policy = Some(effective.clone());
+    *api_key_policy = Some(effective);
 }
 
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
+    use super::*;
     use aether_data::repository::auth::{
         InMemoryAuthApiKeySnapshotRepository, StoredAuthApiKeyExportRecord,
         StoredAuthApiKeySnapshot,
     };
+    use aether_data::repository::users::StoredUserGroup;
 
     use crate::data::GatewayDataState;
 
@@ -1821,6 +1904,125 @@ mod tests {
             Some(serde_json::json!(["gpt-5"])),
         )
         .expect("snapshot should build")
+    }
+
+    fn sample_group(
+        id: &str,
+        priority: i32,
+        allowed_models: Option<Vec<&str>>,
+        allowed_models_mode: &str,
+        rate_limit: Option<i32>,
+        rate_limit_mode: &str,
+    ) -> StoredUserGroup {
+        StoredUserGroup {
+            id: id.to_string(),
+            name: id.to_string(),
+            normalized_name: id.to_string(),
+            description: None,
+            priority,
+            allowed_providers: None,
+            allowed_providers_mode: "unrestricted".to_string(),
+            allowed_api_formats: None,
+            allowed_api_formats_mode: "unrestricted".to_string(),
+            allowed_models: allowed_models.map(|values| {
+                values
+                    .into_iter()
+                    .map(ToOwned::to_owned)
+                    .collect::<Vec<_>>()
+            }),
+            allowed_models_mode: allowed_models_mode.to_string(),
+            rate_limit,
+            rate_limit_mode: rate_limit_mode.to_string(),
+            created_at: None,
+            updated_at: None,
+        }
+    }
+
+    #[test]
+    fn list_policy_intersects_group_and_user_restrictions() {
+        let groups = vec![
+            sample_group("default", 0, None, "unrestricted", None, "system"),
+            sample_group(
+                "restricted",
+                10,
+                Some(vec!["gpt-5", "gpt-4.1"]),
+                "specific",
+                None,
+                "system",
+            ),
+        ];
+
+        let policy = resolve_effective_list_policy(
+            Some(vec!["gpt-4.1".to_string(), "gemini-2.5-pro".to_string()]),
+            "specific",
+            &groups,
+            |group| (&group.allowed_models_mode, group.allowed_models.clone()),
+        );
+
+        assert_eq!(policy, Some(vec!["gpt-4.1".to_string()]));
+    }
+
+    #[test]
+    fn user_unrestricted_does_not_bypass_group_restrictions() {
+        let groups = vec![sample_group(
+            "restricted",
+            10,
+            Some(vec!["gpt-5"]),
+            "specific",
+            None,
+            "system",
+        )];
+
+        let policy = resolve_effective_list_policy(None, "unrestricted", &groups, |group| {
+            (&group.allowed_models_mode, group.allowed_models.clone())
+        });
+
+        assert_eq!(policy, Some(vec!["gpt-5".to_string()]));
+    }
+
+    #[test]
+    fn rate_limit_policy_uses_most_restrictive_custom_limit() {
+        let groups = vec![sample_group(
+            "restricted",
+            10,
+            None,
+            "unrestricted",
+            Some(60),
+            "custom",
+        )];
+
+        assert_eq!(
+            resolve_effective_rate_limit_policy(Some(120), "custom", &groups),
+            Some(60)
+        );
+    }
+
+    #[test]
+    fn rate_limit_unlimited_does_not_bypass_limited_group() {
+        let groups = vec![sample_group(
+            "restricted",
+            10,
+            None,
+            "unrestricted",
+            Some(60),
+            "custom",
+        )];
+
+        assert_eq!(
+            resolve_effective_rate_limit_policy(Some(0), "custom", &groups),
+            Some(60)
+        );
+    }
+
+    #[test]
+    fn api_key_specific_policy_cannot_expand_user_policy() {
+        let mut user_policy = Some(vec!["gpt-5".to_string()]);
+        let mut api_key_policy = Some(vec!["gpt-4.1".to_string()]);
+
+        constrain_api_key_list_policy_to_user_policy(&mut user_policy, &mut api_key_policy);
+
+        assert_eq!(user_policy, Some(Vec::<String>::new()));
+        assert_eq!(api_key_policy, Some(Vec::<String>::new()));
     }
 
     #[tokio::test]

@@ -3,21 +3,22 @@
     :model-value="open"
     title="用户分组"
     description="管理用户组、默认注册组、成员和组级访问控制"
-    size="6xl"
+    size="4xl"
     persistent
     @update:model-value="handleDialogUpdate"
   >
-    <div class="grid min-h-[560px] gap-4 lg:grid-cols-[17rem_minmax(0,1fr)]">
+    <div class="grid gap-4 lg:min-h-[560px] lg:grid-cols-[17rem_minmax(0,1fr)]">
       <div class="rounded-xl border border-border/70 bg-muted/20 p-3">
         <div class="mb-3 flex items-center justify-between gap-2">
           <Label class="text-sm font-semibold">分组</Label>
           <Button
-            size="sm"
-            class="h-8 px-2 text-xs"
+            variant="ghost"
+            size="icon"
+            class="h-8 w-8"
+            title="新建分组"
             @click="startCreate"
           >
-            <Plus class="mr-1.5 h-3.5 w-3.5" />
-            新建
+            <Plus class="h-4 w-4" />
           </Button>
         </div>
 
@@ -35,7 +36,7 @@
         </div>
         <div
           v-else
-          class="space-y-1.5"
+          class="max-h-60 space-y-1.5 overflow-y-auto lg:max-h-none lg:overflow-visible"
         >
           <button
             v-for="group in groups"
@@ -55,81 +56,58 @@
                   默认
                 </Badge>
               </span>
-              <span class="mt-0.5 block text-[11px] text-muted-foreground">
-                优先级 {{ group.priority }}
-              </span>
             </span>
             <ChevronRight class="h-4 w-4 shrink-0 text-muted-foreground" />
           </button>
         </div>
       </div>
 
-      <div class="min-w-0 rounded-xl border border-border/70 bg-background p-4">
+      <div class="min-w-0 rounded-xl border border-border/70 bg-background p-3 sm:p-4">
         <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div class="min-w-0">
             <h4 class="truncate text-base font-semibold text-foreground">
               {{ editingGroupId ? '编辑分组' : '新建分组' }}
             </h4>
             <p class="text-xs text-muted-foreground">
-              {{ selectedGroup?.is_default ? '当前为自助注册默认组' : '默认组只影响本地注册和 OAuth 自动创建用户' }}
+              {{ selectedGroup?.is_default ? '当前为所有用户的默认组' : '通过额外分组配置访问限制' }}
             </p>
           </div>
-          <div class="flex items-center gap-2">
+          <div
+            v-if="editingGroupId"
+            class="flex items-center gap-1"
+          >
             <Button
-              v-if="editingGroupId"
-              variant="outline"
-              size="sm"
-              class="h-8 border-rose-200 px-2 text-xs text-rose-600 hover:bg-rose-50 dark:border-rose-900/60 dark:hover:bg-rose-950/40"
-              :disabled="saving"
+              variant="ghost"
+              size="icon"
+              class="h-8 w-8"
+              :class="selectedGroup?.is_default ? 'text-emerald-500 hover:text-emerald-500' : ''"
+              :disabled="saving || selectedGroup?.is_default"
+              :title="selectedGroup?.is_default ? '默认注册组' : '设为默认注册组'"
+              @click="toggleDefault"
+            >
+              <BadgeCheck class="h-4 w-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              class="h-8 w-8"
+              :disabled="saving || selectedGroup?.is_default"
+              title="删除分组"
               @click="deleteSelectedGroup"
             >
-              <Trash2 class="mr-1.5 h-3.5 w-3.5" />
-              删除
+              <Trash2 class="h-4 w-4" />
             </Button>
           </div>
         </div>
 
-        <div class="grid gap-5 lg:grid-cols-2">
+        <div class="space-y-5">
           <div class="space-y-4">
-            <div class="grid gap-3 sm:grid-cols-[minmax(0,1fr)_8rem]">
-              <div class="space-y-2">
-                <Label class="text-sm font-medium">名称</Label>
-                <Input
-                  v-model="form.name"
-                  class="h-10"
-                  placeholder="例如：生产团队"
-                />
-              </div>
-              <div class="space-y-2">
-                <Label class="text-sm font-medium">优先级</Label>
-                <Input
-                  :model-value="form.priority"
-                  type="number"
-                  class="h-10"
-                  @update:model-value="(value) => form.priority = parseNumberInput(value, { min: -10000, max: 10000 }) ?? 0"
-                />
-              </div>
-            </div>
-
-            <div class="flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-muted/20 px-3 py-2">
-              <div class="min-w-0">
-                <Label class="text-sm font-medium">默认注册组</Label>
-                <div class="mt-0.5 text-[11px] text-muted-foreground">
-                  本地注册 / OAuth 自动创建
-                </div>
-              </div>
-              <Switch
-                v-model="form.is_default"
-                class="shrink-0"
-              />
-            </div>
-
             <div class="space-y-2">
-              <Label class="text-sm font-medium">描述</Label>
-              <Textarea
-                v-model="form.description"
-                class="min-h-20"
-                placeholder="可选"
+              <Label class="text-sm font-medium">名称</Label>
+              <Input
+                v-model="form.name"
+                class="h-10"
+                placeholder="例如：生产团队"
               />
             </div>
 
@@ -139,6 +117,7 @@
                 v-model="memberUserIds"
                 :options="userOptions"
                 :search-threshold="0"
+                :disabled="selectedGroup?.is_default"
                 placeholder="选择用户"
                 empty-text="暂无用户"
                 no-results-text="未找到匹配用户"
@@ -146,47 +125,92 @@
             </div>
           </div>
 
-          <div class="space-y-4 lg:border-l lg:border-border/60 lg:pl-5">
-            <div class="flex items-baseline justify-between gap-2 pb-2 border-b border-border/60">
+          <div class="space-y-4 border-t border-border/60 pt-5">
+            <div class="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1 pb-2 border-b border-border/60">
               <span class="text-sm font-medium">组权限</span>
               <span class="text-[11px] text-muted-foreground">
-                用户选择继承时按优先级取首个已配置组
+                多个组与用户额外限制取交集
               </span>
             </div>
 
-            <PolicyFieldEditor
-              v-model:mode="form.allowed_providers_mode"
-              v-model:values="form.allowed_providers"
-              label="允许的提供商"
-              :options="providerOptions"
-            />
-            <PolicyFieldEditor
-              v-model:mode="form.allowed_api_formats_mode"
-              v-model:values="form.allowed_api_formats"
-              label="允许的端点"
-              :options="apiFormatOptions"
-            />
-            <PolicyFieldEditor
-              v-model:mode="form.allowed_models_mode"
-              v-model:values="form.allowed_models"
-              label="允许的模型"
-              :options="modelOptions"
-            />
+            <div class="space-y-2">
+              <Label class="text-sm font-medium">允许的提供商</Label>
+              <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <div class="flex w-full items-center sm:w-auto sm:shrink-0">
+                  <Switch
+                    :model-value="form.allowed_providers_mode === 'unrestricted'"
+                    :disabled="selectedGroup?.is_default"
+                    @update:model-value="(v) => (form.allowed_providers_mode = v ? 'unrestricted' : 'specific')"
+                  />
+                </div>
+                <div class="min-w-0 flex-1">
+                  <MultiSelect
+                    v-model="form.allowed_providers"
+                    :options="providerOptions"
+                    :search-threshold="0"
+                    :disabled="selectedGroup?.is_default || form.allowed_providers_mode === 'unrestricted'"
+                    :placeholder="form.allowed_providers_mode === 'unrestricted' ? '不限制所有选项' : '选择提供商'"
+                    empty-text="暂无选项"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div class="space-y-2">
+              <Label class="text-sm font-medium">允许的端点</Label>
+              <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <div class="flex w-full items-center sm:w-auto sm:shrink-0">
+                  <Switch
+                    :model-value="form.allowed_api_formats_mode === 'unrestricted'"
+                    :disabled="selectedGroup?.is_default"
+                    @update:model-value="(v) => (form.allowed_api_formats_mode = v ? 'unrestricted' : 'specific')"
+                  />
+                </div>
+                <div class="min-w-0 flex-1">
+                  <MultiSelect
+                    v-model="form.allowed_api_formats"
+                    :options="apiFormatOptions"
+                    :search-threshold="0"
+                    :disabled="selectedGroup?.is_default || form.allowed_api_formats_mode === 'unrestricted'"
+                    :placeholder="form.allowed_api_formats_mode === 'unrestricted' ? '不限制所有选项' : '选择端点'"
+                    empty-text="暂无选项"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div class="space-y-2">
+              <Label class="text-sm font-medium">允许的模型</Label>
+              <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <div class="flex w-full items-center sm:w-auto sm:shrink-0">
+                  <Switch
+                    :model-value="form.allowed_models_mode === 'unrestricted'"
+                    :disabled="selectedGroup?.is_default"
+                    @update:model-value="(v) => (form.allowed_models_mode = v ? 'unrestricted' : 'specific')"
+                  />
+                </div>
+                <div class="min-w-0 flex-1">
+                  <MultiSelect
+                    v-model="form.allowed_models"
+                    :options="modelOptions"
+                    :search-threshold="0"
+                    :disabled="selectedGroup?.is_default || form.allowed_models_mode === 'unrestricted'"
+                    :placeholder="form.allowed_models_mode === 'unrestricted' ? '不限制所有选项' : '选择模型'"
+                    empty-text="暂无选项"
+                  />
+                </div>
+              </div>
+            </div>
 
             <div class="space-y-2">
               <Label class="text-sm font-medium">速率限制 (请求/分钟)</Label>
-              <div class="flex items-start gap-2">
-                <div class="w-28 shrink-0">
-                  <Select v-model="form.rate_limit_mode">
-                    <SelectTrigger class="h-10 w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="inherit">不配置</SelectItem>
-                      <SelectItem value="system">系统默认</SelectItem>
-                      <SelectItem value="custom">指定数值</SelectItem>
-                    </SelectContent>
-                  </Select>
+              <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <div class="flex w-full items-center sm:w-auto sm:shrink-0">
+                  <Switch
+                    :model-value="form.rate_limit_mode === 'system'"
+                    :disabled="selectedGroup?.is_default"
+                    @update:model-value="(v) => (form.rate_limit_mode = v ? 'system' : 'custom')"
+                  />
                 </div>
                 <div class="min-w-0 flex-1">
                   <Input
@@ -195,8 +219,8 @@
                     min="0"
                     max="10000"
                     class="h-10"
-                    :disabled="form.rate_limit_mode !== 'custom'"
-                    :placeholder="rateLimitPlaceholder"
+                    :disabled="selectedGroup?.is_default || form.rate_limit_mode === 'system'"
+                    :placeholder="form.rate_limit_mode === 'system' ? '使用系统默认' : '0 = 不限速'"
                     @update:model-value="(value) => form.rate_limit = parseNumberInput(value, { min: 0, max: 10000 })"
                   />
                 </div>
@@ -216,31 +240,25 @@
         关闭
       </Button>
       <Button
-        :disabled="saving || !form.name.trim()"
+        :disabled="saving || !form.name.trim() || defaultGroupHasRestrictions"
         @click="saveGroup"
       >
-        {{ saving ? '保存中...' : '保存分组' }}
+        保存
       </Button>
     </template>
   </Dialog>
 </template>
 
 <script setup lang="ts">
-import { computed, defineComponent, h, ref, watch } from 'vue'
-import { ChevronRight, Plus, Trash2 } from 'lucide-vue-next'
+import { computed, ref, watch } from 'vue'
+import { BadgeCheck, ChevronRight, Plus, Trash2 } from 'lucide-vue-next'
 import {
   Badge,
   Button,
   Dialog,
   Input,
   Label,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
   Switch,
-  Textarea,
 } from '@/components/ui'
 import { MultiSelect } from '@/components/common'
 import { useUsersStore } from '@/stores/users'
@@ -258,64 +276,6 @@ import type {
   UserGroup,
 } from '@/api/users'
 
-const PolicyFieldEditor = defineComponent({
-  name: 'PolicyFieldEditor',
-  props: {
-    label: { type: String, required: true },
-    mode: { type: String as () => ListPolicyMode, required: true },
-    values: { type: Array as () => string[], required: true },
-    options: { type: Array as () => Array<{ label: string; value: string }>, required: true },
-  },
-  emits: ['update:mode', 'update:values'],
-  setup(props, { emit }) {
-    return () => h('div', { class: 'space-y-2' }, [
-      h(Label, { class: 'text-sm font-medium' }, () => props.label),
-      h('div', { class: 'flex items-start gap-2' }, [
-        h('div', { class: 'w-28 shrink-0' }, [
-          h(Select, {
-            modelValue: props.mode,
-            'onUpdate:modelValue': (value: string) => emit('update:mode', value),
-          }, () => [
-            h(SelectTrigger, { class: 'h-10 w-full' }, () => h(SelectValue)),
-            h(SelectContent, null, () => [
-              h(SelectItem, { value: 'inherit' }, () => '不配置'),
-              h(SelectItem, { value: 'unrestricted' }, () => '不限制'),
-              h(SelectItem, { value: 'specific' }, () => '指定列表'),
-              h(SelectItem, { value: 'deny_all' }, () => '全部禁用'),
-            ]),
-          ]),
-        ]),
-        h('div', { class: 'min-w-0 flex-1' }, [
-          h(MultiSelect, {
-            modelValue: props.values,
-            'onUpdate:modelValue': (value: string[]) => emit('update:values', value),
-            options: props.options,
-            disabled: props.mode !== 'specific',
-            searchThreshold: 0,
-            placeholder: listPolicyValuePlaceholder(props.mode),
-            emptyText: '暂无选项',
-            dropdownMinWidth: '16rem',
-          }),
-        ]),
-      ]),
-    ])
-  },
-})
-
-function listPolicyValuePlaceholder(mode: ListPolicyMode): string {
-  switch (mode) {
-    case 'inherit':
-      return '该组不配置此项'
-    case 'unrestricted':
-      return '不限制所有选项'
-    case 'deny_all':
-      return '全部禁用'
-    case 'specific':
-    default:
-      return '未选择时表示全部禁用'
-  }
-}
-
 const props = defineProps<{
   open: boolean
   users: User[]
@@ -328,7 +288,7 @@ const emit = defineEmits<{
 
 const usersStore = useUsersStore()
 const { success, error } = useToast()
-const { confirmDanger } = useConfirm()
+const { confirmDanger, confirmInfo } = useConfirm()
 const {
   providerOptions,
   apiFormatOptions,
@@ -345,30 +305,23 @@ const memberUserIds = ref<string[]>([])
 
 const form = ref({
   name: '',
-  description: '',
-  priority: 0,
-  is_default: false,
-  allowed_providers_mode: 'inherit' as ListPolicyMode,
-  allowed_api_formats_mode: 'inherit' as ListPolicyMode,
-  allowed_models_mode: 'inherit' as ListPolicyMode,
+  allowed_providers_mode: 'unrestricted' as ListPolicyMode,
+  allowed_api_formats_mode: 'unrestricted' as ListPolicyMode,
+  allowed_models_mode: 'unrestricted' as ListPolicyMode,
   allowed_providers: [] as string[],
   allowed_api_formats: [] as string[],
   allowed_models: [] as string[],
-  rate_limit_mode: 'inherit' as RateLimitPolicyMode,
+  rate_limit_mode: 'system' as RateLimitPolicyMode,
   rate_limit: undefined as number | undefined,
 })
 
 const selectedGroup = computed(() => groups.value.find((group) => group.id === editingGroupId.value) ?? null)
-const rateLimitPlaceholder = computed(() => {
-  switch (form.value.rate_limit_mode) {
-    case 'inherit':
-      return '该组不配置速率'
-    case 'system':
-      return '使用系统默认'
-    case 'custom':
-    default:
-      return '0 = 不限速'
-  }
+const defaultGroupHasRestrictions = computed(() => {
+  if (!selectedGroup.value?.is_default) return false
+  return form.value.allowed_providers_mode !== 'unrestricted'
+    || form.value.allowed_api_formats_mode !== 'unrestricted'
+    || form.value.allowed_models_mode !== 'unrestricted'
+    || form.value.rate_limit_mode !== 'system'
 })
 const userOptions = computed(() => props.users.map((user) => ({
   label: `${user.username}${user.email ? ` (${user.email})` : ''}`,
@@ -420,16 +373,13 @@ async function selectGroup(groupId: string): Promise<void> {
   editingGroupId.value = group.id
   form.value = {
     name: group.name,
-    description: group.description ?? '',
-    priority: group.priority,
-    is_default: group.is_default === true,
-    allowed_providers_mode: group.allowed_providers_mode,
-    allowed_api_formats_mode: group.allowed_api_formats_mode,
-    allowed_models_mode: group.allowed_models_mode,
+    allowed_providers_mode: normalizeListMode(group.allowed_providers_mode),
+    allowed_api_formats_mode: normalizeListMode(group.allowed_api_formats_mode),
+    allowed_models_mode: normalizeListMode(group.allowed_models_mode),
     allowed_providers: group.allowed_providers ? [...group.allowed_providers] : [],
     allowed_api_formats: group.allowed_api_formats ? [...group.allowed_api_formats] : [],
     allowed_models: group.allowed_models ? [...group.allowed_models] : [],
-    rate_limit_mode: group.rate_limit_mode,
+    rate_limit_mode: normalizeRateMode(group.rate_limit_mode),
     rate_limit: group.rate_limit ?? undefined,
   }
   try {
@@ -441,20 +391,25 @@ async function selectGroup(groupId: string): Promise<void> {
   }
 }
 
+function normalizeListMode(mode: ListPolicyMode): ListPolicyMode {
+  return mode === 'specific' ? 'specific' : 'unrestricted'
+}
+
+function normalizeRateMode(mode: RateLimitPolicyMode): RateLimitPolicyMode {
+  return mode === 'custom' ? 'custom' : 'system'
+}
+
 function startCreate(): void {
   editingGroupId.value = null
   form.value = {
     name: '',
-    description: '',
-    priority: 0,
-    is_default: false,
-    allowed_providers_mode: 'inherit',
-    allowed_api_formats_mode: 'inherit',
-    allowed_models_mode: 'inherit',
+    allowed_providers_mode: 'unrestricted',
+    allowed_api_formats_mode: 'unrestricted',
+    allowed_models_mode: 'unrestricted',
     allowed_providers: [],
     allowed_api_formats: [],
     allowed_models: [],
-    rate_limit_mode: 'inherit',
+    rate_limit_mode: 'system',
     rate_limit: undefined,
   }
   memberUserIds.value = []
@@ -469,11 +424,30 @@ function groupButtonClass(groupId: string): string {
   )
 }
 
+async function toggleDefault(): Promise<void> {
+  const group = selectedGroup.value
+  if (!group || group.is_default) return
+  const confirmed = await confirmInfo(
+    `确定将「${group.name}」设为默认注册组吗？后续本地注册和 OAuth 自动创建的用户将加入该分组。`,
+    '设为默认注册组',
+  )
+  if (!confirmed) return
+  saving.value = true
+  try {
+    await usersStore.setDefaultUserGroup(group.id)
+    success('已更新默认注册组')
+    emit('changed')
+    await loadDialogData()
+  } catch (err) {
+    error(parseApiError(err, '设置默认注册组失败'))
+  } finally {
+    saving.value = false
+  }
+}
+
 function buildPayload(): UpsertUserGroupRequest {
   return {
     name: form.value.name.trim(),
-    description: form.value.description.trim() || null,
-    priority: form.value.priority,
     allowed_providers_mode: form.value.allowed_providers_mode,
     allowed_api_formats_mode: form.value.allowed_api_formats_mode,
     allowed_models_mode: form.value.allowed_models_mode,
@@ -497,16 +471,11 @@ async function saveGroup(): Promise<void> {
   if (!form.value.name.trim()) return
   saving.value = true
   try {
-    const wasDefault = selectedGroup.value?.is_default === true
-    const wantsDefault = form.value.is_default
     const saved = editingGroupId.value
       ? await usersStore.updateUserGroup(editingGroupId.value, buildPayload())
       : await usersStore.createUserGroup(buildPayload())
-    await usersStore.replaceUserGroupMembers(saved.id, memberUserIds.value)
-    if (wantsDefault) {
-      await usersStore.setDefaultUserGroup(saved.id)
-    } else if (wasDefault) {
-      await usersStore.setDefaultUserGroup(null)
+    if (!saved.is_default) {
+      await usersStore.replaceUserGroupMembers(saved.id, memberUserIds.value)
     }
     success('用户分组已保存')
     emit('changed')

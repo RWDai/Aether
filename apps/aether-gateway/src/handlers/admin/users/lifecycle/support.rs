@@ -131,7 +131,6 @@ pub(super) fn user_group_badge_payload(
     json!({
         "id": group.id,
         "name": group.name,
-        "priority": group.priority,
     })
 }
 
@@ -149,10 +148,8 @@ fn effective_policy_payload(
 ) -> serde_json::Value {
     let mut sorted_groups = groups.to_vec();
     sorted_groups.sort_by(|left, right| {
-        right
-            .priority
-            .cmp(&left.priority)
-            .then_with(|| left.name.cmp(&right.name))
+        left.name
+            .cmp(&right.name)
             .then_with(|| left.id.cmp(&right.id))
     });
     json!({
@@ -186,50 +183,28 @@ fn effective_list_policy_payload(
         &aether_data::repository::users::StoredUserGroup,
     ) -> (&String, Option<&Vec<String>>),
 ) -> serde_json::Value {
-    match user_mode {
-        "unrestricted" => policy_payload("unrestricted", serde_json::Value::Null, "user", None),
-        "specific" => policy_payload(
-            "specific",
-            json!(user_values.cloned().unwrap_or_default()),
-            "user",
-            None,
-        ),
-        "deny_all" => policy_payload("deny_all", json!(Vec::<String>::new()), "user", None),
-        "inherit" => {
-            for group in groups {
-                let (mode, values) = group_field(group);
-                match mode.as_str() {
-                    "unrestricted" => {
-                        return policy_payload(
-                            "unrestricted",
-                            serde_json::Value::Null,
-                            "group",
-                            Some(group),
-                        )
-                    }
-                    "specific" => {
-                        return policy_payload(
-                            "specific",
-                            json!(values.cloned().unwrap_or_default()),
-                            "group",
-                            Some(group),
-                        )
-                    }
-                    "deny_all" => {
-                        return policy_payload(
-                            "deny_all",
-                            json!(Vec::<String>::new()),
-                            "group",
-                            Some(group),
-                        )
-                    }
-                    _ => {}
-                }
-            }
-            policy_payload("unrestricted", serde_json::Value::Null, "fallback", None)
+    let mut effective = None;
+    let mut group_sources = Vec::new();
+    for group in groups {
+        let (mode, values) = group_field(group);
+        if let Some(restriction) = list_restriction_from_mode(mode, values.cloned()) {
+            effective = intersect_list_policies(effective, Some(restriction));
+            group_sources.push(group);
         }
-        _ => policy_payload("unrestricted", serde_json::Value::Null, "fallback", None),
     }
+    let mut has_user_source = false;
+    if let Some(restriction) = list_restriction_from_mode(user_mode, user_values.cloned()) {
+        effective = intersect_list_policies(effective, Some(restriction));
+        has_user_source = true;
+    }
+
+    let (mode, value) = match effective {
+        Some(values) if values.is_empty() => ("deny_all", json!(Vec::<String>::new())),
+        Some(values) => ("specific", json!(values)),
+        None => ("unrestricted", serde_json::Value::Null),
+    };
+    let source = combined_policy_source(has_user_source, group_sources.len(), "fallback");
+    policy_payload(mode, value, source, group_sources.as_slice())
 }
 
 fn effective_rate_limit_policy_payload(
@@ -237,34 +212,26 @@ fn effective_rate_limit_policy_payload(
     user_mode: &str,
     groups: &[aether_data::repository::users::StoredUserGroup],
 ) -> serde_json::Value {
-    match user_mode {
-        "custom" => policy_payload("custom", json!(user_rate_limit.unwrap_or(0)), "user", None),
-        "system" => policy_payload("system", serde_json::Value::Null, "user", None),
-        "inherit" => {
-            for group in groups {
-                match group.rate_limit_mode.as_str() {
-                    "custom" => {
-                        return policy_payload(
-                            "custom",
-                            json!(group.rate_limit.unwrap_or(0)),
-                            "group",
-                            Some(group),
-                        )
-                    }
-                    "system" => {
-                        return policy_payload(
-                            "system",
-                            serde_json::Value::Null,
-                            "group",
-                            Some(group),
-                        )
-                    }
-                    _ => {}
-                }
-            }
-            policy_payload("system", serde_json::Value::Null, "fallback", None)
+    let mut effective = None;
+    let mut group_sources = Vec::new();
+    for group in groups {
+        if let Some(restriction) =
+            rate_limit_restriction_from_mode(&group.rate_limit_mode, group.rate_limit)
+        {
+            effective = intersect_rate_limit_policies(effective, Some(restriction));
+            group_sources.push(group);
         }
-        _ => policy_payload("system", serde_json::Value::Null, "fallback", None),
+    }
+    let mut has_user_source = false;
+    if let Some(restriction) = rate_limit_restriction_from_mode(user_mode, user_rate_limit) {
+        effective = intersect_rate_limit_policies(effective, Some(restriction));
+        has_user_source = true;
+    }
+
+    let source = combined_policy_source(has_user_source, group_sources.len(), "fallback");
+    match rate_limit_policy_value(effective) {
+        Some(rate_limit) => policy_payload("custom", json!(rate_limit), source, &group_sources),
+        None => policy_payload("system", serde_json::Value::Null, source, &group_sources),
     }
 }
 
@@ -272,15 +239,111 @@ fn policy_payload(
     mode: &str,
     value: serde_json::Value,
     source: &str,
-    group: Option<&aether_data::repository::users::StoredUserGroup>,
+    groups: &[&aether_data::repository::users::StoredUserGroup],
 ) -> serde_json::Value {
+    let single_group = groups.first().copied().filter(|_| groups.len() == 1);
     json!({
         "mode": mode,
         "value": value,
         "source": source,
-        "group_id": group.map(|group| group.id.as_str()),
-        "group_name": group.map(|group| group.name.as_str()),
+        "group_id": single_group.map(|group| group.id.as_str()),
+        "group_name": single_group.map(|group| group.name.as_str()),
+        "group_ids": groups.iter().map(|group| group.id.as_str()).collect::<Vec<_>>(),
+        "group_names": groups.iter().map(|group| group.name.as_str()).collect::<Vec<_>>(),
     })
+}
+
+fn list_restriction_from_mode(mode: &str, values: Option<Vec<String>>) -> Option<Vec<String>> {
+    match mode {
+        "specific" => Some(values.unwrap_or_default()),
+        "deny_all" => Some(Vec::new()),
+        _ => None,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RateLimitRestriction {
+    Unlimited,
+    Limited(i32),
+}
+
+fn rate_limit_restriction_from_mode(
+    mode: &str,
+    rate_limit: Option<i32>,
+) -> Option<RateLimitRestriction> {
+    match mode {
+        "custom" => {
+            let rate_limit = rate_limit.unwrap_or(0).max(0);
+            if rate_limit == 0 {
+                Some(RateLimitRestriction::Unlimited)
+            } else {
+                Some(RateLimitRestriction::Limited(rate_limit))
+            }
+        }
+        _ => None,
+    }
+}
+
+fn intersect_list_policies(
+    left: Option<Vec<String>>,
+    right: Option<Vec<String>>,
+) -> Option<Vec<String>> {
+    match (left, right) {
+        (None, None) => None,
+        (Some(values), None) | (None, Some(values)) => Some(values),
+        (Some(left_values), Some(right_values)) => {
+            let right_values = right_values
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>();
+            Some(
+                left_values
+                    .into_iter()
+                    .filter(|value| right_values.contains(value))
+                    .collect(),
+            )
+        }
+    }
+}
+
+fn intersect_rate_limit_policies(
+    left: Option<RateLimitRestriction>,
+    right: Option<RateLimitRestriction>,
+) -> Option<RateLimitRestriction> {
+    match (left, right) {
+        (None, None) => None,
+        (Some(value), None) | (None, Some(value)) => Some(value),
+        (Some(RateLimitRestriction::Unlimited), Some(RateLimitRestriction::Unlimited)) => {
+            Some(RateLimitRestriction::Unlimited)
+        }
+        (Some(RateLimitRestriction::Limited(value)), Some(RateLimitRestriction::Unlimited))
+        | (Some(RateLimitRestriction::Unlimited), Some(RateLimitRestriction::Limited(value))) => {
+            Some(RateLimitRestriction::Limited(value))
+        }
+        (Some(RateLimitRestriction::Limited(left)), Some(RateLimitRestriction::Limited(right))) => {
+            Some(RateLimitRestriction::Limited(left.min(right)))
+        }
+    }
+}
+
+fn rate_limit_policy_value(policy: Option<RateLimitRestriction>) -> Option<i32> {
+    match policy {
+        None => None,
+        Some(RateLimitRestriction::Unlimited) => Some(0),
+        Some(RateLimitRestriction::Limited(value)) => Some(value),
+    }
+}
+
+fn combined_policy_source(
+    has_user_source: bool,
+    group_source_count: usize,
+    fallback_source: &'static str,
+) -> &'static str {
+    match (has_user_source, group_source_count) {
+        (true, 0) => "user",
+        (false, 1) => "group",
+        (false, 0) => fallback_source,
+        _ => "combined",
+    }
 }
 
 pub(super) fn admin_user_id_from_detail_path(request_path: &str) -> Option<String> {

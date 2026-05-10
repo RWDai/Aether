@@ -283,7 +283,7 @@ pub(crate) fn normalize_admin_user_api_formats(
     Ok(Some(normalized))
 }
 
-pub(super) fn normalize_admin_list_policy_mode(value: &str) -> Result<String, String> {
+pub(crate) fn normalize_admin_list_policy_mode(value: &str) -> Result<String, String> {
     match value.trim().to_ascii_lowercase().as_str() {
         "inherit" | "unrestricted" | "specific" | "deny_all" => {
             Ok(value.trim().to_ascii_lowercase())
@@ -292,7 +292,7 @@ pub(super) fn normalize_admin_list_policy_mode(value: &str) -> Result<String, St
     }
 }
 
-pub(super) fn normalize_admin_rate_limit_policy_mode(value: &str) -> Result<String, String> {
+pub(crate) fn normalize_admin_rate_limit_policy_mode(value: &str) -> Result<String, String> {
     match value.trim().to_ascii_lowercase().as_str() {
         "inherit" | "system" | "custom" => Ok(value.trim().to_ascii_lowercase()),
         _ => Err("限速模式不合法".to_string()),

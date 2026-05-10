@@ -51,3 +51,52 @@ CREATE TABLE IF NOT EXISTS user_group_members (
     CONSTRAINT user_group_members_user_id_fk
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
+
+INSERT IGNORE INTO user_groups (
+    id,
+    name,
+    normalized_name,
+    description,
+    priority,
+    allowed_providers_mode,
+    allowed_api_formats_mode,
+    allowed_models_mode,
+    rate_limit_mode,
+    created_at,
+    updated_at
+)
+VALUES (
+    '00000000-0000-0000-0000-000000000001',
+    'Default',
+    'default',
+    'Default unrestricted group for all users',
+    0,
+    'unrestricted',
+    'unrestricted',
+    'unrestricted',
+    'system',
+    UNIX_TIMESTAMP(),
+    UNIX_TIMESTAMP()
+);
+
+INSERT IGNORE INTO system_configs (
+    id,
+    `key`,
+    value,
+    description,
+    created_at,
+    updated_at
+)
+VALUES (
+    '00000000-0000-0000-0000-000000000002',
+    'default_user_group_id',
+    '"00000000-0000-0000-0000-000000000001"',
+    'Default unrestricted user group',
+    UNIX_TIMESTAMP(),
+    UNIX_TIMESTAMP()
+);
+
+INSERT IGNORE INTO user_group_members (group_id, user_id, created_at)
+SELECT '00000000-0000-0000-0000-000000000001', id, UNIX_TIMESTAMP()
+FROM users
+WHERE is_deleted = 0;

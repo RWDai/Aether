@@ -17,6 +17,7 @@ pub enum AiRankingSchedulingMode {
 pub struct AiRankingContextConfig {
     pub priority_mode: SchedulerPriorityMode,
     pub scheduling_mode: AiRankingSchedulingMode,
+    pub load_balance_seed: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -81,15 +82,7 @@ pub fn build_ai_rankable_candidate(
     )
     .unwrap_or((u8::MAX, u8::MAX));
 
-    let mut rankable =
-        SchedulerRankableCandidate::from_candidate(parts.candidate, parts.original_index);
-    // The scheduler order is the upstream tie-breaker; AI serving only adds transport facts.
-    rankable.provider_id.clear();
-    rankable.endpoint_id.clear();
-    rankable.key_id.clear();
-    rankable.selected_provider_model_name.clear();
-
-    rankable
+    SchedulerRankableCandidate::from_candidate(parts.candidate, parts.original_index)
         .with_capability_priority(requested_capability_priority_for_candidate(
             parts.required_capabilities,
             parts.candidate,
@@ -107,7 +100,7 @@ pub fn ai_ranking_context(config: AiRankingContextConfig) -> SchedulerRankingCon
         priority_mode: config.priority_mode,
         ranking_mode: ai_ranking_mode(config.scheduling_mode),
         include_health: false,
-        load_balance_seed: 0,
+        load_balance_seed: config.load_balance_seed,
     }
 }
 

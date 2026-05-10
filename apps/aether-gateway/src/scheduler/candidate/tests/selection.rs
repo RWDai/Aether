@@ -606,7 +606,7 @@ async fn cache_affinity_promotes_cached_scheduler_affinity_candidate_when_enable
 }
 
 #[tokio::test]
-async fn load_balance_rotates_same_priority_group_and_ignores_cached_affinity() {
+async fn load_balance_ignores_provider_priority_and_cached_affinity() {
     let mut first = sample_row();
     first.provider_id = "provider-a".to_string();
     first.provider_name = "provider-a".to_string();
@@ -623,9 +623,9 @@ async fn load_balance_rotates_same_priority_group_and_ignores_cached_affinity() 
     second.endpoint_id = "endpoint-b".to_string();
     second.key_id = "key-b".to_string();
     second.key_name = "beta".to_string();
-    second.provider_priority = 0;
+    second.provider_priority = 100;
     second.key_internal_priority = 0;
-    second.key_global_priority_by_format = Some(json!({"openai:chat": 0}));
+    second.key_global_priority_by_format = Some(json!({"openai:chat": 100}));
 
     let candidates = Arc::new(InMemoryMinimalCandidateSelectionReadRepository::seed(vec![
         first, second,
@@ -664,6 +664,29 @@ async fn load_balance_rotates_same_priority_group_and_ignores_cached_affinity() 
     )
     .await
     .expect("first pass should succeed");
+    let mut provider_b_first_seed = None;
+    for seed in 101..600 {
+        let pass = collect_selectable_candidates(
+            state.data.as_ref(),
+            &state,
+            "openai:chat",
+            "gpt-4.1",
+            false,
+            Some(&auth_snapshot),
+            seed,
+        )
+        .await
+        .expect("seeded pass should succeed");
+        if pass
+            .first()
+            .is_some_and(|candidate| candidate.provider_id == "provider-b")
+        {
+            provider_b_first_seed = Some(seed);
+            break;
+        }
+    }
+    let provider_b_first_seed = provider_b_first_seed
+        .expect("test seed should allow provider-b to win despite lower priority");
     let second_pass = collect_selectable_candidates(
         state.data.as_ref(),
         &state,
@@ -671,27 +694,14 @@ async fn load_balance_rotates_same_priority_group_and_ignores_cached_affinity() 
         "gpt-4.1",
         false,
         Some(&auth_snapshot),
-        101,
+        provider_b_first_seed,
     )
     .await
     .expect("second pass should succeed");
 
     assert_eq!(first_pass.len(), 2);
     assert_eq!(second_pass.len(), 2);
-    assert_ne!(first_pass[0].provider_id, second_pass[0].provider_id);
-    assert!(
-        first_pass[0].provider_id != "provider-b" || second_pass[0].provider_id != "provider-b"
-    );
-    assert_ne!(
-        first_pass
-            .iter()
-            .map(|candidate| candidate.provider_id.as_str())
-            .collect::<Vec<_>>(),
-        second_pass
-            .iter()
-            .map(|candidate| candidate.provider_id.as_str())
-            .collect::<Vec<_>>()
-    );
+    assert_eq!(second_pass[0].provider_id, "provider-b");
 }
 
 #[tokio::test]

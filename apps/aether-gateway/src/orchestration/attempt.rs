@@ -31,8 +31,10 @@ pub(crate) struct LocalExecutionCandidateMetadata {
     pub(crate) candidate_group_id: Option<String>,
     pub(crate) pool_key_index: Option<u32>,
     pub(crate) pool_key_lease: Option<RuntimeLockLease>,
+    pub(crate) scheduler_affinity_epoch: Option<u64>,
 }
 
+pub(crate) const SCHEDULER_AFFINITY_EPOCH_REPORT_FIELD: &str = "scheduler_affinity_epoch";
 pub(crate) const POOL_KEY_LEASE_KEY_REPORT_FIELD: &str = "pool_key_lease_key";
 pub(crate) const POOL_KEY_LEASE_OWNER_REPORT_FIELD: &str = "pool_key_lease_owner";
 pub(crate) const POOL_KEY_LEASE_TOKEN_REPORT_FIELD: &str = "pool_key_lease_token";
@@ -65,6 +67,9 @@ pub(crate) fn local_execution_candidate_metadata_from_report_context(
             .and_then(Value::as_u64)
             .and_then(|value| u32::try_from(value).ok()),
         pool_key_lease: pool_key_lease_from_report_context(report_context),
+        scheduler_affinity_epoch: report_context
+            .and_then(|value| value.get(SCHEDULER_AFFINITY_EPOCH_REPORT_FIELD))
+            .and_then(Value::as_u64),
     }
 }
 
@@ -493,6 +498,7 @@ mod tests {
                     token: "gateway-1:token-1".to_string(),
                     ttl_ms: 900000,
                 }),
+                scheduler_affinity_epoch: None,
             }
         );
     }

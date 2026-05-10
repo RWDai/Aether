@@ -332,6 +332,7 @@ async fn resolve_and_rank_local_execution_candidates_with_pool_expansion(
     Vec<EligibleLocalExecutionCandidate>,
     Vec<SkippedLocalExecutionCandidate>,
 ) {
+    let scheduler_affinity_epoch = state.app().scheduler_affinity_epoch();
     let port = GatewayLocalCandidateResolutionPort {
         state,
         requested_model,
@@ -350,7 +351,12 @@ async fn resolve_and_rank_local_execution_candidates_with_pool_expansion(
     };
 
     match run_ai_candidate_resolution(&port, candidates, request).await {
-        Ok(outcome) => (outcome.eligible_candidates, outcome.skipped_candidates),
+        Ok(mut outcome) => {
+            for candidate in &mut outcome.eligible_candidates {
+                candidate.orchestration.scheduler_affinity_epoch = Some(scheduler_affinity_epoch);
+            }
+            (outcome.eligible_candidates, outcome.skipped_candidates)
+        }
         Err(error) => match error {},
     }
 }

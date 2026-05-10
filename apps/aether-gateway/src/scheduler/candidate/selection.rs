@@ -46,6 +46,7 @@ pub(super) async fn select_minimal_candidate(
     now_unix_secs: u64,
     enable_model_directives: bool,
 ) -> Result<Option<SchedulerMinimalCandidateSelectionCandidate>, GatewayError> {
+    let affinity_epoch = runtime_state.scheduler_affinity_epoch();
     let affinity_cache_key = build_scheduler_affinity_cache_key(
         auth_snapshot,
         api_format,
@@ -68,7 +69,12 @@ pub(super) async fn select_minimal_candidate(
     .into_iter()
     .next();
     if let Some(candidate) = selected.as_ref() {
-        remember_scheduler_affinity(affinity_cache_key.as_deref(), runtime_state, candidate);
+        remember_scheduler_affinity(
+            affinity_cache_key.as_deref(),
+            runtime_state,
+            candidate,
+            Some(affinity_epoch),
+        );
     }
     Ok(selected)
 }

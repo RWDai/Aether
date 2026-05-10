@@ -18,7 +18,10 @@ use crate::ai_serving::{
 use crate::client_session_affinity::{
     client_session_affinity_report_context_value, CLIENT_SESSION_AFFINITY_REPORT_CONTEXT_FIELD,
 };
-use crate::orchestration::{insert_pool_key_lease_report_context_fields, ExecutionAttemptIdentity};
+use crate::orchestration::{
+    insert_pool_key_lease_report_context_fields, ExecutionAttemptIdentity,
+    SCHEDULER_AFFINITY_EPOCH_REPORT_FIELD,
+};
 
 pub(crate) struct LocalExecutionReportContextParts<'a> {
     pub(crate) auth_context: &'a ExecutionRuntimeAuthContext,
@@ -52,6 +55,7 @@ pub(crate) struct LocalExecutionReportContextParts<'a> {
     pub(crate) original_request_body_json: Option<&'a Value>,
     pub(crate) original_request_body_base64: Option<&'a str>,
     pub(crate) client_session_affinity: Option<&'a ClientSessionAffinity>,
+    pub(crate) scheduler_affinity_epoch: Option<u64>,
     pub(crate) client_requested_stream: bool,
     pub(crate) upstream_is_stream: bool,
     pub(crate) has_envelope: bool,
@@ -89,6 +93,12 @@ pub(crate) fn build_local_execution_report_context(
         merge_incoming_tls_fingerprint(&mut extra_fields, incoming_tls);
     }
     insert_pool_key_lease_report_context_fields(&mut extra_fields, parts.pool_key_lease);
+    if let Some(epoch) = parts.scheduler_affinity_epoch {
+        extra_fields.insert(
+            SCHEDULER_AFFINITY_EPOCH_REPORT_FIELD.to_string(),
+            Value::Number(epoch.into()),
+        );
+    }
     insert_request_path_fields(
         &mut extra_fields,
         parts.request_path,
@@ -278,6 +288,7 @@ mod tests {
                 original_request_body_json: Some(&json!({"model": "gpt-5"})),
                 original_request_body_base64: None,
                 client_session_affinity: Some(&client_session_affinity),
+                scheduler_affinity_epoch: None,
                 client_requested_stream: false,
                 upstream_is_stream: false,
                 has_envelope: false,
@@ -359,6 +370,7 @@ mod tests {
                 })),
                 original_request_body_base64: None,
                 client_session_affinity: None,
+                scheduler_affinity_epoch: None,
                 client_requested_stream: false,
                 upstream_is_stream: true,
                 has_envelope: false,
@@ -424,6 +436,7 @@ mod tests {
                 original_request_body_json: Some(&json!({"model": "gpt-5"})),
                 original_request_body_base64: None,
                 client_session_affinity: None,
+                scheduler_affinity_epoch: None,
                 client_requested_stream: false,
                 upstream_is_stream: false,
                 has_envelope: false,

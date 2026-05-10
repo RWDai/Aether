@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::time::Duration;
@@ -75,6 +76,7 @@ impl AppState {
         cache_key: &str,
         target: &SchedulerAffinityTarget,
         ttl: Duration,
+        epoch: u64,
     ) {
         if self.runtime_state.is_memory() {
             return;
@@ -85,6 +87,7 @@ impl AppState {
 
         let cache_key = cache_key.to_string();
         let runtime_state = self.runtime_state.clone();
+        let scheduler_affinity_epoch = self.scheduler_affinity_epoch.clone();
         let provider_id = target.provider_id.clone();
         let endpoint_id = target.endpoint_id.clone();
         let key_id = target.key_id.clone();
@@ -93,6 +96,9 @@ impl AppState {
         let expire_at = now_unix_secs.saturating_add(ttl_seconds);
 
         handle.spawn(async move {
+            if scheduler_affinity_epoch.load(Ordering::Acquire) != epoch {
+                return;
+            }
             let existing = runtime_state
                 .kv_get(&cache_key)
                 .await
@@ -117,8 +123,12 @@ impl AppState {
                 "created_at": created_at,
                 "expire_at": expire_at,
                 "request_count": request_count,
+                "scheduler_affinity_epoch": epoch,
             });
             if let Ok(serialized) = serde_json::to_string(&payload) {
+                if scheduler_affinity_epoch.load(Ordering::Acquire) != epoch {
+                    return;
+                }
                 let _ = runtime_state
                     .kv_set(
                         &cache_key,
@@ -202,6 +212,7 @@ impl AppState {
             oauth_refresh: Arc::new(provider_transport::LocalOAuthRefreshCoordinator::new()),
             direct_plan_bypass_cache: Arc::new(DirectPlanBypassCache::default()),
             scheduler_affinity_cache: Arc::new(SchedulerAffinityCache::default()),
+            scheduler_affinity_epoch: Arc::new(AtomicU64::new(0)),
             dashboard_response_cache: Arc::new(DashboardResponseCache::default()),
             system_config_cache: Arc::new(SystemConfigCache::default()),
             fallback_metrics: Arc::new(fallback_metrics::GatewayFallbackMetrics::default()),
@@ -958,12 +969,29 @@ impl AppState {
         self.scheduler_affinity_cache.remove(cache_key).is_some()
     }
 
+    pub(crate) fn scheduler_affinity_epoch(&self) -> u64 {
+        self.scheduler_affinity_epoch.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn invalidate_scheduler_affinity_cache(&self) -> u64 {
+        let next_epoch = self
+            .scheduler_affinity_epoch
+            .fetch_add(1, Ordering::AcqRel)
+            .saturating_add(1);
+        self.scheduler_affinity_cache.clear();
+        next_epoch
+    }
+
     pub(crate) fn read_scheduler_affinity_target(
         &self,
         cache_key: &str,
         ttl: Duration,
     ) -> Option<SchedulerAffinityTarget> {
-        self.scheduler_affinity_cache.get_fresh(cache_key, ttl)
+        self.scheduler_affinity_cache.get_fresh_for_epoch(
+            cache_key,
+            ttl,
+            self.scheduler_affinity_epoch(),
+        )
     }
 
     pub(crate) fn remember_scheduler_affinity_target(
@@ -973,16 +1001,45 @@ impl AppState {
         ttl: Duration,
         max_entries: usize,
     ) {
-        self.spawn_scheduler_affinity_redis_write(cache_key, &target, ttl);
-        self.scheduler_affinity_cache
-            .insert(cache_key.to_string(), target, ttl, max_entries);
+        let epoch = self.scheduler_affinity_epoch();
+        self.remember_scheduler_affinity_target_for_epoch(
+            cache_key,
+            target,
+            ttl,
+            max_entries,
+            Some(epoch),
+        );
+    }
+
+    pub(crate) fn remember_scheduler_affinity_target_for_epoch(
+        &self,
+        cache_key: &str,
+        target: SchedulerAffinityTarget,
+        ttl: Duration,
+        max_entries: usize,
+        expected_epoch: Option<u64>,
+    ) -> bool {
+        let epoch = expected_epoch.unwrap_or_else(|| self.scheduler_affinity_epoch());
+        if self.scheduler_affinity_epoch() != epoch {
+            return false;
+        }
+        self.spawn_scheduler_affinity_redis_write(cache_key, &target, ttl, epoch);
+        self.scheduler_affinity_cache.insert_for_epoch(
+            cache_key.to_string(),
+            target,
+            ttl,
+            max_entries,
+            epoch,
+        );
+        true
     }
 
     pub(crate) fn list_scheduler_affinity_entries(
         &self,
         ttl: Duration,
     ) -> Vec<SchedulerAffinitySnapshotEntry> {
-        self.scheduler_affinity_cache.fresh_entries(ttl)
+        self.scheduler_affinity_cache
+            .fresh_entries_for_epoch(ttl, self.scheduler_affinity_epoch())
     }
 
     pub fn with_video_task_store_path(
@@ -1203,6 +1260,59 @@ mod tests {
                 .await
                 .expect("system config read should reflect replaced data"),
             Some(json!("new"))
+        );
+    }
+
+    #[test]
+    fn scheduler_affinity_epoch_blocks_stale_rewarm_after_invalidation() {
+        let state = AppState::new().expect("app state should build");
+        let cache_key = "scheduler_affinity:api-key-1:openai:chat:gpt-5";
+        let ttl = std::time::Duration::from_secs(300);
+        let first_target = crate::cache::SchedulerAffinityTarget {
+            provider_id: "provider-old".to_string(),
+            endpoint_id: "endpoint-old".to_string(),
+            key_id: "key-old".to_string(),
+        };
+        let next_target = crate::cache::SchedulerAffinityTarget {
+            provider_id: "provider-new".to_string(),
+            endpoint_id: "endpoint-new".to_string(),
+            key_id: "key-new".to_string(),
+        };
+        let initial_epoch = state.scheduler_affinity_epoch();
+
+        assert!(state.remember_scheduler_affinity_target_for_epoch(
+            cache_key,
+            first_target.clone(),
+            ttl,
+            16,
+            Some(initial_epoch),
+        ));
+        assert_eq!(
+            state.read_scheduler_affinity_target(cache_key, ttl),
+            Some(first_target)
+        );
+
+        let next_epoch = state.invalidate_scheduler_affinity_cache();
+
+        assert!(!state.remember_scheduler_affinity_target_for_epoch(
+            cache_key,
+            next_target.clone(),
+            ttl,
+            16,
+            Some(initial_epoch),
+        ));
+        assert_eq!(state.read_scheduler_affinity_target(cache_key, ttl), None);
+
+        assert!(state.remember_scheduler_affinity_target_for_epoch(
+            cache_key,
+            next_target.clone(),
+            ttl,
+            16,
+            Some(next_epoch),
+        ));
+        assert_eq!(
+            state.read_scheduler_affinity_target(cache_key, ttl),
+            Some(next_target)
         );
     }
 }

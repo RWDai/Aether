@@ -15,7 +15,7 @@ use std::sync::Arc;
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::ai_serving::planner::candidate_affinity_cache::remember_scheduler_affinity_for_candidate;
+use crate::ai_serving::planner::candidate_affinity_cache::remember_scheduler_affinity_for_candidate_at_epoch;
 use crate::ai_serving::planner::candidate_resolution::{
     resolve_and_rank_logical_local_execution_candidates, EligibleLocalExecutionCandidate,
     LocalExecutionCandidateKind, SkippedLocalExecutionCandidate,
@@ -810,13 +810,14 @@ pub(crate) fn remember_first_local_candidate_affinity(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or(first_candidate.candidate.global_model_name.as_str());
-    remember_scheduler_affinity_for_candidate(
+    remember_scheduler_affinity_for_candidate_at_epoch(
         state,
         auth_snapshot,
         client_session_affinity,
         client_api_format,
         affinity_requested_model,
         &first_candidate.candidate,
+        first_candidate.orchestration.scheduler_affinity_epoch,
     );
 }
 
@@ -1324,6 +1325,7 @@ mod tests {
                 candidate_group_id: pool_key_index.map(|_| "pool-group".to_string()),
                 pool_key_index,
                 pool_key_lease: None,
+                scheduler_affinity_epoch: None,
             },
             ranking: None,
         }

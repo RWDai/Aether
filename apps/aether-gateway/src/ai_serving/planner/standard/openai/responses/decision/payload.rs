@@ -112,6 +112,7 @@ pub(crate) async fn maybe_build_local_openai_responses_decision_payload_for_cand
                 original_request_body_json: Some(body_json),
                 original_request_body_base64: None,
                 client_session_affinity: input.client_session_affinity.as_ref(),
+                scheduler_affinity_epoch: eligible.orchestration.scheduler_affinity_epoch,
                 client_requested_stream: body_json
                     .get("stream")
                     .and_then(serde_json::Value::as_bool)

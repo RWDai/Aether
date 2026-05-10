@@ -248,12 +248,16 @@ fn remember_successful_local_scheduler_affinity(
     let Some(target) = local_scheduler_affinity_target(context.plan) else {
         return;
     };
+    let expected_epoch =
+        local_execution_candidate_metadata_from_report_context(context.report_context)
+            .scheduler_affinity_epoch;
 
-    state.remember_scheduler_affinity_target(
+    let _ = state.remember_scheduler_affinity_target_for_epoch(
         &cache_key,
         target,
         SCHEDULER_AFFINITY_TTL,
         LOCAL_EXECUTION_SCHEDULER_AFFINITY_MAX_ENTRIES,
+        expected_epoch,
     );
 }
 

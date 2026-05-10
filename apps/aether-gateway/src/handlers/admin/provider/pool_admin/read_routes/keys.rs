@@ -191,6 +191,24 @@ fn admin_pool_sort_keys_for_request(keys: &mut [StoredProviderCatalogKey], sort:
     }
 }
 
+fn admin_pool_repository_key_order(sort: AdminPoolKeySort) -> ProviderCatalogKeyListOrder {
+    match (sort.field, sort.direction) {
+        (AdminPoolKeySortField::Default, _) => ProviderCatalogKeyListOrder::Name,
+        (AdminPoolKeySortField::ImportedAt, AdminPoolKeySortDirection::Asc) => {
+            ProviderCatalogKeyListOrder::CreatedAtAsc
+        }
+        (AdminPoolKeySortField::ImportedAt, AdminPoolKeySortDirection::Desc) => {
+            ProviderCatalogKeyListOrder::CreatedAtDesc
+        }
+        (AdminPoolKeySortField::LastUsedAt, AdminPoolKeySortDirection::Asc) => {
+            ProviderCatalogKeyListOrder::LastUsedAtAsc
+        }
+        (AdminPoolKeySortField::LastUsedAt, AdminPoolKeySortDirection::Desc) => {
+            ProviderCatalogKeyListOrder::LastUsedAtDesc
+        }
+    }
+}
+
 pub(super) async fn build_admin_pool_list_keys_response(
     state: &AdminAppState<'_>,
     request_context: &AdminRequestContext<'_>,
@@ -305,7 +323,7 @@ pub(super) async fn build_admin_pool_list_keys_response(
             .take(page_size)
             .collect::<Vec<_>>();
         (keys, total)
-    } else if !quick_selectors.is_empty() || sort.field != AdminPoolKeySortField::Default {
+    } else if !quick_selectors.is_empty() {
         let mut keys = state
             .list_provider_catalog_keys_by_provider_ids(std::slice::from_ref(&provider.id))
             .await?
@@ -354,7 +372,7 @@ pub(super) async fn build_admin_pool_list_keys_response(
                 },
                 offset: page_offset,
                 limit: page_size,
-                order: ProviderCatalogKeyListOrder::Name,
+                order: admin_pool_repository_key_order(sort),
             })
             .await?;
         (key_page.items, key_page.total)

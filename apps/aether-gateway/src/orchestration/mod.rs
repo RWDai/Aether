@@ -20,7 +20,7 @@ pub(crate) use self::attempt::{
     attempt_identity_from_report_context, build_local_attempt_identities,
     insert_pool_key_lease_report_context_fields, local_attempt_slot_count,
     local_execution_candidate_metadata_from_report_context, ExecutionAttemptIdentity,
-    LocalExecutionCandidateMetadata,
+    LocalExecutionCandidateMetadata, SCHEDULER_AFFINITY_EPOCH_REPORT_FIELD,
 };
 pub(crate) use self::classifier::{
     classify_local_failover, local_failover_error_message, LocalFailoverClassification,

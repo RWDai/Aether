@@ -267,6 +267,9 @@ where
             self.state,
             self.trace_id,
             self.persistence_policy.available,
+            self.persistence_policy
+                .skipped
+                .record_runtime_miss_diagnostic,
             candidates,
             self.sticky_session_token,
             self.requested_model,
@@ -528,6 +531,8 @@ where
         state,
         candidates,
         0,
+        Some(trace_id),
+        persistence_policy.skipped.record_runtime_miss_diagnostic,
         sticky_session_token,
         requested_model,
         request_auth_channel,
@@ -543,6 +548,8 @@ fn build_logical_candidate_items<'a>(
     state: PlannerAppState<'a>,
     candidates: Vec<EligibleLocalExecutionCandidate>,
     starting_candidate_index: u32,
+    trace_id: Option<&str>,
+    record_runtime_miss_diagnostic: bool,
     sticky_session_token: Option<&str>,
     requested_model: Option<&str>,
     request_auth_channel: Option<&str>,
@@ -563,14 +570,20 @@ fn build_logical_candidate_items<'a>(
                 }
             }
             LocalExecutionCandidateKind::PoolGroup => {
+                let cursor = PoolKeyCursor::new(
+                    state,
+                    candidate,
+                    sticky_session_token,
+                    requested_model,
+                    request_auth_channel,
+                );
+                let cursor = if let Some(trace_id) = trace_id {
+                    cursor.with_runtime_miss_diagnostic(trace_id, record_runtime_miss_diagnostic)
+                } else {
+                    cursor
+                };
                 items.push_back(LocalExecutionCandidateAttemptSourceItem::Pool {
-                    cursor: PoolKeyCursor::new(
-                        state,
-                        candidate,
-                        sticky_session_token,
-                        requested_model,
-                        request_auth_channel,
-                    ),
+                    cursor,
                     candidate_index,
                     pending_attempts: VecDeque::new(),
                 });
@@ -757,6 +770,8 @@ impl<'a> RequestedModelAttemptPageCursor<'a> {
                 self.state,
                 candidates,
                 self.next_candidate_index,
+                Some(&self.trace_id),
+                self.record_runtime_miss_diagnostic,
                 self.sticky_session_token.as_deref(),
                 Some(&self.requested_model),
                 self.request_auth_channel.as_deref(),
@@ -922,6 +937,7 @@ async fn materialize_logical_local_execution_candidate_attempts<F>(
     state: PlannerAppState<'_>,
     trace_id: &str,
     context: LocalAvailableCandidatePersistenceContext<'_>,
+    record_runtime_miss_diagnostic: bool,
     candidates: Vec<EligibleLocalExecutionCandidate>,
     sticky_session_token: Option<&str>,
     requested_model: Option<&str>,
@@ -956,7 +972,8 @@ where
                     sticky_session_token,
                     requested_model,
                     request_auth_channel,
-                );
+                )
+                .with_runtime_miss_diagnostic(trace_id, record_runtime_miss_diagnostic);
                 let attempt_count_before_pool = attempts.len();
                 while let Some(candidate) = cursor.next_key().await {
                     attempts.extend(build_unpersisted_local_execution_candidate_attempts(
@@ -1525,6 +1542,7 @@ mod tests {
                 required_capabilities: None,
                 error_context: "persist should not fail",
             },
+            false,
             vec![pool_group, sample_eligible("normal-key", None)],
             None,
             Some("gpt-5"),

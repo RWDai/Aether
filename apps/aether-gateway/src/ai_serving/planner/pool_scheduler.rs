@@ -19,6 +19,7 @@ use crate::ai_serving::planner::candidate_resolution::{
     candidate_auth_channel_skip_reason, read_candidate_transport_snapshot,
     EligibleLocalExecutionCandidate, LocalExecutionCandidateKind, SkippedLocalExecutionCandidate,
 };
+use crate::ai_serving::planner::runtime_miss::record_local_runtime_candidate_skip_reason;
 use crate::ai_serving::{
     candidate_common_transport_skip_reason, CandidateTransportPolicyFacts, PlannerAppState,
 };
@@ -171,6 +172,8 @@ pub(crate) struct PoolKeyCursor<'a> {
     sticky_session_token: Option<String>,
     requested_model: Option<String>,
     request_auth_channel: Option<String>,
+    runtime_miss_trace_id: Option<String>,
+    record_runtime_miss_diagnostic: bool,
     pool_key_order: StoredPoolKeyCandidateOrder,
     next_offset: u32,
     scanned_keys: u32,
@@ -183,6 +186,8 @@ pub(crate) struct PoolKeyCursor<'a> {
     queued_candidates: VecDeque<EligibleLocalExecutionCandidate>,
     skipped_candidates: Vec<SkippedLocalExecutionCandidate>,
     exhausted_logged: bool,
+    returned_key_count: u32,
+    exhaustion_skip_recorded: bool,
 }
 
 impl<'a> PoolKeyCursor<'a> {
@@ -200,6 +205,8 @@ impl<'a> PoolKeyCursor<'a> {
             sticky_session_token: sticky_session_token.map(str::to_string),
             requested_model: requested_model.map(str::to_string),
             request_auth_channel: request_auth_channel.map(str::to_string),
+            runtime_miss_trace_id: None,
+            record_runtime_miss_diagnostic: false,
             pool_key_order,
             next_offset: 0,
             scanned_keys: 0,
@@ -212,12 +219,27 @@ impl<'a> PoolKeyCursor<'a> {
             queued_candidates: VecDeque::new(),
             skipped_candidates: Vec::new(),
             exhausted_logged: false,
+            returned_key_count: 0,
+            exhaustion_skip_recorded: false,
         }
+    }
+
+    pub(crate) fn with_runtime_miss_diagnostic(
+        mut self,
+        trace_id: &str,
+        record_runtime_miss_diagnostic: bool,
+    ) -> Self {
+        if record_runtime_miss_diagnostic {
+            self.runtime_miss_trace_id = Some(trace_id.to_string());
+            self.record_runtime_miss_diagnostic = true;
+        }
+        self
     }
 
     pub(crate) async fn next_key(&mut self) -> Option<EligibleLocalExecutionCandidate> {
         loop {
             if let Some(candidate) = self.next_queued_candidate().await {
+                self.returned_key_count = self.returned_key_count.saturating_add(1);
                 return Some(candidate);
             }
 
@@ -254,6 +276,37 @@ impl<'a> PoolKeyCursor<'a> {
             skip_reason_counts = ?self.skip_reason_counts,
             "gateway pool scheduler exhausted pool group without a schedulable key"
         );
+        self.record_runtime_miss_pool_exhaustion_skip_reason();
+    }
+
+    fn record_runtime_miss_pool_exhaustion_skip_reason(&mut self) {
+        if self.exhaustion_skip_recorded
+            || !self.record_runtime_miss_diagnostic
+            || self.returned_key_count > 0
+        {
+            return;
+        }
+        let Some(trace_id) = self.runtime_miss_trace_id.as_deref() else {
+            return;
+        };
+        self.exhaustion_skip_recorded = true;
+        record_local_runtime_candidate_skip_reason(
+            self.state.app(),
+            trace_id,
+            self.runtime_miss_pool_exhaustion_skip_reason(),
+        );
+    }
+
+    fn runtime_miss_pool_exhaustion_skip_reason(&self) -> &'static str {
+        let mut selected_reason = "pool_group_exhausted";
+        let mut selected_count = 0;
+        for (reason, count) in &self.skip_reason_counts {
+            if *count > selected_count {
+                selected_reason = *reason;
+                selected_count = *count;
+            }
+        }
+        selected_reason
     }
 
     async fn next_page_candidates(&mut self) -> Option<Vec<EligibleLocalExecutionCandidate>> {
@@ -963,6 +1016,7 @@ mod tests {
     use crate::ai_serving::planner::candidate_resolution::{
         EligibleLocalExecutionCandidate, LocalExecutionCandidateKind,
     };
+    use crate::ai_serving::planner::runtime_miss::apply_local_runtime_candidate_terminal_reason;
     use crate::ai_serving::PlannerAppState;
     use crate::data::GatewayDataState;
     use crate::handlers::shared::provider_pool::{
@@ -970,7 +1024,7 @@ mod tests {
         try_claim_admin_provider_pool_key, AdminProviderPoolRuntimeState,
     };
     use crate::orchestration::LocalExecutionCandidateMetadata;
-    use crate::AppState;
+    use crate::{AppState, LocalExecutionRuntimeMissDiagnostic};
     use aether_ai_serving::{normalize_enabled_ai_pool_presets, AiPoolSchedulingPreset};
     use aether_data::repository::candidate_selection::InMemoryMinimalCandidateSelectionReadRepository;
     use aether_data::repository::provider_catalog::InMemoryProviderCatalogReadRepository;
@@ -1737,6 +1791,43 @@ mod tests {
                 seed: "seed".to_string()
             }
         ));
+    }
+
+    #[test]
+    fn pool_key_cursor_records_runtime_miss_when_exhausted_without_returning_key() {
+        let app = AppState::new().expect("state should build");
+        let trace_id = "trace-pool-exhausted-runtime-miss";
+        app.set_local_execution_runtime_miss_diagnostic(
+            trace_id,
+            LocalExecutionRuntimeMissDiagnostic {
+                reason: "candidate_evaluation_incomplete".to_string(),
+                requested_model: Some("gpt-5".to_string()),
+                candidate_count: Some(1),
+                ..LocalExecutionRuntimeMissDiagnostic::default()
+            },
+        );
+        let group = sample_eligible_candidate(
+            "provider-pool",
+            "endpoint-1",
+            "pool-group",
+            10,
+            Some(json!({ "pool_advanced": { "lru_enabled": true } })),
+        );
+        let mut cursor = PoolKeyCursor::new(PlannerAppState::new(&app), group, None, None, None)
+            .with_runtime_miss_diagnostic(trace_id, true);
+        cursor.record_skip_reason("pool_key_lease_busy");
+        cursor.record_skip_reason("pool_key_lease_busy");
+        cursor.record_skip_reason("transport_snapshot_missing");
+
+        cursor.log_exhausted();
+        apply_local_runtime_candidate_terminal_reason(&app, trace_id, "no_local_sync_plans");
+
+        let diagnostic = app
+            .take_local_execution_runtime_miss_diagnostic(trace_id)
+            .expect("runtime miss diagnostic should exist");
+        assert_eq!(diagnostic.reason, "all_candidates_skipped");
+        assert_eq!(diagnostic.skipped_candidate_count, Some(1));
+        assert_eq!(diagnostic.skip_reasons.get("pool_key_lease_busy"), Some(&1));
     }
 
     #[tokio::test]

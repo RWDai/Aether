@@ -97,8 +97,7 @@
               v-for="bucket in bucketItems"
               :key="bucket.bucket_start_unix_secs"
               class="flex-1 min-w-[4px] rounded-t-sm"
-              :class="bucketBarClass(bucket)"
-              :style="{ height: bucketBarHeight(bucket) }"
+              :style="bucketBarStyle(bucket)"
               :title="bucketTitle(bucket)"
             />
           </div>
@@ -577,11 +576,19 @@ function bucketBarHeight(bucket: ProxyNodeMetricsBucket) {
   return `${Math.max(10, Math.round(bucket.uptime_ratio * 100))}%`
 }
 
-function bucketBarClass(bucket: ProxyNodeMetricsBucket) {
-  if (bucket.samples <= 0) return 'bg-muted'
-  if (bucket.error_events_delta > 0 || bucket.connect_errors_delta > 0) return 'bg-destructive/80'
-  if ((bucket.uptime_ratio ?? 0) < 0.98 || bucket.disconnects_delta > 0) return 'bg-yellow-500/80'
-  return 'bg-primary/80'
+function bucketBarStyle(bucket: ProxyNodeMetricsBucket) {
+  return {
+    height: bucketBarHeight(bucket),
+    minHeight: bucket.samples > 0 ? '6px' : '4px',
+    backgroundColor: bucketBarColor(bucket),
+  }
+}
+
+function bucketBarColor(bucket: ProxyNodeMetricsBucket) {
+  if (bucket.samples <= 0) return 'rgba(148, 163, 184, 0.35)'
+  if (bucket.error_events_delta > 0 || bucket.connect_errors_delta > 0) return 'rgba(220, 38, 38, 0.86)'
+  if ((bucket.uptime_ratio ?? 0) < 0.98 || bucket.disconnects_delta > 0) return 'rgba(217, 119, 6, 0.86)'
+  return 'rgba(22, 163, 74, 0.86)'
 }
 
 function bucketTitle(bucket: ProxyNodeMetricsBucket) {

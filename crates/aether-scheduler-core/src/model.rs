@@ -183,9 +183,7 @@ pub fn resolve_provider_model_name_with_model_directives(
         for pattern in global_model_mappings {
             if matches_model_mapping(pattern, allowed_model) {
                 let allowed_model = allowed_model.to_owned();
-                // Regex mappings prove the key can serve this global model; they do not
-                // override the provider model chosen from the Provider model mapping.
-                return Some((selected_provider_model_name.clone(), Some(allowed_model)));
+                return Some((allowed_model.clone(), Some(allowed_model)));
             }
         }
     }
@@ -416,7 +414,7 @@ mod tests {
     }
 
     #[test]
-    fn regex_allowed_model_does_not_replace_selected_provider_model_name() {
+    fn regex_allowed_model_replaces_selected_provider_model_name() {
         let mut row = sample_row("gpt-5", "gpt-5-upstream");
         row.key_allowed_models = Some(vec!["gpt-5.4".to_string()]);
         row.global_model_mappings = Some(vec!["gpt-5(?:\\.\\d+)?".to_string()]);
@@ -430,7 +428,7 @@ mod tests {
         let resolved = resolve_provider_model_name(&row, "gpt-5", "openai:chat")
             .expect("regex-matched allowed model should allow the key");
 
-        assert_eq!(resolved.0, "gpt-5-canonical-upstream");
+        assert_eq!(resolved.0, "gpt-5.4");
         assert_eq!(resolved.1.as_deref(), Some("gpt-5.4"));
     }
 

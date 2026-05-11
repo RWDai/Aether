@@ -192,7 +192,7 @@ pub(in super::super) async fn build_admin_create_user_response(
     };
     let requested_group_ids = normalize_admin_user_group_ids(payload.group_ids);
     let group_ids = state
-        .include_default_user_group_ids(&requested_group_ids)
+        .include_default_user_group_ids_for_role(&requested_group_ids, &role)
         .await?;
     let groups = if group_ids.is_empty() {
         Vec::new()

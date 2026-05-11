@@ -99,4 +99,5 @@ VALUES (
 INSERT IGNORE INTO user_group_members (group_id, user_id, created_at)
 SELECT '00000000-0000-0000-0000-000000000001', id, UNIX_TIMESTAMP()
 FROM users
-WHERE is_deleted = 0;
+WHERE is_deleted = 0
+  AND LOWER(role) <> 'admin';

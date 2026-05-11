@@ -1652,12 +1652,21 @@ impl GatewayDataState {
         let Some(mut snapshot) = snapshot else {
             return Ok(None);
         };
+        if snapshot.user_role.eq_ignore_ascii_case("admin") && !snapshot.api_key_is_standalone {
+            apply_admin_unrestricted_auth_snapshot(&mut snapshot);
+            return Ok(Some(snapshot));
+        }
         let Some(repository) = self.user_reader.as_ref() else {
             return Ok(Some(snapshot));
         };
         let Some(user) = repository.find_user_auth_by_id(&snapshot.user_id).await? else {
             return Ok(Some(snapshot));
         };
+        if user.role.eq_ignore_ascii_case("admin") && !snapshot.api_key_is_standalone {
+            snapshot.user_role = user.role;
+            apply_admin_unrestricted_auth_snapshot(&mut snapshot);
+            return Ok(Some(snapshot));
+        }
         let export_row = repository.find_export_user_by_id(&snapshot.user_id).await?;
         let mut groups = repository
             .list_user_groups_for_user(&snapshot.user_id)
@@ -1737,6 +1746,18 @@ impl GatewayDataState {
         );
         Ok(Some(snapshot))
     }
+}
+
+fn apply_admin_unrestricted_auth_snapshot(snapshot: &mut GatewayAuthApiKeySnapshot) {
+    snapshot.user_allowed_providers = None;
+    snapshot.user_allowed_api_formats = None;
+    snapshot.user_allowed_models = None;
+    snapshot.user_rate_limit = None;
+    snapshot.api_key_allowed_providers = None;
+    snapshot.api_key_allowed_api_formats = None;
+    snapshot.api_key_allowed_models = None;
+    snapshot.api_key_rate_limit = None;
+    snapshot.api_key_concurrent_limit = None;
 }
 
 fn resolve_effective_list_policy(
@@ -1875,16 +1896,27 @@ mod tests {
         InMemoryAuthApiKeySnapshotRepository, StoredAuthApiKeyExportRecord,
         StoredAuthApiKeySnapshot,
     };
-    use aether_data::repository::users::StoredUserGroup;
+    use aether_data::repository::users::{
+        InMemoryUserReadRepository, StoredUserAuthRecord, StoredUserGroup, UpsertUserGroupRecord,
+        UserReadRepository,
+    };
 
     use crate::data::GatewayDataState;
 
     fn sample_snapshot(api_key_id: &str, user_id: &str) -> StoredAuthApiKeySnapshot {
+        sample_snapshot_with_role(api_key_id, user_id, "user")
+    }
+
+    fn sample_snapshot_with_role(
+        api_key_id: &str,
+        user_id: &str,
+        role: &str,
+    ) -> StoredAuthApiKeySnapshot {
         StoredAuthApiKeySnapshot::new(
             user_id.to_string(),
             "alice".to_string(),
             Some("alice@example.com".to_string()),
-            "user".to_string(),
+            role.to_string(),
             "local".to_string(),
             true,
             false,
@@ -1904,6 +1936,26 @@ mod tests {
             Some(serde_json::json!(["gpt-5"])),
         )
         .expect("snapshot should build")
+    }
+
+    fn sample_auth_user(user_id: &str, role: &str) -> StoredUserAuthRecord {
+        StoredUserAuthRecord::new(
+            user_id.to_string(),
+            Some("alice@example.com".to_string()),
+            true,
+            "alice".to_string(),
+            Some("hash".to_string()),
+            role.to_string(),
+            "local".to_string(),
+            Some(serde_json::json!(["openai"])),
+            Some(serde_json::json!(["openai:chat"])),
+            Some(serde_json::json!(["gpt-5"])),
+            true,
+            false,
+            None,
+            None,
+        )
+        .expect("auth user should build")
     }
 
     fn sample_group(
@@ -2051,6 +2103,61 @@ mod tests {
 
         assert_eq!(user_policy, Some(Vec::<String>::new()));
         assert_eq!(api_key_policy, Some(Vec::<String>::new()));
+    }
+
+    #[tokio::test]
+    async fn admin_non_standalone_snapshot_bypasses_group_and_key_policies() {
+        let mut snapshot = sample_snapshot_with_role("key-admin", "admin-1", "admin")
+            .with_user_rate_limit(Some(120));
+        snapshot.api_key_allowed_providers = Some(vec!["anthropic".to_string()]);
+        snapshot.api_key_allowed_api_formats = Some(vec!["anthropic:messages".to_string()]);
+        snapshot.api_key_allowed_models = Some(vec!["claude-sonnet-4-5".to_string()]);
+        snapshot.api_key_rate_limit = Some(5);
+        snapshot.api_key_concurrent_limit = Some(1);
+
+        let auth_repository = Arc::new(InMemoryAuthApiKeySnapshotRepository::seed(vec![(
+            Some("hash-admin".to_string()),
+            snapshot,
+        )]));
+        let user_repository = Arc::new(InMemoryUserReadRepository::seed_auth_users(vec![
+            sample_auth_user("admin-1", "admin"),
+        ]));
+        let group = user_repository
+            .create_user_group(UpsertUserGroupRecord {
+                name: "Restricted".to_string(),
+                description: None,
+                priority: 10,
+                allowed_providers: Some(vec!["openai".to_string()]),
+                allowed_providers_mode: "specific".to_string(),
+                allowed_api_formats: Some(vec!["openai:chat".to_string()]),
+                allowed_api_formats_mode: "specific".to_string(),
+                allowed_models: Some(vec!["gpt-4.1".to_string()]),
+                allowed_models_mode: "specific".to_string(),
+                rate_limit: Some(1),
+                rate_limit_mode: "custom".to_string(),
+            })
+            .await
+            .expect("group should create")
+            .expect("group should exist");
+        user_repository
+            .add_user_to_group(&group.id, "admin-1")
+            .await
+            .expect("group membership should create");
+
+        let state = GatewayDataState::with_auth_api_key_reader_for_tests(auth_repository)
+            .with_user_reader(user_repository);
+        let resolved = state
+            .read_auth_api_key_snapshot_by_key_hash("hash-admin", 100)
+            .await
+            .expect("snapshot should resolve")
+            .expect("snapshot should exist");
+
+        assert_eq!(resolved.effective_allowed_providers(), None);
+        assert_eq!(resolved.effective_allowed_api_formats(), None);
+        assert_eq!(resolved.effective_allowed_models(), None);
+        assert_eq!(resolved.user_rate_limit, None);
+        assert_eq!(resolved.api_key_rate_limit, None);
+        assert_eq!(resolved.api_key_concurrent_limit, None);
     }
 
     #[tokio::test]

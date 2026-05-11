@@ -97,4 +97,5 @@ VALUES (
 INSERT OR IGNORE INTO user_group_members (group_id, user_id, created_at)
 SELECT '00000000-0000-0000-0000-000000000001', id, CAST(strftime('%s', 'now') AS INTEGER)
 FROM users
-WHERE is_deleted = 0;
+WHERE is_deleted = 0
+  AND LOWER(role) <> 'admin';

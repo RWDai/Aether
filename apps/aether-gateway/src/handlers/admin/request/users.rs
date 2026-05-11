@@ -152,6 +152,16 @@ impl<'a> AdminAppState<'a> {
         self.app.include_default_user_group_ids(group_ids).await
     }
 
+    pub(crate) async fn include_default_user_group_ids_for_role(
+        &self,
+        group_ids: &[String],
+        role: &str,
+    ) -> Result<Vec<String>, GatewayError> {
+        self.app
+            .include_default_user_group_ids_for_role(group_ids, role)
+            .await
+    }
+
     pub(crate) async fn effective_default_user_group_id(
         &self,
     ) -> Result<Option<String>, GatewayError> {

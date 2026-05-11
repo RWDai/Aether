@@ -444,11 +444,11 @@ async fn gateway_allows_default_user_group_access_policy_updates() {
 
     let user_repository = Arc::new(
         InMemoryUserReadRepository::seed_auth_users(vec![
-            sample_admin_user("user-1"),
+            sample_admin_user_with_role("admin-1", "admin", "admin@example.com", "admin"),
             sample_admin_user_with_role("user-2", "user", "bob@example.com", "bob"),
         ])
         .with_export_users(vec![
-            sample_admin_export_user("user-1"),
+            sample_admin_export_user_with("admin", true, "admin-1", "admin@example.com", "admin"),
             sample_admin_export_user_with("user", true, "user-2", "bob@example.com", "bob"),
         ]),
     );
@@ -504,7 +504,8 @@ async fn gateway_allows_default_user_group_access_policy_updates() {
         .list_user_group_members(&group_id)
         .await
         .expect("default members should list");
-    assert_eq!(members.len(), 2);
+    assert_eq!(members.len(), 1);
+    assert_eq!(members[0].user_id, "user-2");
 
     let update_response = client
         .put(format!("{gateway_url}/api/admin/user-groups/{group_id}"))

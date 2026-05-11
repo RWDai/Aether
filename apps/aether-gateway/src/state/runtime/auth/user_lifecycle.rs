@@ -56,12 +56,23 @@ impl AppState {
         &self,
         group_ids: &[String],
     ) -> Result<Vec<String>, GatewayError> {
-        let mut group_ids = group_ids
-            .iter()
-            .map(|value| value.trim())
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-            .collect::<BTreeSet<_>>();
+        self.include_default_user_group_ids_for_role(group_ids, "user")
+            .await
+    }
+
+    pub(crate) async fn include_default_user_group_ids_for_role(
+        &self,
+        group_ids: &[String],
+        role: &str,
+    ) -> Result<Vec<String>, GatewayError> {
+        let mut group_ids = normalized_user_group_ids(group_ids);
+        if role.trim().eq_ignore_ascii_case("admin") {
+            if let Some(default_group_id) = self.configured_default_user_group_id().await? {
+                group_ids.remove(&default_group_id);
+            }
+            group_ids.remove(BUILTIN_DEFAULT_USER_GROUP_ID);
+            return Ok(group_ids.into_iter().collect());
+        }
         if let Some(default_group_id) = self.effective_default_user_group_id().await? {
             group_ids.insert(default_group_id);
         }
@@ -69,7 +80,7 @@ impl AppState {
     }
 
     pub(crate) async fn add_all_users_to_group(&self, group_id: &str) -> Result<(), GatewayError> {
-        for user in self.list_export_users().await? {
+        for user in self.list_non_admin_export_users().await? {
             self.add_user_to_group(group_id, &user.id).await?;
         }
         Ok(())
@@ -800,4 +811,13 @@ impl AppState {
             .await
             .map_err(|err| GatewayError::Internal(err.to_string()))
     }
+}
+
+fn normalized_user_group_ids(group_ids: &[String]) -> BTreeSet<String> {
+    group_ids
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
 }

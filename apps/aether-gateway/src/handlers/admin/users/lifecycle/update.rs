@@ -29,7 +29,7 @@ pub(in super::super) async fn build_admin_update_user_response(
     let Some(user_id) = admin_user_id_from_detail_path(request_context.path()) else {
         return Ok(build_admin_users_bad_request_response("缺少 user_id"));
     };
-    let Some(_existing_user) = state.find_user_auth_by_id(&user_id).await? else {
+    let Some(existing_user) = state.find_user_auth_by_id(&user_id).await? else {
         return Ok((
             http::StatusCode::NOT_FOUND,
             Json(json!({ "detail": "用户不存在" })),
@@ -130,6 +130,7 @@ pub(in super::super) async fn build_admin_update_user_response(
         },
         None => None,
     };
+    let effective_role = role.as_deref().unwrap_or(existing_user.role.as_str());
     if payload.rate_limit.is_some_and(|value| value < 0) {
         return Ok((
             http::StatusCode::BAD_REQUEST,
@@ -251,7 +252,19 @@ pub(in super::super) async fn build_admin_update_user_response(
         let requested_group_ids = normalize_admin_user_group_ids(payload.group_ids);
         Some(
             state
-                .include_default_user_group_ids(&requested_group_ids)
+                .include_default_user_group_ids_for_role(&requested_group_ids, effective_role)
+                .await?,
+        )
+    } else if role.is_some() {
+        let requested_group_ids = state
+            .list_user_groups_for_user(&user_id)
+            .await?
+            .into_iter()
+            .map(|group| group.id)
+            .collect::<Vec<_>>();
+        Some(
+            state
+                .include_default_user_group_ids_for_role(&requested_group_ids, effective_role)
                 .await?,
         )
     } else {

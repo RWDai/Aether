@@ -326,14 +326,14 @@ async fn refresh_imported_oauth_key_after_persist(
     provider: &aether_data_contracts::repository::provider_catalog::StoredProviderCatalogProvider,
     key_id: &str,
 ) -> Result<(), GatewayError> {
-    let endpoints = state
-        .list_provider_catalog_endpoints_by_provider_ids(std::slice::from_ref(&provider.id))
-        .await?;
     let Some(endpoint) =
-        crate::handlers::admin::provider::oauth::runtime::provider_oauth_runtime_endpoint_for_provider(
+        crate::handlers::admin::provider::oauth::runtime::resolve_provider_oauth_runtime_endpoints(
+            state,
+            provider,
             provider.provider_type.as_str(),
-            &endpoints,
         )
+        .await?
+        .runtime_endpoint
     else {
         return Ok(());
     };

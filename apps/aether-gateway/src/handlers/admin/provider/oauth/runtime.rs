@@ -2,6 +2,7 @@ use super::quota::antigravity::refresh_antigravity_provider_quota_locally;
 use super::quota::chatgpt_web::refresh_chatgpt_web_provider_quota_locally;
 use super::quota::codex::refresh_codex_provider_quota_locally;
 use super::quota::kiro::refresh_kiro_provider_quota_locally;
+use crate::handlers::admin::provider::write::provider::reconcile_admin_fixed_provider_template_endpoints;
 use crate::handlers::admin::request::AdminAppState;
 use crate::provider_key_auth::provider_key_is_oauth_managed;
 use crate::task_runtime::{spawn_fire_and_forget, TASK_KEY_PROVIDER_OAUTH_ACCOUNT_REFRESH};
@@ -109,6 +110,41 @@ pub(crate) fn provider_oauth_runtime_endpoint_for_provider(
     }
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct ProviderOAuthRuntimeEndpoints {
+    pub(crate) endpoints: Vec<StoredProviderCatalogEndpoint>,
+    pub(crate) runtime_endpoint: Option<StoredProviderCatalogEndpoint>,
+}
+
+pub(crate) async fn resolve_provider_oauth_runtime_endpoints(
+    state: &AdminAppState<'_>,
+    provider: &StoredProviderCatalogProvider,
+    provider_type: &str,
+) -> Result<ProviderOAuthRuntimeEndpoints, GatewayError> {
+    let mut endpoints = state
+        .list_provider_catalog_endpoints_by_provider_ids(std::slice::from_ref(&provider.id))
+        .await?;
+    let mut runtime_endpoint =
+        provider_oauth_runtime_endpoint_for_provider(provider_type, &endpoints);
+    if runtime_endpoint.is_none()
+        && state
+            .fixed_provider_template(&provider.provider_type)
+            .is_some()
+        && state.has_provider_catalog_data_writer()
+    {
+        reconcile_admin_fixed_provider_template_endpoints(state, provider).await?;
+        endpoints = state
+            .list_provider_catalog_endpoints_by_provider_ids(std::slice::from_ref(&provider.id))
+            .await?;
+        runtime_endpoint = provider_oauth_runtime_endpoint_for_provider(provider_type, &endpoints);
+    }
+
+    Ok(ProviderOAuthRuntimeEndpoints {
+        endpoints,
+        runtime_endpoint,
+    })
+}
+
 pub(crate) async fn refresh_provider_oauth_account_state_after_update(
     state: &AdminAppState<'_>,
     provider: &StoredProviderCatalogProvider,
@@ -123,11 +159,10 @@ pub(crate) async fn refresh_provider_oauth_account_state_after_update(
         return Ok((false, None));
     }
 
-    let endpoints = state
-        .list_provider_catalog_endpoints_by_provider_ids(std::slice::from_ref(&provider.id))
-        .await?;
-    let Some(endpoint) = provider_oauth_runtime_endpoint_for_provider(&provider_type, &endpoints)
-    else {
+    let ProviderOAuthRuntimeEndpoints {
+        runtime_endpoint, ..
+    } = resolve_provider_oauth_runtime_endpoints(state, provider, &provider_type).await?;
+    let Some(endpoint) = runtime_endpoint else {
         return Ok((false, None));
     };
     let Some(key) = state

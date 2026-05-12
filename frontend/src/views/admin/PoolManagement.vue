@@ -678,14 +678,14 @@
                     </span>
                     <Popover
                       v-if="key.pool_score"
-                      :open="scorePopoverOpenKeyId === key.key_id"
-                      @update:open="(open: boolean) => handleScorePopoverToggle(key.key_id, open)"
+                      :open="scoreDesktopPopoverOpenKeyId === key.key_id"
+                      @update:open="(open: boolean) => handleScoreDesktopPopoverToggle(key.key_id, open)"
                     >
                       <PopoverTrigger as-child>
                         <Button
                           variant="ghost"
                           size="icon"
-                          class="h-5 w-5 rounded-full text-muted-foreground hover:text-foreground"
+                          class="h-5 w-5 rounded-full border border-transparent text-muted-foreground/80 hover:border-border/60 hover:bg-muted/60 hover:text-foreground"
                           title="查看评分计算结果"
                           aria-label="查看评分计算结果"
                           @click.stop
@@ -694,36 +694,39 @@
                         </Button>
                       </PopoverTrigger>
                       <PopoverContent
-                        v-if="scorePopoverOpenKeyId === key.key_id"
-                        class="w-96 max-w-[calc(100vw-2rem)] p-3"
+                        v-if="scoreDesktopPopoverOpenKeyId === key.key_id"
+                        class="w-[22rem] max-w-[calc(100vw-1rem)] overflow-hidden rounded-xl border-border/60 bg-card/95 p-0 text-card-foreground shadow-xl shadow-black/5 backdrop-blur supports-[backdrop-filter]:bg-card/90"
                         side="bottom"
-                        align="center"
+                        align="end"
+                        :side-offset="8"
                       >
-                        <div class="space-y-2 text-left">
-                          <div class="flex items-center justify-between gap-3">
-                            <span class="text-xs font-medium">评分计算结果</span>
-                            <span class="font-mono text-xs tabular-nums">
+                        <div class="text-left">
+                          <div class="flex items-center justify-between gap-3 border-b border-border/60 bg-muted/30 px-3 py-2.5">
+                            <span class="text-xs font-semibold text-foreground">评分计算结果</span>
+                            <span class="font-mono text-xs tabular-nums text-foreground/90">
                               {{ formatPoolScore(key.pool_score?.score) }}
                             </span>
                           </div>
-                          <div class="flex flex-wrap items-center gap-1.5">
-                            <Badge
-                              variant="outline"
-                              class="text-[10px]"
-                            >
-                              {{ getPoolScoreHardStateLabel(key.pool_score?.hard_state) }}
-                            </Badge>
-                            <Badge
-                              variant="secondary"
-                              class="text-[10px]"
-                            >
-                              {{ getPoolScoreProbeStatusLabel(key.pool_score?.probe_status) }}
-                            </Badge>
-                            <span class="text-[10px] text-muted-foreground">
-                              更新 {{ formatUnixSeconds(key.pool_score?.updated_at) }}
-                            </span>
+                          <div class="space-y-2 px-3 py-2.5">
+                            <div class="flex flex-wrap items-center gap-1.5">
+                              <Badge
+                                variant="outline"
+                                class="h-5 rounded-md border-border/60 bg-background/60 px-2 text-[10px] font-normal"
+                              >
+                                {{ getPoolScoreHardStateLabel(key.pool_score?.hard_state) }}
+                              </Badge>
+                              <Badge
+                                variant="secondary"
+                                class="h-5 rounded-md px-2 text-[10px] font-normal"
+                              >
+                                {{ getPoolScoreProbeStatusLabel(key.pool_score?.probe_status) }}
+                              </Badge>
+                              <span class="text-[10px] text-muted-foreground">
+                                更新 {{ formatUnixSeconds(key.pool_score?.updated_at) }}
+                              </span>
+                            </div>
+                            <pre class="max-h-56 overflow-auto rounded-md border border-border/50 bg-muted/30 px-3 py-2 font-mono text-[11px] leading-5 text-muted-foreground whitespace-pre-wrap break-words">{{ formatPoolScoreReason(key.pool_score?.score_reason) }}</pre>
                           </div>
-                          <pre class="max-h-64 overflow-auto rounded-lg bg-muted/40 p-3 text-[11px] leading-5 text-foreground whitespace-pre-wrap break-words">{{ formatPoolScoreReason(key.pool_score?.score_reason) }}</pre>
                         </div>
                       </PopoverContent>
                     </Popover>
@@ -1000,14 +1003,14 @@
                       </span>
                       <Popover
                         v-if="key.pool_score"
-                        :open="scorePopoverOpenKeyId === key.key_id"
-                        @update:open="(open: boolean) => handleScorePopoverToggle(key.key_id, open)"
+                        :open="scoreMobilePopoverOpenKeyId === key.key_id"
+                        @update:open="(open: boolean) => handleScoreMobilePopoverToggle(key.key_id, open)"
                       >
                         <PopoverTrigger as-child>
                           <Button
                             variant="ghost"
                             size="icon"
-                            class="h-5 w-5 rounded-full text-muted-foreground hover:text-foreground"
+                            class="h-5 w-5 rounded-full border border-transparent text-muted-foreground/80 hover:border-border/60 hover:bg-muted/60 hover:text-foreground"
                             title="查看评分计算结果"
                             aria-label="查看评分计算结果"
                             @click.stop
@@ -1016,36 +1019,39 @@
                           </Button>
                         </PopoverTrigger>
                         <PopoverContent
-                          v-if="scorePopoverOpenKeyId === key.key_id"
-                          class="w-96 max-w-[calc(100vw-2rem)] p-3"
+                          v-if="scoreMobilePopoverOpenKeyId === key.key_id"
+                          class="w-[22rem] max-w-[calc(100vw-1rem)] overflow-hidden rounded-xl border-border/60 bg-card/95 p-0 text-card-foreground shadow-xl shadow-black/5 backdrop-blur supports-[backdrop-filter]:bg-card/90"
                           side="bottom"
-                          align="center"
+                          align="end"
+                          :side-offset="8"
                         >
-                          <div class="space-y-2 text-left">
-                            <div class="flex items-center justify-between gap-3">
-                              <span class="text-xs font-medium">评分计算结果</span>
-                              <span class="font-mono text-xs tabular-nums">
+                          <div class="text-left">
+                            <div class="flex items-center justify-between gap-3 border-b border-border/60 bg-muted/30 px-3 py-2.5">
+                              <span class="text-xs font-semibold text-foreground">评分计算结果</span>
+                              <span class="font-mono text-xs tabular-nums text-foreground/90">
                                 {{ formatPoolScore(key.pool_score?.score) }}
                               </span>
                             </div>
-                            <div class="flex flex-wrap items-center gap-1.5">
-                              <Badge
-                                variant="outline"
-                                class="text-[10px]"
-                              >
-                                {{ getPoolScoreHardStateLabel(key.pool_score?.hard_state) }}
-                              </Badge>
-                              <Badge
-                                variant="secondary"
-                                class="text-[10px]"
-                              >
-                                {{ getPoolScoreProbeStatusLabel(key.pool_score?.probe_status) }}
-                              </Badge>
-                              <span class="text-[10px] text-muted-foreground">
-                                更新 {{ formatUnixSeconds(key.pool_score?.updated_at) }}
-                              </span>
+                            <div class="space-y-2 px-3 py-2.5">
+                              <div class="flex flex-wrap items-center gap-1.5">
+                                <Badge
+                                  variant="outline"
+                                  class="h-5 rounded-md border-border/60 bg-background/60 px-2 text-[10px] font-normal"
+                                >
+                                  {{ getPoolScoreHardStateLabel(key.pool_score?.hard_state) }}
+                                </Badge>
+                                <Badge
+                                  variant="secondary"
+                                  class="h-5 rounded-md px-2 text-[10px] font-normal"
+                                >
+                                  {{ getPoolScoreProbeStatusLabel(key.pool_score?.probe_status) }}
+                                </Badge>
+                                <span class="text-[10px] text-muted-foreground">
+                                  更新 {{ formatUnixSeconds(key.pool_score?.updated_at) }}
+                                </span>
+                              </div>
+                              <pre class="max-h-56 overflow-auto rounded-md border border-border/50 bg-muted/30 px-3 py-2 font-mono text-[11px] leading-5 text-muted-foreground whitespace-pre-wrap break-words">{{ formatPoolScoreReason(key.pool_score?.score_reason) }}</pre>
                             </div>
-                            <pre class="max-h-64 overflow-auto rounded-lg bg-muted/40 p-3 text-[11px] leading-5 text-foreground whitespace-pre-wrap break-words">{{ formatPoolScoreReason(key.pool_score?.score_reason) }}</pre>
                           </div>
                         </PopoverContent>
                       </Popover>
@@ -1849,7 +1855,8 @@ async function selectProvider(
   closeProviderProxyPopovers()
   proxyDesktopPopoverOpenKeyId.value = null
   proxyMobilePopoverOpenKeyId.value = null
-  scorePopoverOpenKeyId.value = null
+  scoreDesktopPopoverOpenKeyId.value = null
+  scoreMobilePopoverOpenKeyId.value = null
   suppressFiltersWatch = true
   if (!options.preservePagination) {
     currentPage.value = 1
@@ -1913,7 +1920,8 @@ const resettingCycleKeyId = ref<string | null>(null)
 const savingProxyKeyId = ref<string | null>(null)
 const proxyDesktopPopoverOpenKeyId = ref<string | null>(null)
 const proxyMobilePopoverOpenKeyId = ref<string | null>(null)
-const scorePopoverOpenKeyId = ref<string | null>(null)
+const scoreDesktopPopoverOpenKeyId = ref<string | null>(null)
+const scoreMobilePopoverOpenKeyId = ref<string | null>(null)
 const deletingKeyId = ref<string | null>(null)
 const togglingKeyId = ref<string | null>(null)
 const editingPriorityKeyId = ref<string | null>(null)
@@ -2597,8 +2605,18 @@ function getKeyProxyNodeName(key: PoolKeyDetail): string | null {
   return node ? node.name : `${key.proxy.node_id.slice(0, 8)}...`
 }
 
-function handleScorePopoverToggle(keyId: string, open: boolean) {
-  scorePopoverOpenKeyId.value = open ? keyId : null
+function handleScoreDesktopPopoverToggle(keyId: string, open: boolean) {
+  scoreDesktopPopoverOpenKeyId.value = open ? keyId : null
+  if (open) {
+    scoreMobilePopoverOpenKeyId.value = null
+  }
+}
+
+function handleScoreMobilePopoverToggle(keyId: string, open: boolean) {
+  scoreMobilePopoverOpenKeyId.value = open ? keyId : null
+  if (open) {
+    scoreDesktopPopoverOpenKeyId.value = null
+  }
 }
 
 function handleProxyDesktopPopoverToggle(keyId: string, open: boolean) {

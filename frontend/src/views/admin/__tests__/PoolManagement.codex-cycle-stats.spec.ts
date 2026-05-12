@@ -144,7 +144,7 @@ vi.mock('lucide-vue-next', async () => {
 })
 
 vi.mock('@/components/ui', async () => {
-  const { defineComponent, h } = await import('vue')
+  const { computed, defineComponent, h, inject, provide } = await import('vue')
   const passthrough = (name: string, tag = 'div') => defineComponent({
     name,
     inheritAttrs: false,
@@ -205,6 +205,53 @@ vi.mock('@/components/ui', async () => {
     },
   })
 
+  const popoverContextKey = Symbol('PopoverStubContext')
+
+  const Popover = defineComponent({
+    name: 'PopoverStub',
+    inheritAttrs: false,
+    props: {
+      open: Boolean,
+    },
+    emits: ['update:open'],
+    setup(props, { slots, emit }) {
+      const context = {
+        open: computed(() => props.open),
+        toggle: () => emit('update:open', !props.open),
+      }
+      provide(popoverContextKey, context)
+      return () => slots.default?.()
+    },
+  })
+
+  const PopoverTrigger = defineComponent({
+    name: 'PopoverTriggerStub',
+    inheritAttrs: false,
+    setup(_, { attrs, slots }) {
+      const context = inject<{ open: { value: boolean }, toggle: () => void } | null>(popoverContextKey, null)
+      return () => {
+        return h('span', {
+          ...attrs,
+          onClickCapture: () => {
+            context?.toggle()
+          },
+        }, slots.default?.())
+      }
+    },
+  })
+
+  const PopoverContent = defineComponent({
+    name: 'PopoverContentStub',
+    inheritAttrs: false,
+    setup(_, { attrs, slots }) {
+      const context = inject<{ open: { value: boolean } } | null>(popoverContextKey, null)
+      return () => {
+        if (!context?.open.value) return null
+        return h('div', { ...attrs, 'data-state': 'open' }, slots.default?.())
+      }
+    },
+  })
+
   return {
     Card: passthrough('CardStub'),
     Badge: passthrough('BadgeStub', 'span'),
@@ -225,9 +272,9 @@ vi.mock('@/components/ui', async () => {
     TableCell: passthrough('TableCellStub', 'td'),
     Switch,
     Pagination,
-    Popover: passthrough('PopoverStub'),
-    PopoverTrigger: passthrough('PopoverTriggerStub'),
-    PopoverContent: passthrough('PopoverContentStub'),
+    Popover,
+    PopoverTrigger,
+    PopoverContent,
   }
 })
 
@@ -557,6 +604,52 @@ describe('PoolManagement Codex cycle stats mode', () => {
 
     expect(root.textContent).toContain('0.875')
     expect(root.querySelectorAll('button[title="查看评分计算结果"]').length).toBeGreaterThan(0)
+  })
+
+  it('opens only one score popover across desktop and mobile layouts', async () => {
+    const scoredKey = createPoolKey('codex', {
+      pool_score: {
+        id: 'pms-account-score',
+        capability: 'account',
+        scope_kind: 'account',
+        scope_id: null,
+        score: 0.662,
+        hard_state: 'available',
+        score_version: 1,
+        score_reason: {
+          rules: {
+            probe_failure_penalty: 0.05,
+          },
+        },
+        last_ranked_at: 1_700_000_000,
+        last_scheduled_at: null,
+        last_success_at: null,
+        last_failure_at: null,
+        failure_count: 0,
+        last_probe_attempt_at: null,
+        last_probe_success_at: null,
+        last_probe_failure_at: null,
+        probe_failure_count: 0,
+        probe_status: 'ok',
+        updated_at: 1_700_000_050,
+      },
+    })
+    endpointMocks.getPoolOverview.mockResolvedValue({ items: [createOverview('codex')] })
+    endpointMocks.listPoolKeys.mockResolvedValue(createKeyPage(scoredKey))
+    endpointMocks.getProvider.mockResolvedValue(createProvider('codex'))
+
+    const root = mountPoolManagement()
+    await settle()
+
+    const helpButtons = root.querySelectorAll<HTMLButtonElement>('button[title="查看评分计算结果"]')
+    expect(helpButtons.length).toBe(2)
+
+    helpButtons[0]?.click()
+    await settle()
+
+    expect(root.querySelectorAll('pre').length).toBe(1)
+    expect(root.textContent).toContain('评分计算结果')
+    expect(root.textContent).toContain('0.662')
   })
 
   it('refreshes quota only for keys on the current page', async () => {

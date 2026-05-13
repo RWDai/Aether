@@ -41,7 +41,10 @@ mod tests {
 
     #[test]
     fn assignable_roles_include_audit_admin() {
-        assert_eq!(normalize_assignable_user_role(" audit_admin "), Some("audit_admin"));
+        assert_eq!(
+            normalize_assignable_user_role(" audit_admin "),
+            Some("audit_admin")
+        );
         assert_eq!(normalize_assignable_user_role("admin"), Some("admin"));
         assert_eq!(normalize_assignable_user_role("user"), Some("user"));
         assert_eq!(normalize_assignable_user_role("owner"), None);

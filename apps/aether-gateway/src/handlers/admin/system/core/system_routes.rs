@@ -13,8 +13,8 @@ use crate::handlers::admin::system::shared::paths::{
 };
 use crate::handlers::admin::system::shared::settings::{
     apply_admin_system_settings_update, build_admin_api_formats_payload,
-    build_admin_system_check_update_payload, build_admin_system_settings_payload,
-    build_admin_system_stats_payload, current_aether_version,
+    build_admin_system_check_update_payload_from_release, build_admin_system_settings_payload,
+    build_admin_system_stats_payload, current_aether_version, fetch_latest_admin_system_release,
 };
 use crate::handlers::admin::system::shared::smtp::build_admin_smtp_test_payload;
 use crate::GatewayError;
@@ -54,8 +54,13 @@ pub(super) async fn maybe_build_local_admin_core_system_response(
         && request_method == http::Method::GET
         && request_path == "/api/admin/system/check-update"
     {
+        let (latest_release, error) = fetch_latest_admin_system_release().await;
         return Ok(Some(
-            Json(build_admin_system_check_update_payload()).into_response(),
+            Json(build_admin_system_check_update_payload_from_release(
+                latest_release,
+                error,
+            ))
+            .into_response(),
         ));
     }
 

@@ -287,7 +287,7 @@ fn provider_query_parse_provider_model_mapping_object_lenient(
     .map(|formats| {
         formats
             .into_iter()
-            .map(|value| aether_ai_formats::normalize_api_format_alias(&value))
+            .map(|value| crate::ai_serving::normalize_api_format_alias(&value))
             .collect()
     });
     let endpoint_ids = provider_query_parse_mapping_string_list(

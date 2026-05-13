@@ -586,13 +586,12 @@ fn admin_provider_query_and_strategy_use_specific_local_owners() {
         "handlers/admin/provider/query/models should not depend on a generic query::shared hub"
     );
 
-    for path in ["apps/aether-gateway/src/handlers/admin/provider/query/routes.rs"] {
-        let contents = read_workspace_file(path);
-        assert!(
-            !contents.contains("super::shared::{"),
-            "{path} should not depend on a generic query::shared hub"
-        );
-    }
+    let path = "apps/aether-gateway/src/handlers/admin/provider/query/routes.rs";
+    let contents = read_workspace_file(path);
+    assert!(
+        !contents.contains("super::shared::{"),
+        "{path} should not depend on a generic query::shared hub"
+    );
 
     assert!(
         workspace_file_exists("apps/aether-gateway/src/handlers/admin/provider/query/payload.rs"),

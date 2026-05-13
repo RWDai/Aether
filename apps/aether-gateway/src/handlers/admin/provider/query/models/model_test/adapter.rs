@@ -29,9 +29,9 @@ pub(super) fn provider_query_standard_test_client_api_format(
     provider_api_format: &str,
 ) -> &'static str {
     let normalized_api_format = crate::ai_serving::normalize_api_format_alias(provider_api_format);
-    if aether_ai_formats::is_embedding_api_format(&normalized_api_format) {
+    if crate::ai_serving::is_embedding_api_format(&normalized_api_format) {
         "openai:embedding"
-    } else if aether_ai_formats::is_rerank_api_format(&normalized_api_format) {
+    } else if crate::ai_serving::is_rerank_api_format(&normalized_api_format) {
         "openai:rerank"
     } else {
         "openai:chat"

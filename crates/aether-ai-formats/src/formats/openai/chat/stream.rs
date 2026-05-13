@@ -741,15 +741,9 @@ impl OpenAIResponsesProviderState {
                 }
             }
             "response.reasoning_summary_part.added" | "response.reasoning_summary_part.done" => {
-                if let Some(part) = value.get("part").and_then(Value::as_object) {
-                    if part.get("type").and_then(Value::as_str) == Some("summary_text") {
-                        if let Some(text) = part.get("text").and_then(Value::as_str) {
-                            if !text.is_empty() {
-                                self.emit_missing_reasoning(report_context, &mut out, text);
-                            }
-                        }
-                    }
-                }
+                // SKIP — CPA ignores these structural events entirely.
+                // Only reasoning_summary_text.delta carries incremental text;
+                // reasoning_summary_text.done signals a paragraph boundary.
             }
             "response.output_text.done" => {
                 let text = value
@@ -784,20 +778,16 @@ impl OpenAIResponsesProviderState {
                 }
             }
             "response.reasoning_summary_text.done" => {
-                let text = value
-                    .get("text")
-                    .and_then(Value::as_str)
-                    .or_else(|| {
-                        value
-                            .get("part")
-                            .and_then(Value::as_object)
-                            .and_then(|part| part.get("text"))
-                            .and_then(Value::as_str)
-                    })
-                    .unwrap_or_default();
-                if !text.is_empty() {
-                    self.emit_missing_reasoning(report_context, &mut out, text);
-                }
+                // CPA strategy: emit a section-end signal so downstream can insert
+                // paragraph separators (e.g. "\n\n" for Chat).  Do NOT re-emit
+                // the full text — that would duplicate what deltas already sent.
+                self.ensure_started(report_context, &mut out);
+                let (id, model) = self.identity(report_context);
+                out.push(CanonicalStreamFrame {
+                    id,
+                    model,
+                    event: CanonicalStreamEvent::ReasoningSummaryDone,
+                });
             }
             "response.output_item.added" => {
                 let Some(item) = value.get("item").and_then(Value::as_object) else {
@@ -818,7 +808,9 @@ impl OpenAIResponsesProviderState {
                         self.emit_message_item(report_context, &mut out, item);
                     }
                     "reasoning" => {
-                        self.emit_reasoning_item(report_context, &mut out, item);
+                        // SKIP — CPA ignores reasoning output_item.added to avoid
+                        // re-emitting full summary text that deltas already sent.
+                        self.ensure_started(report_context, &mut out);
                     }
                     _ => {
                         out.push(self.unknown_frame(report_context, Value::Object(item.clone())));
@@ -1031,7 +1023,8 @@ impl OpenAIResponsesProviderState {
                         self.emit_message_item(report_context, &mut out, item);
                     }
                     "reasoning" => {
-                        self.emit_reasoning_item(report_context, &mut out, item);
+                        // SKIP — CPA ignores reasoning output_item.done to avoid
+                        // re-emitting full summary text that deltas already sent.
                     }
                     _ => {
                         out.push(self.unknown_frame(report_context, Value::Object(item.clone())));
@@ -1076,7 +1069,7 @@ impl OpenAIResponsesProviderState {
                             );
                         }
                         "reasoning" => {
-                            self.emit_reasoning_item(report_context, &mut out, item);
+                            // SKIP — deltas already captured via reasoning_summary_text.delta
                         }
                         _ => {
                             out.push(
@@ -1244,6 +1237,29 @@ impl OpenAIChatClientEmitter {
                 )?);
                 Ok(out)
             }
+            CanonicalStreamEvent::ReasoningSummaryDone => {
+                // CPA strategy: emit "\n\n" as paragraph separator between
+                // reasoning sections, matching CPA's Chat downstream behavior.
+                let mut out = self.ensure_started()?;
+                out.extend(encode_json_sse(
+                    None,
+                    &json!({
+                        "id": self.response_id
+                            .as_deref()
+                            .unwrap_or("chatcmpl-local-stream"),
+                        "object": "chat.completion.chunk",
+                        "model": self.model.as_deref().unwrap_or("unknown"),
+                        "choices": [{
+                            "index": 0,
+                            "delta": {
+                                "reasoning_content": "\n\n",
+                            },
+                            "finish_reason": Value::Null
+                        }]
+                    }),
+                )?);
+                Ok(out)
+            }
             CanonicalStreamEvent::ReasoningSignature(_) => Ok(Vec::new()),
             CanonicalStreamEvent::ContentPart(part) => {
                 let placeholder = openai_stream_placeholder_for_content_part(&part);
@@ -1317,10 +1333,10 @@ impl OpenAIChatClientEmitter {
                 Ok(out)
             }
             CanonicalStreamEvent::ToolResultDelta {
+                index,
                 tool_use_id,
                 name,
                 content,
-                ..
             } => {
                 let mut out = self.ensure_started()?;
                 let mut delta = Map::new();
@@ -1808,10 +1824,15 @@ impl OpenAIResponsesClientEmitter {
             );
             item.insert("id".to_string(), Value::String(format!("{item_id}_output")));
             item.insert("call_id".to_string(), Value::String(item_id));
-            if let Some(name) = state.name.filter(|value| !value.trim().is_empty()) {
+            if let Some(name) = state
+                .name
+                .as_ref()
+                .filter(|value| !value.trim().is_empty())
+                .cloned()
+            {
                 item.insert("name".to_string(), Value::String(name));
             }
-            item.insert("output".to_string(), Value::String(state.content));
+            item.insert("output".to_string(), Value::String(state.content.clone()));
             out.extend(self.encode_response_event(
                 "response.output_item.done",
                 json!({
@@ -1973,6 +1994,45 @@ impl OpenAIResponsesClientEmitter {
                         "delta": text,
                     }),
                 )?);
+                Ok(out)
+            }
+            CanonicalStreamEvent::ReasoningSummaryDone => {
+                // CPA strategy for Responses downstream: close the current summary
+                // text/part and reset state so the next ReasoningDelta starts a
+                // fresh part within the same reasoning item.
+                if !self.reasoning_item_started || !self.reasoning_part_started {
+                    return Ok(Vec::new());
+                }
+                let output_index = self.reasoning_output_index.unwrap_or(0);
+                let item_id = self.reasoning_item_id();
+                let mut out = Vec::new();
+                out.extend(self.encode_response_event(
+                    "response.reasoning_summary_text.done",
+                    json!({
+                        "type": "response.reasoning_summary_text.done",
+                        "response_id": self.response_id(),
+                        "item_id": item_id.clone(),
+                        "output_index": output_index,
+                        "summary_index": 0,
+                        "text": self.reasoning.as_str(),
+                    }),
+                )?);
+                out.extend(self.encode_response_event(
+                    "response.reasoning_summary_part.done",
+                    json!({
+                        "type": "response.reasoning_summary_part.done",
+                        "response_id": self.response_id(),
+                        "item_id": item_id,
+                        "output_index": output_index,
+                        "summary_index": 0,
+                        "part": {
+                            "type": "summary_text",
+                            "text": self.reasoning.as_str(),
+                        }
+                    }),
+                )?);
+                // Reset part state so next ReasoningDelta opens a new part
+                self.reasoning_part_started = false;
                 Ok(out)
             }
             CanonicalStreamEvent::ReasoningSignature(_) => Ok(Vec::new()),

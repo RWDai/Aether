@@ -1018,10 +1018,8 @@ fn convert_openai_responses_canonical_responses_response(
                 .as_ref()
                 .and_then(|canonical| canonical_to_gemini_response(canonical, report_context))
                 .or_else(|| {
-                    let openai_chat = convert_openai_responses_response_to_openai_chat(
-                        body_json,
-                        report_context,
-                    )?;
+                    let openai_chat =
+                        convert_openai_responses_response_to_openai_chat(body_json, report_context)?;
                     convert_openai_chat_response_to_gemini_chat(&openai_chat, report_context)
                 })
         }
@@ -2593,6 +2591,7 @@ pub fn aggregate_gemini_stream_sync_response(body: &[u8]) -> Option<Value> {
                     ));
                 }
                 CanonicalStreamEvent::UnknownEvent(_) => {}
+                CanonicalStreamEvent::ReasoningSummaryDone => {}
                 CanonicalStreamEvent::Finish {
                     finish_reason: frame_finish_reason,
                     usage,
@@ -3630,8 +3629,9 @@ mod tests {
     fn rejects_openai_responses_same_family_error_body_json() {
         let report_context = json!({
             "provider_api_format": "openai:responses",
-            "client_api_format": "openai:responses",
-            "needs_conversion": false,
+            "client_api_format": "openai:responses:compact",
+            "model": "gpt-5",
+            "mapped_model": "gpt-5",
         });
         let provider_body_json = json!({
             "error": {

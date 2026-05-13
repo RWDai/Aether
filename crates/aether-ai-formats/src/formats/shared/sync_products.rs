@@ -1018,8 +1018,10 @@ fn convert_openai_responses_canonical_responses_response(
                 .as_ref()
                 .and_then(|canonical| canonical_to_gemini_response(canonical, report_context))
                 .or_else(|| {
-                    let openai_chat =
-                        convert_openai_responses_response_to_openai_chat(body_json, report_context)?;
+                    let openai_chat = convert_openai_responses_response_to_openai_chat(
+                        body_json,
+                        report_context,
+                    )?;
                     convert_openai_chat_response_to_gemini_chat(&openai_chat, report_context)
                 })
         }

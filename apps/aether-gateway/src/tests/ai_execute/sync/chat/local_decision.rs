@@ -52,6 +52,68 @@ async fn proxy_pii_redaction_local_openai_chat_runtime_masks_headers_and_restore
         .expect("auth snapshot should build")
     }
 
+    fn auth_export_record(
+        snapshot: &StoredAuthApiKeySnapshot,
+        key_hash: String,
+        feature_settings: Option<serde_json::Value>,
+    ) -> aether_data::repository::auth::StoredAuthApiKeyExportRecord {
+        aether_data::repository::auth::StoredAuthApiKeyExportRecord::new(
+            snapshot.user_id.clone(),
+            snapshot.api_key_id.clone(),
+            key_hash,
+            None,
+            snapshot.api_key_name.clone(),
+            snapshot
+                .api_key_allowed_providers
+                .as_ref()
+                .map(|value| serde_json::json!(value)),
+            snapshot
+                .api_key_allowed_api_formats
+                .as_ref()
+                .map(|value| serde_json::json!(value)),
+            snapshot
+                .api_key_allowed_models
+                .as_ref()
+                .map(|value| serde_json::json!(value)),
+            snapshot.api_key_rate_limit,
+            snapshot.api_key_concurrent_limit,
+            None,
+            snapshot.api_key_is_active,
+            snapshot
+                .api_key_expires_at_unix_secs
+                .map(|value| value as i64),
+            false,
+            0,
+            0,
+            0.0,
+            snapshot.api_key_is_standalone,
+        )
+        .expect("auth api key export record should build")
+        .with_feature_settings(feature_settings)
+    }
+
+    fn auth_repository_with_redaction_feature_settings() -> Arc<InMemoryAuthApiKeySnapshotRepository>
+    {
+        let snapshot = auth_snapshot();
+        let key_hash = hash_api_key("sk-client-redaction");
+        Arc::new(
+            InMemoryAuthApiKeySnapshotRepository::seed(vec![(
+                Some(key_hash.clone()),
+                snapshot.clone(),
+            )])
+            .with_export_records(vec![auth_export_record(
+                &snapshot,
+                key_hash,
+                Some(json!({
+                    "chat_pii_redaction": {
+                        "enabled": true,
+                        "inject_model_instruction": true,
+                    }
+                })),
+            )]),
+        )
+    }
+
     fn candidate_row() -> StoredMinimalCandidateSelectionRow {
         StoredMinimalCandidateSelectionRow {
             provider_id: "provider-redaction-1".to_string(),
@@ -212,10 +274,7 @@ async fn proxy_pii_redaction_local_openai_chat_runtime_masks_headers_and_restore
         }),
     );
     let (provider_url, provider_handle) = start_server(provider_app).await;
-    let auth_repository = Arc::new(InMemoryAuthApiKeySnapshotRepository::seed(vec![(
-        Some(hash_api_key("sk-client-redaction")),
-        auth_snapshot(),
-    )]));
+    let auth_repository = auth_repository_with_redaction_feature_settings();
     let candidate_selection_repository =
         Arc::new(InMemoryMinimalCandidateSelectionReadRepository::seed(vec![
             candidate_row(),
@@ -236,20 +295,19 @@ async fn proxy_pii_redaction_local_openai_chat_runtime_masks_headers_and_restore
     .with_system_config_values_for_tests(vec![
         ("module.chat_pii_redaction.enabled".to_string(), json!(true)),
         (
-            "module.chat_pii_redaction.provider_scope".to_string(),
-            json!("selected_providers"),
-        ),
-        (
-            "module.chat_pii_redaction.entities".to_string(),
-            json!(["email"]),
+            "module.chat_pii_redaction.rules".to_string(),
+            json!([{
+                "id": "email",
+                "name": "邮箱",
+                "pattern": r"(?i)[A-Z0-9._%+-]{1,64}@[A-Z0-9.-]{1,253}\.[A-Z]{2,63}",
+                "enabled": true,
+                "features": {"validator": "email"},
+                "system": true
+            }]),
         ),
         (
             "module.chat_pii_redaction.cache_ttl_seconds".to_string(),
             json!(300),
-        ),
-        (
-            "module.chat_pii_redaction.inject_model_instruction".to_string(),
-            json!(true),
         ),
     ]);
     let gateway_state = AppState::new()

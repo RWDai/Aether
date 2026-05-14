@@ -1393,33 +1393,22 @@ async fn gateway_validates_chat_pii_redaction_system_config_locally_with_trusted
         json!(false)
     );
     assert_eq!(
-        get_config("module.chat_pii_redaction.provider_scope").await["value"],
-        json!("selected_providers")
-    );
-    assert_eq!(
-        get_config("module.chat_pii_redaction.inject_model_instruction").await["value"],
-        json!(true)
-    );
-    assert_eq!(
         get_config("module.chat_pii_redaction.cache_ttl_seconds").await["value"],
         json!(300)
     );
     assert_eq!(
-        get_config("module.chat_pii_redaction.entities").await["value"],
-        json!([
-            "email",
-            "cn_phone",
-            "global_phone",
-            "cn_id",
-            "payment_card",
-            "ipv4",
-            "ipv6",
-            "api_key",
-            "access_token",
-            "secret_key",
-            "bearer_token",
-            "jwt"
-        ])
+        get_config("module.chat_pii_redaction.placeholder_prefix").await["value"],
+        json!("AETHER")
+    );
+    let default_rules_payload = get_config("module.chat_pii_redaction.rules").await;
+    let default_rules = default_rules_payload["value"]
+        .as_array()
+        .expect("default rules should be an array");
+    assert!(
+        default_rules.iter().any(|rule| {
+            rule["name"] == json!("手机号") && rule["features"]["validator"] == json!("cn_phone")
+        }),
+        "default rules should include 手机号"
     );
 
     let enabled_response = put_config("module.chat_pii_redaction.enabled", json!(true)).await;
@@ -1430,29 +1419,34 @@ async fn gateway_validates_chat_pii_redaction_system_config_locally_with_trusted
         .expect("json body should parse");
     assert_eq!(enabled_payload["value"], json!(true));
 
-    let scope_response = put_config(
-        "module.chat_pii_redaction.provider_scope",
-        json!("all_providers"),
+    let rules_response = put_config(
+        "module.chat_pii_redaction.rules",
+        json!([
+            {
+                "id": "email",
+                "name": "邮箱",
+                "pattern": r"(?i)[A-Z0-9._%+-]{1,64}@[A-Z0-9.-]{1,253}\.[A-Z]{2,63}",
+                "enabled": true,
+                "features": {"validator": "email"},
+                "system": true
+            },
+            {
+                "id": "custom_code",
+                "name": "自定义规则",
+                "pattern": r"CODE-\d{6}",
+                "enabled": false,
+                "features": {"validator": "custom_code", "experimental": true},
+                "system": false
+            }
+        ]),
     )
     .await;
-    assert_eq!(scope_response.status(), StatusCode::OK);
-    let scope_payload: serde_json::Value =
-        scope_response.json().await.expect("json body should parse");
-    assert_eq!(scope_payload["value"], json!("all_providers"));
-
-    let selected_entities_response = put_config(
-        "module.chat_pii_redaction.entities",
-        json!(["email", "jwt", "cn_phone"]),
-    )
-    .await;
-    assert_eq!(selected_entities_response.status(), StatusCode::OK);
-    let selected_entities_payload: serde_json::Value = selected_entities_response
-        .json()
-        .await
-        .expect("json body should parse");
+    assert_eq!(rules_response.status(), StatusCode::OK);
+    let rules_payload: serde_json::Value =
+        rules_response.json().await.expect("json body should parse");
     assert_eq!(
-        selected_entities_payload["value"],
-        json!(["email", "cn_phone", "jwt"])
+        rules_payload["value"][1]["features"]["experimental"],
+        json!(true)
     );
 
     let ttl_response = put_config("module.chat_pii_redaction.cache_ttl_seconds", json!(3600)).await;
@@ -1460,45 +1454,40 @@ async fn gateway_validates_chat_pii_redaction_system_config_locally_with_trusted
     let ttl_payload: serde_json::Value = ttl_response.json().await.expect("json body should parse");
     assert_eq!(ttl_payload["value"], json!(3600));
 
-    let instruction_response = put_config(
-        "module.chat_pii_redaction.inject_model_instruction",
-        json!(false),
+    let prefix_response = put_config(
+        "module.chat_pii_redaction.placeholder_prefix",
+        json!("vendor_safe"),
     )
     .await;
-    assert_eq!(instruction_response.status(), StatusCode::OK);
-    let instruction_payload: serde_json::Value = instruction_response
+    assert_eq!(prefix_response.status(), StatusCode::OK);
+    let prefix_payload: serde_json::Value = prefix_response
         .json()
         .await
         .expect("json body should parse");
-    assert_eq!(instruction_payload["value"], json!(false));
+    assert_eq!(prefix_payload["value"], json!("VENDOR_SAFE"));
 
-    let invalid_scope_response = put_config(
-        "module.chat_pii_redaction.provider_scope",
-        json!("enabled_providers"),
+    let invalid_prefix_response = put_config(
+        "module.chat_pii_redaction.placeholder_prefix",
+        json!("bad-prefix"),
     )
     .await;
-    assert_eq!(invalid_scope_response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(invalid_prefix_response.status(), StatusCode::BAD_REQUEST);
 
-    let invalid_entities_response = put_config(
-        "module.chat_pii_redaction.entities",
-        json!(["email", "name"]),
+    let invalid_rules_response = put_config(
+        "module.chat_pii_redaction.rules",
+        json!([
+            {
+                "id": "broken",
+                "name": "坏规则",
+                "pattern": "[",
+                "enabled": true,
+                "features": {"validator": "broken"},
+                "system": false
+            }
+        ]),
     )
     .await;
-    assert_eq!(invalid_entities_response.status(), StatusCode::BAD_REQUEST);
-
-    let invalid_ttl_response =
-        put_config("module.chat_pii_redaction.cache_ttl_seconds", json!(600)).await;
-    assert_eq!(invalid_ttl_response.status(), StatusCode::BAD_REQUEST);
-
-    let invalid_instruction_response = put_config(
-        "module.chat_pii_redaction.inject_model_instruction",
-        json!("yes"),
-    )
-    .await;
-    assert_eq!(
-        invalid_instruction_response.status(),
-        StatusCode::BAD_REQUEST
-    );
+    assert_eq!(invalid_rules_response.status(), StatusCode::BAD_REQUEST);
 
     let enabled_default_response =
         put_config("module.chat_pii_redaction.enabled", serde_json::Value::Null).await;
@@ -1509,45 +1498,21 @@ async fn gateway_validates_chat_pii_redaction_system_config_locally_with_trusted
         .expect("json body should parse");
     assert_eq!(enabled_default_payload["value"], json!(false));
 
-    let scope_default_response = put_config(
-        "module.chat_pii_redaction.provider_scope",
-        serde_json::Value::Null,
-    )
-    .await;
-    assert_eq!(scope_default_response.status(), StatusCode::OK);
-    let scope_default_payload: serde_json::Value = scope_default_response
+    let rules_default_response =
+        put_config("module.chat_pii_redaction.rules", serde_json::Value::Null).await;
+    assert_eq!(rules_default_response.status(), StatusCode::OK);
+    let rules_default_payload: serde_json::Value = rules_default_response
         .json()
         .await
         .expect("json body should parse");
-    assert_eq!(scope_default_payload["value"], json!("selected_providers"));
+    assert!(!rules_default_payload["value"]
+        .as_array()
+        .expect("default rules should be an array")
+        .is_empty());
 
-    let entities_default_response = put_config(
-        "module.chat_pii_redaction.entities",
-        serde_json::Value::Null,
-    )
-    .await;
-    assert_eq!(entities_default_response.status(), StatusCode::OK);
-    let entities_default_payload: serde_json::Value = entities_default_response
-        .json()
-        .await
-        .expect("json body should parse");
-    assert_eq!(
-        entities_default_payload["value"],
-        json!([
-            "email",
-            "cn_phone",
-            "global_phone",
-            "cn_id",
-            "payment_card",
-            "ipv4",
-            "ipv6",
-            "api_key",
-            "access_token",
-            "secret_key",
-            "bearer_token",
-            "jwt"
-        ])
-    );
+    let invalid_ttl_response =
+        put_config("module.chat_pii_redaction.cache_ttl_seconds", json!(600)).await;
+    assert_eq!(invalid_ttl_response.status(), StatusCode::BAD_REQUEST);
 
     let ttl_default_response = put_config(
         "module.chat_pii_redaction.cache_ttl_seconds",
@@ -1561,17 +1526,17 @@ async fn gateway_validates_chat_pii_redaction_system_config_locally_with_trusted
         .expect("json body should parse");
     assert_eq!(ttl_default_payload["value"], json!(300));
 
-    let instruction_default_response = put_config(
-        "module.chat_pii_redaction.inject_model_instruction",
+    let prefix_default_response = put_config(
+        "module.chat_pii_redaction.placeholder_prefix",
         serde_json::Value::Null,
     )
     .await;
-    assert_eq!(instruction_default_response.status(), StatusCode::OK);
-    let instruction_default_payload: serde_json::Value = instruction_default_response
+    assert_eq!(prefix_default_response.status(), StatusCode::OK);
+    let prefix_default_payload: serde_json::Value = prefix_default_response
         .json()
         .await
         .expect("json body should parse");
-    assert_eq!(instruction_default_payload["value"], json!(true));
+    assert_eq!(prefix_default_payload["value"], json!("AETHER"));
     assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
 
     gateway_handle.abort();

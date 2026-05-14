@@ -21,7 +21,8 @@ const DEFAULT_REDACTION_TTL_SECONDS: u64 = 300;
 const DEFAULT_MAX_SCANNED_CHAT_TEXT_BYTES: usize = 2 * 1024 * 1024;
 const DEFAULT_MAX_REDACTION_DETECTIONS: usize = 1024;
 const HMAC96_BYTES: usize = 12;
-const SENTINEL_PREFIX: &str = "<AETHER:";
+const DEFAULT_SENTINEL_NAMESPACE: &str = "AETHER";
+const MAX_SENTINEL_NAMESPACE_LEN: usize = 32;
 const DIRECT_RESTORE_SENTINEL_LIMIT: usize = 32;
 const MAX_CACHE_SENTINEL_BYTES: usize = 128;
 const MAX_CACHE_RECORD_BYTES: usize = 512;
@@ -84,7 +85,7 @@ static SECRET_KEY_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 static HIGH_ENTROPY_TOKEN_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\b[A-Za-z0-9_-]{32,}\b").expect("api key regex should compile"));
 static SENTINEL_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"<AETHER:[A-Z0-9_]+:[A-Z2-7]{20}>").expect("sentinel regex should compile")
+    Regex::new(r"<[A-Z0-9_]+:[A-Z0-9_]+:[A-Z2-7]{20}>").expect("sentinel regex should compile")
 });
 
 #[derive(Clone, Copy, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -140,12 +141,56 @@ impl fmt::Debug for RedactionKind {
     }
 }
 
+#[derive(Clone, Debug)]
+struct CompiledRedactionRule {
+    rule_label: String,
+    regex: Regex,
+    kinds: Vec<RedactionKind>,
+    custom_priority: u16,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct ChatPiiRedactionRuleConfig {
+    id: String,
+    name: String,
+    pattern: String,
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default)]
+    features: ChatPiiRedactionRuleFeatures,
+    #[serde(default)]
+    kind: Option<String>,
+    #[serde(default)]
+    system: bool,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct ChatPiiRedactionRuleFeatures {
+    #[serde(default)]
+    validator: Option<String>,
+    #[serde(flatten)]
+    extra: BTreeMap<String, Value>,
+}
+
+impl ChatPiiRedactionRuleConfig {
+    fn validator(&self) -> Option<&str> {
+        self.features
+            .validator
+            .as_deref()
+            .or(self.kind.as_deref())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct RedactionSessionConfig {
     hmac_key: Vec<u8>,
     ttl_seconds: u64,
     now_unix_secs: u64,
+    sentinel_namespace: String,
     enabled_kinds: Option<HashSet<RedactionKind>>,
+    rules: Option<Arc<Vec<CompiledRedactionRule>>>,
 }
 
 impl RedactionSessionConfig {
@@ -154,7 +199,9 @@ impl RedactionSessionConfig {
             hmac_key: hmac_key.into(),
             ttl_seconds: ttl_seconds.max(1),
             now_unix_secs,
+            sentinel_namespace: DEFAULT_SENTINEL_NAMESPACE.to_string(),
             enabled_kinds: None,
+            rules: None,
         }
     }
 
@@ -174,6 +221,16 @@ impl RedactionSessionConfig {
 
     pub(crate) fn with_enabled_kinds(mut self, enabled_kinds: HashSet<RedactionKind>) -> Self {
         self.enabled_kinds = Some(enabled_kinds);
+        self
+    }
+
+    fn with_sentinel_namespace(mut self, namespace: impl Into<String>) -> Self {
+        self.sentinel_namespace = normalize_sentinel_namespace_or_default(namespace.into());
+        self
+    }
+
+    fn with_rules(mut self, rules: Vec<CompiledRedactionRule>) -> Self {
+        self.rules = Some(Arc::new(rules));
         self
     }
 
@@ -292,9 +349,14 @@ impl fmt::Debug for RedactionSessionConfig {
             .field("hmac_key", &"<redacted>")
             .field("ttl_seconds", &self.ttl_seconds)
             .field("now_unix_secs", &self.now_unix_secs)
+            .field("sentinel_namespace", &self.sentinel_namespace)
             .field(
                 "enabled_kind_count",
                 &self.enabled_kinds.as_ref().map(HashSet::len),
+            )
+            .field(
+                "enabled_rule_count",
+                &self.rules.as_ref().map(|rules| rules.len()),
             )
             .finish()
     }
@@ -302,7 +364,7 @@ impl fmt::Debug for RedactionSessionConfig {
 
 #[derive(Clone, Eq, Hash, PartialEq)]
 struct MappingKey {
-    kind: RedactionKind,
+    rule_label: String,
     original: String,
 }
 
@@ -348,12 +410,11 @@ impl RedactionSession {
         cache: Option<&RedisRedactionMappingCache<'_>>,
     ) -> Result<RedactedText, RedactionMaskError> {
         scan_state.record_scan(input)?;
-        let candidates = select_non_overlapping(
-            detect_candidates(input)
-                .into_iter()
-                .filter(|candidate| self.config.kind_enabled(candidate.kind))
-                .collect(),
-        );
+        let candidates = select_non_overlapping(detect_candidates_for_session_config(
+            input,
+            &self.config,
+            None,
+        ));
         scan_state.record_detections(candidates.len())?;
         if candidates.is_empty() {
             return Ok(RedactedText {
@@ -369,10 +430,11 @@ impl RedactionSession {
         for candidate in candidates {
             redacted.push_str(&input[cursor..candidate.start]);
             let sentinel = self
-                .sentinel_for_candidate_with_cache(input, candidate.kind, &candidate.value, cache)
+                .sentinel_for_candidate_with_cache(input, &candidate, cache)
                 .await;
             redacted.push_str(&sentinel);
             matches.push(RedactionMatch {
+                rule_label: candidate.rule_label,
                 kind: candidate.kind,
                 start: candidate.start,
                 end: candidate.end,
@@ -394,12 +456,11 @@ impl RedactionSession {
         input: &str,
         mut scan_state: Option<&mut RedactionScanState>,
     ) -> Result<RedactedText, RedactionLimitError> {
-        let candidates = select_non_overlapping(
-            detect_candidates(input)
-                .into_iter()
-                .filter(|candidate| self.config.kind_enabled(candidate.kind))
-                .collect(),
-        );
+        let candidates = select_non_overlapping(detect_candidates_for_session_config(
+            input,
+            &self.config,
+            None,
+        ));
         if let Some(scan_state) = scan_state.as_mut() {
             scan_state.record_detections(candidates.len())?;
         }
@@ -416,9 +477,10 @@ impl RedactionSession {
 
         for candidate in candidates {
             redacted.push_str(&input[cursor..candidate.start]);
-            let sentinel = self.sentinel_for_candidate(input, candidate.kind, &candidate.value);
+            let sentinel = self.sentinel_for_candidate(input, &candidate);
             redacted.push_str(&sentinel);
             matches.push(RedactionMatch {
+                rule_label: candidate.rule_label,
                 kind: candidate.kind,
                 start: candidate.start,
                 end: candidate.end,
@@ -457,15 +519,10 @@ impl RedactionSession {
         restore_text_with_matcher(input, &SentinelMatcher::new(self))
     }
 
-    fn sentinel_for_candidate(
-        &mut self,
-        source_text: &str,
-        kind: RedactionKind,
-        original: &str,
-    ) -> String {
+    fn sentinel_for_candidate(&mut self, source_text: &str, candidate: &Candidate) -> String {
         let key = MappingKey {
-            kind,
-            original: normalize_redaction_value(kind, original),
+            rule_label: candidate.rule_label.clone(),
+            original: normalize_redaction_value(candidate.kind, &candidate.value),
         };
         if let Some(mapping) = self.mappings.get(&key) {
             return mapping.sentinel.clone();
@@ -474,22 +531,28 @@ impl RedactionSession {
         let bucket = self.config.bucket();
         let mut collision_counter = 0u32;
         let sentinel = loop {
-            let candidate = self.build_sentinel(kind, original, bucket, collision_counter);
+            let candidate_sentinel = self.build_sentinel(
+                &candidate.rule_label,
+                &key.original,
+                bucket,
+                collision_counter,
+            );
             let collides_with_input =
-                self.sentinel_collides_with_original_text(source_text, &candidate);
+                self.sentinel_collides_with_original_text(source_text, &candidate_sentinel);
             let collides_with_mapping = self
                 .sentinel_index
-                .get(&candidate)
+                .get(&candidate_sentinel)
                 .is_some_and(|existing_key| existing_key != &key);
             if !collides_with_input && !collides_with_mapping {
-                break candidate;
+                break candidate_sentinel;
             }
             collision_counter = collision_counter.saturating_add(1);
         };
 
         let mapping = RedactionMapping {
-            kind,
-            original: original.to_string(),
+            rule_label: candidate.rule_label.clone(),
+            kind: candidate.kind,
+            original: candidate.value.clone(),
             normalized_value: key.original.clone(),
             sentinel: sentinel.clone(),
             bucket,
@@ -504,13 +567,12 @@ impl RedactionSession {
     async fn sentinel_for_candidate_with_cache(
         &mut self,
         source_text: &str,
-        kind: RedactionKind,
-        original: &str,
+        candidate: &Candidate,
         cache: Option<&RedisRedactionMappingCache<'_>>,
     ) -> String {
         let key = MappingKey {
-            kind,
-            original: normalize_redaction_value(kind, original),
+            rule_label: candidate.rule_label.clone(),
+            original: normalize_redaction_value(candidate.kind, &candidate.value),
         };
         if let Some(mapping) = self.mappings.get(&key) {
             return mapping.sentinel.clone();
@@ -518,17 +580,25 @@ impl RedactionSession {
 
         let bucket = self.config.bucket();
         if let Some(cache) = cache {
-            if let Ok(Some(sentinel)) = cache.lookup_sentinel(kind, &key.original, bucket).await {
+            if let Ok(Some(sentinel)) = cache
+                .lookup_sentinel(
+                    &candidate.rule_label,
+                    &key.original,
+                    bucket,
+                    &self.config.sentinel_namespace,
+                )
+                .await
+            {
                 if sentinel.len() <= MAX_CACHE_SENTINEL_BYTES
                     && self.cached_sentinel_usable(source_text, &key, &sentinel)
                 {
-                    self.insert_mapping_for_sentinel(key, kind, original, sentinel.clone(), bucket);
+                    self.insert_mapping_for_sentinel(key, candidate, sentinel.clone(), bucket);
                     return sentinel;
                 }
             }
         }
 
-        let sentinel = self.sentinel_for_candidate(source_text, kind, original);
+        let sentinel = self.sentinel_for_candidate(source_text, candidate);
         if let Some(cache) = cache {
             if let Some(mapping) = self.mappings.get(&key) {
                 let ttl_seconds = self
@@ -569,14 +639,14 @@ impl RedactionSession {
     fn insert_mapping_for_sentinel(
         &mut self,
         key: MappingKey,
-        kind: RedactionKind,
-        original: &str,
+        candidate: &Candidate,
         sentinel: String,
         bucket: u64,
     ) {
         let mapping = RedactionMapping {
-            kind,
-            original: original.to_string(),
+            rule_label: candidate.rule_label.clone(),
+            kind: candidate.kind,
+            original: candidate.value.clone(),
             normalized_value: key.original.clone(),
             sentinel: sentinel.clone(),
             bucket,
@@ -589,26 +659,26 @@ impl RedactionSession {
 
     fn build_sentinel(
         &self,
-        kind: RedactionKind,
-        original: &str,
+        rule_label: &str,
+        normalized_value: &str,
         bucket: u64,
         collision_counter: u32,
     ) -> String {
         let mut mac = HmacSha256::new_from_slice(&self.config.hmac_key)
             .expect("HMAC accepts keys of any size");
         mac.update(b"aether-redaction-v1\0");
-        mac.update(kind.label().as_bytes());
+        mac.update(rule_label.as_bytes());
         mac.update(b"\0");
         mac.update(bucket.to_string().as_bytes());
         mac.update(b"\0");
         mac.update(collision_counter.to_string().as_bytes());
         mac.update(b"\0");
-        mac.update(normalize_redaction_value(kind, original).as_bytes());
+        mac.update(normalized_value.as_bytes());
         let digest = mac.finalize().into_bytes();
         format!(
-            "{}{}:{}>",
-            SENTINEL_PREFIX,
-            kind.label(),
+            "<{}:{}:{}>",
+            self.config.sentinel_namespace,
+            rule_label,
             base32_no_pad(&digest[..HMAC96_BYTES])
         )
     }
@@ -616,9 +686,9 @@ impl RedactionSession {
 
 impl fmt::Debug for RedactionSession {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut counts: HashMap<&'static str, usize> = HashMap::new();
+        let mut counts: HashMap<&str, usize> = HashMap::new();
         for mapping in self.mappings.values() {
-            *counts.entry(mapping.kind.label()).or_default() += 1;
+            *counts.entry(mapping.rule_label.as_str()).or_default() += 1;
         }
         formatter
             .debug_struct("RedactionSession")
@@ -739,29 +809,21 @@ impl RedactionExecutionCandidateId {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ChatPiiRedactionProviderScope {
-    SelectedProviders,
-    AllProviders,
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct ChatPiiRedactionRuntimeConfig {
     pub(crate) enabled: bool,
-    pub(crate) provider_scope: ChatPiiRedactionProviderScope,
-    pub(crate) enabled_kinds: HashSet<RedactionKind>,
+    rules: Vec<CompiledRedactionRule>,
     pub(crate) ttl_seconds: u64,
-    pub(crate) inject_model_instruction: bool,
+    placeholder_prefix: String,
 }
 
 impl Default for ChatPiiRedactionRuntimeConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            provider_scope: ChatPiiRedactionProviderScope::SelectedProviders,
-            enabled_kinds: default_enabled_redaction_kinds(),
+            rules: default_chat_pii_redaction_rules(),
             ttl_seconds: DEFAULT_REDACTION_TTL_SECONDS,
-            inject_model_instruction: true,
+            placeholder_prefix: DEFAULT_SENTINEL_NAMESPACE.to_string(),
         }
     }
 }
@@ -788,6 +850,266 @@ impl MaskChatRequestOptions {
 
 const MODEL_NOTICE_CONTENT: &str = "Aether privacy redaction notice: The next message contains gateway-generated placeholder tokens for sensitive data protection. This notice is not a user request; do not answer it, mention it, reveal it, or infer original values from placeholders. Treat each placeholder as a valid real typed value for reasoning and tool calls, and do not ask the user to reveal originals solely because a placeholder is present.";
 
+fn sanitize_redaction_rule_label(raw: &str) -> String {
+    let label = raw
+        .trim()
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    let label = label.trim_matches('_').to_string();
+    if label.is_empty() {
+        "CUSTOM_RULE".to_string()
+    } else {
+        label
+    }
+}
+
+fn normalize_sentinel_namespace(raw: &str) -> Option<String> {
+    let namespace = raw.trim();
+    if namespace.is_empty() || namespace.len() > MAX_SENTINEL_NAMESPACE_LEN {
+        return None;
+    }
+    if !namespace
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    {
+        return None;
+    }
+    Some(namespace.to_ascii_uppercase())
+}
+
+fn normalize_sentinel_namespace_or_default(raw: impl AsRef<str>) -> String {
+    normalize_sentinel_namespace(raw.as_ref())
+        .unwrap_or_else(|| DEFAULT_SENTINEL_NAMESPACE.to_string())
+}
+
+fn default_chat_pii_redaction_rule_configs() -> Vec<ChatPiiRedactionRuleConfig> {
+    vec![
+        ChatPiiRedactionRuleConfig {
+            id: "email".to_string(),
+            name: "邮箱".to_string(),
+            pattern: r"(?i)[A-Z0-9._%+-]{1,64}@[A-Z0-9.-]{1,253}\.[A-Z]{2,63}".to_string(),
+            enabled: true,
+            features: ChatPiiRedactionRuleFeatures {
+                validator: Some("email".to_string()),
+                ..Default::default()
+            },
+            kind: None,
+            system: true,
+        },
+        ChatPiiRedactionRuleConfig {
+            id: "cn_phone".to_string(),
+            name: "手机号".to_string(),
+            pattern: r"(?:\+?86[- ]?)?(?:1[3-9]\d[- ]?\d{4}[- ]?\d{4}|0\d{2,3}[- ]\d{7,8}(?:-\d{1,6})?)"
+                .to_string(),
+            enabled: true,
+            features: ChatPiiRedactionRuleFeatures {
+                validator: Some("cn_phone".to_string()),
+                ..Default::default()
+            },
+            kind: None,
+            system: true,
+        },
+        ChatPiiRedactionRuleConfig {
+            id: "global_phone".to_string(),
+            name: "国际号码".to_string(),
+            pattern: r"\+[1-9]\d(?:[ -]?\d){6,13}\d".to_string(),
+            enabled: true,
+            features: ChatPiiRedactionRuleFeatures {
+                validator: Some("global_phone".to_string()),
+                ..Default::default()
+            },
+            kind: None,
+            system: true,
+        },
+        ChatPiiRedactionRuleConfig {
+            id: "cn_id".to_string(),
+            name: "身份证号".to_string(),
+            pattern: r"(?i)\b\d{17}[\dX]\b".to_string(),
+            enabled: true,
+            features: ChatPiiRedactionRuleFeatures {
+                validator: Some("cn_id".to_string()),
+                ..Default::default()
+            },
+            kind: None,
+            system: true,
+        },
+        ChatPiiRedactionRuleConfig {
+            id: "payment_card".to_string(),
+            name: "银行卡号".to_string(),
+            pattern: r"\b(?:\d[ -]?){12,18}\d\b".to_string(),
+            enabled: true,
+            features: ChatPiiRedactionRuleFeatures {
+                validator: Some("payment_card".to_string()),
+                ..Default::default()
+            },
+            kind: None,
+            system: true,
+        },
+        ChatPiiRedactionRuleConfig {
+            id: "ipv4".to_string(),
+            name: "IPv4".to_string(),
+            pattern: r"\b(?:\d{1,3}\.){3}\d{1,3}\b".to_string(),
+            enabled: true,
+            features: ChatPiiRedactionRuleFeatures {
+                validator: Some("ipv4".to_string()),
+                ..Default::default()
+            },
+            kind: None,
+            system: true,
+        },
+        ChatPiiRedactionRuleConfig {
+            id: "ipv6".to_string(),
+            name: "IPv6".to_string(),
+            pattern: r"\b(?:[0-9A-Fa-f]{1,4}:){2,7}[0-9A-Fa-f:.]{1,39}\b".to_string(),
+            enabled: true,
+            features: ChatPiiRedactionRuleFeatures {
+                validator: Some("ipv6".to_string()),
+                ..Default::default()
+            },
+            kind: None,
+            system: true,
+        },
+        ChatPiiRedactionRuleConfig {
+            id: "api_key".to_string(),
+            name: "API Key".to_string(),
+            pattern:
+                r"\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|(?:gh[pousr]_[A-Za-z0-9_]{30,}|github_pat_[A-Za-z0-9_]{30,})|xox[baprs]-[A-Za-z0-9-]{20,}|(?:AKIA|ASIA)[0-9A-Z]{16}|[A-Za-z0-9_-]{32,})\b"
+                    .to_string(),
+            enabled: true,
+            features: ChatPiiRedactionRuleFeatures {
+                validator: Some("api_key".to_string()),
+                ..Default::default()
+            },
+            kind: None,
+            system: true,
+        },
+        ChatPiiRedactionRuleConfig {
+            id: "access_token".to_string(),
+            name: "Access Token".to_string(),
+            pattern: r#"(?i)\baccess[_-]?token\s*[:=]\s*["']?[A-Za-z0-9._~+/=-]{20,}"#
+                .to_string(),
+            enabled: true,
+            features: ChatPiiRedactionRuleFeatures {
+                validator: Some("access_token".to_string()),
+                ..Default::default()
+            },
+            kind: None,
+            system: true,
+        },
+        ChatPiiRedactionRuleConfig {
+            id: "secret_key".to_string(),
+            name: "Secret Key".to_string(),
+            pattern: r#"(?i)\bsecret[_-]?key\s*[:=]\s*["']?[A-Za-z0-9._~+/=-]{20,}"#
+                .to_string(),
+            enabled: true,
+            features: ChatPiiRedactionRuleFeatures {
+                validator: Some("secret_key".to_string()),
+                ..Default::default()
+            },
+            kind: None,
+            system: true,
+        },
+        ChatPiiRedactionRuleConfig {
+            id: "bearer_token".to_string(),
+            name: "Bearer Token".to_string(),
+            pattern: r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{20,}".to_string(),
+            enabled: true,
+            features: ChatPiiRedactionRuleFeatures {
+                validator: Some("bearer_token".to_string()),
+                ..Default::default()
+            },
+            kind: None,
+            system: true,
+        },
+        ChatPiiRedactionRuleConfig {
+            id: "jwt".to_string(),
+            name: "JWT".to_string(),
+            pattern: r"\b[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b"
+                .to_string(),
+            enabled: true,
+            features: ChatPiiRedactionRuleFeatures {
+                validator: Some("jwt".to_string()),
+                ..Default::default()
+            },
+            kind: None,
+            system: true,
+        },
+    ]
+}
+
+fn default_chat_pii_redaction_rules() -> Vec<CompiledRedactionRule> {
+    compile_chat_pii_redaction_rules(&default_chat_pii_redaction_rule_configs())
+        .expect("default chat pii redaction rules should compile")
+}
+
+fn compile_chat_pii_redaction_rules(
+    rules: &[ChatPiiRedactionRuleConfig],
+) -> Result<Vec<CompiledRedactionRule>, GatewayError> {
+    let mut compiled = Vec::new();
+    for (index, rule) in rules.iter().enumerate() {
+        if !rule.enabled {
+            continue;
+        }
+        let pattern = rule.pattern.trim();
+        if pattern.is_empty() {
+            return Err(GatewayError::Internal(
+                "chat pii redaction rule pattern is empty".to_string(),
+            ));
+        }
+        let regex = Regex::new(pattern).map_err(|err| {
+            GatewayError::Internal(format!("chat pii redaction rule regex failed: {err}"))
+        })?;
+        let kinds = match rule.validator() {
+            Some(validator) => {
+                let kinds = redaction_kinds_for_entity(validator).collect::<Vec<_>>();
+                if kinds.is_empty() {
+                    return Err(GatewayError::Internal(format!(
+                        "unsupported chat pii redaction rule validator: {validator}"
+                    )));
+                }
+                kinds
+            }
+            None => Vec::new(),
+        };
+        compiled.push(CompiledRedactionRule {
+            rule_label: sanitize_redaction_rule_label(&rule.id),
+            regex,
+            kinds,
+            custom_priority: (1000u16).saturating_add(index as u16),
+        });
+    }
+    Ok(compiled)
+}
+
+fn parse_chat_pii_redaction_rules(
+    value: Option<&Value>,
+) -> Result<Vec<CompiledRedactionRule>, GatewayError> {
+    let Some(value) = value else {
+        return Ok(default_chat_pii_redaction_rules());
+    };
+    let Some(items) = value.as_array() else {
+        return Err(GatewayError::Internal(
+            "chat pii redaction rules must be an array".to_string(),
+        ));
+    };
+    let parsed = items
+        .iter()
+        .cloned()
+        .map(serde_json::from_value::<ChatPiiRedactionRuleConfig>)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| {
+            GatewayError::Internal(format!("chat pii redaction rules invalid: {err}"))
+        })?;
+    compile_chat_pii_redaction_rules(&parsed)
+}
+
 pub(crate) async fn read_chat_pii_redaction_runtime_config(
     state: &crate::AppState,
 ) -> Result<ChatPiiRedactionRuntimeConfig, GatewayError> {
@@ -798,18 +1120,12 @@ pub(crate) async fn read_chat_pii_redaction_runtime_config(
         .as_ref()
         .and_then(Value::as_bool)
         .unwrap_or(config.enabled);
-    config.provider_scope = parse_provider_scope(
+    config.rules = parse_chat_pii_redaction_rules(
         state
-            .read_system_config_json_value("module.chat_pii_redaction.provider_scope")
+            .read_system_config_json_value("module.chat_pii_redaction.rules")
             .await?
             .as_ref(),
-    );
-    config.enabled_kinds = parse_enabled_redaction_kinds(
-        state
-            .read_system_config_json_value("module.chat_pii_redaction.entities")
-            .await?
-            .as_ref(),
-    );
+    )?;
     config.ttl_seconds = state
         .read_system_config_json_value("module.chat_pii_redaction.cache_ttl_seconds")
         .await?
@@ -817,30 +1133,14 @@ pub(crate) async fn read_chat_pii_redaction_runtime_config(
         .and_then(Value::as_u64)
         .unwrap_or(config.ttl_seconds)
         .max(1);
-    config.inject_model_instruction = state
-        .read_system_config_json_value("module.chat_pii_redaction.inject_model_instruction")
+    config.placeholder_prefix = state
+        .read_system_config_json_value("module.chat_pii_redaction.placeholder_prefix")
         .await?
         .as_ref()
-        .and_then(Value::as_bool)
-        .unwrap_or(config.inject_model_instruction);
+        .and_then(Value::as_str)
+        .and_then(normalize_sentinel_namespace)
+        .unwrap_or(config.placeholder_prefix);
     Ok(config)
-}
-
-pub(crate) fn provider_chat_pii_redaction_enabled(
-    provider_config: Option<&Value>,
-    runtime_config: &ChatPiiRedactionRuntimeConfig,
-) -> bool {
-    if !runtime_config.enabled {
-        return false;
-    }
-    match runtime_config.provider_scope {
-        ChatPiiRedactionProviderScope::AllProviders => true,
-        ChatPiiRedactionProviderScope::SelectedProviders => provider_config
-            .and_then(|value| value.get("chat_pii_redaction"))
-            .and_then(|value| value.get("enabled"))
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-    }
 }
 
 pub(crate) fn build_redaction_session_config(
@@ -849,7 +1149,8 @@ pub(crate) fn build_redaction_session_config(
     now_unix_secs: u64,
 ) -> RedactionSessionConfig {
     RedactionSessionConfig::new(hmac_key, runtime_config.ttl_seconds, now_unix_secs)
-        .with_enabled_kinds(runtime_config.enabled_kinds.clone())
+        .with_sentinel_namespace(&runtime_config.placeholder_prefix)
+        .with_rules(runtime_config.rules.clone())
 }
 
 pub(crate) fn mask_chat_request_json_with_options(
@@ -1886,7 +2187,8 @@ impl fmt::Debug for RedactedText {
 }
 
 pub(crate) struct RedactionMatch {
-    pub(crate) kind: RedactionKind,
+    pub(crate) rule_label: String,
+    pub(crate) kind: Option<RedactionKind>,
     pub(crate) start: usize,
     pub(crate) end: usize,
     pub(crate) original: String,
@@ -1897,6 +2199,7 @@ impl fmt::Debug for RedactionMatch {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("RedactionMatch")
+            .field("rule_label", &self.rule_label)
             .field("kind", &self.kind)
             .field("start", &self.start)
             .field("end", &self.end)
@@ -1907,7 +2210,8 @@ impl fmt::Debug for RedactionMatch {
 }
 
 pub(crate) struct RedactionMapping {
-    pub(crate) kind: RedactionKind,
+    pub(crate) rule_label: String,
+    pub(crate) kind: Option<RedactionKind>,
     pub(crate) original: String,
     pub(crate) normalized_value: String,
     pub(crate) sentinel: String,
@@ -1920,6 +2224,7 @@ impl fmt::Debug for RedactionMapping {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("RedactionMapping")
+            .field("rule_label", &self.rule_label)
             .field("kind", &self.kind)
             .field("original_len", &self.original.len())
             .field("normalized_value_len", &self.normalized_value.len())
@@ -1933,7 +2238,8 @@ impl fmt::Debug for RedactionMapping {
 
 #[derive(Deserialize, Serialize)]
 pub(crate) struct RedactionCacheRecord {
-    pub(crate) kind: RedactionKind,
+    pub(crate) rule_label: String,
+    pub(crate) kind: Option<RedactionKind>,
     pub(crate) sentinel: String,
     pub(crate) bucket: u64,
     pub(crate) expires_at_unix_secs: u64,
@@ -1942,6 +2248,7 @@ pub(crate) struct RedactionCacheRecord {
 impl RedactionCacheRecord {
     pub(crate) fn from_mapping(mapping: &RedactionMapping) -> Self {
         Self {
+            rule_label: mapping.rule_label.clone(),
             kind: mapping.kind,
             sentinel: mapping.sentinel.clone(),
             bucket: mapping.bucket,
@@ -1954,6 +2261,7 @@ impl fmt::Debug for RedactionCacheRecord {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("RedactionCacheRecord")
+            .field("rule_label", &self.rule_label)
             .field("kind", &self.kind)
             .field("sentinel", &redacted_sentinel_debug(&self.sentinel))
             .field("bucket", &self.bucket)
@@ -2006,7 +2314,7 @@ impl<'a> RedisRedactionMappingCache<'a> {
         let ttl_seconds = ttl_seconds.max(1);
         self.runtime_state
             .kv_set(
-                &self.forward_cache_key(record.kind, normalized_value, record.bucket),
+                &self.forward_cache_key(&record.rule_label, normalized_value, record.bucket),
                 record.sentinel.clone(),
                 Some(Duration::from_secs(ttl_seconds)),
             )
@@ -2023,15 +2331,17 @@ impl<'a> RedisRedactionMappingCache<'a> {
 
     pub(crate) async fn lookup_sentinel(
         &self,
-        kind: RedactionKind,
+        rule_label: &str,
         normalized_value: &str,
         bucket: u64,
+        namespace: &str,
     ) -> Result<Option<String>, DataLayerError> {
         let sentinel = self
-            .get_string(&self.forward_cache_key(kind, normalized_value, bucket))
+            .get_string(&self.forward_cache_key(rule_label, normalized_value, bucket))
             .await?;
         Ok(sentinel.filter(|value| {
-            value.len() <= MAX_CACHE_SENTINEL_BYTES && sentinel_matches_kind(kind, value)
+            value.len() <= MAX_CACHE_SENTINEL_BYTES
+                && sentinel_matches_rule_label(namespace, rule_label, value)
         }))
     }
 
@@ -2051,16 +2361,11 @@ impl<'a> RedisRedactionMappingCache<'a> {
         self.runtime_state.kv_get(key).await
     }
 
-    fn forward_cache_key(
-        &self,
-        kind: RedactionKind,
-        normalized_value: &str,
-        bucket: u64,
-    ) -> String {
+    fn forward_cache_key(&self, rule_label: &str, normalized_value: &str, bucket: u64) -> String {
         format!(
             "{}:forward:{}:{}:{}",
             self.key_prefix,
-            kind.label(),
+            rule_label,
             bucket,
             normalized_value_cache_digest(normalized_value)
         )
@@ -2073,16 +2378,25 @@ impl<'a> RedisRedactionMappingCache<'a> {
 
 #[derive(Clone)]
 struct Candidate {
-    kind: RedactionKind,
+    rule_label: String,
+    kind: Option<RedactionKind>,
     start: usize,
     end: usize,
     value: String,
-    priority: u8,
+    priority: u16,
 }
 
 impl Candidate {
-    fn new(kind: RedactionKind, start: usize, end: usize, value: &str, priority: u8) -> Self {
+    fn new(
+        rule_label: impl Into<String>,
+        kind: Option<RedactionKind>,
+        start: usize,
+        end: usize,
+        value: &str,
+        priority: u16,
+    ) -> Self {
         Self {
+            rule_label: rule_label.into(),
             kind,
             start,
             end,
@@ -2307,11 +2621,106 @@ fn detect_candidates_with_probe(
     candidates
 }
 
+fn detect_candidates_for_session_config(
+    input: &str,
+    config: &RedactionSessionConfig,
+    probe: Option<&mut DetectorProbe>,
+) -> Vec<Candidate> {
+    if let Some(rules) = config.rules.as_ref() {
+        return detect_candidates_from_compiled_rules(input, rules, probe);
+    }
+    detect_candidates(input)
+        .into_iter()
+        .filter(|candidate| candidate.kind.is_some_and(|kind| config.kind_enabled(kind)))
+        .collect()
+}
+
+fn detect_candidates_from_compiled_rules(
+    input: &str,
+    rules: &[CompiledRedactionRule],
+    mut probe: Option<&mut DetectorProbe>,
+) -> Vec<Candidate> {
+    let mut candidates = Vec::new();
+    for rule in rules {
+        if rule.kinds.is_empty() {
+            push_compiled_rule_candidates(input, rule, &mut candidates, probe.as_deref_mut());
+            continue;
+        }
+        for kind in &rule.kinds {
+            push_compiled_rule_candidate(input, rule, *kind, &mut candidates, probe.as_deref_mut());
+        }
+    }
+    candidates.retain(|candidate| !looks_like_existing_sentinel(&candidate.value));
+    candidates
+}
+
+fn push_compiled_rule_candidates(
+    input: &str,
+    rule: &CompiledRedactionRule,
+    candidates: &mut Vec<Candidate>,
+    mut probe: Option<&mut DetectorProbe>,
+) {
+    for matched in rule.regex.find_iter(input) {
+        let value = matched.as_str();
+        if !has_token_boundary(input, matched.start(), matched.end()) {
+            continue;
+        }
+        if probe.is_some() {
+            // Custom rules have no validator call accounting.
+            candidates.push(Candidate::new(
+                rule.rule_label.clone(),
+                None,
+                matched.start(),
+                matched.end(),
+                value,
+                rule.custom_priority,
+            ));
+            continue;
+        }
+        candidates.push(Candidate::new(
+            rule.rule_label.clone(),
+            None,
+            matched.start(),
+            matched.end(),
+            value,
+            rule.custom_priority,
+        ));
+    }
+}
+
+fn push_compiled_rule_candidate(
+    input: &str,
+    rule: &CompiledRedactionRule,
+    kind: RedactionKind,
+    candidates: &mut Vec<Candidate>,
+    mut probe: Option<&mut DetectorProbe>,
+) {
+    for matched in rule.regex.find_iter(input) {
+        let value = matched.as_str();
+        if !has_token_boundary(input, matched.start(), matched.end()) {
+            continue;
+        }
+        if let Some(probe) = probe.as_deref_mut() {
+            probe.record_validator_call(kind);
+        }
+        if redaction_candidate_is_valid(kind, value) {
+            candidates.push(Candidate::new(
+                rule.rule_label.clone(),
+                Some(kind),
+                matched.start(),
+                matched.end(),
+                value,
+                candidate_priority(Some(kind), rule.custom_priority),
+            ));
+        }
+    }
+}
+
 fn push_regex_candidates(
     input: &str,
     regex: &Regex,
     kind: RedactionKind,
-    priority: u8,
+    priority: u16,
     candidates: &mut Vec<Candidate>,
     mut probe: Option<&mut DetectorProbe>,
     validator: impl Fn(&str) -> bool,
@@ -2326,7 +2735,8 @@ fn push_regex_candidates(
         }
         if validator(value) {
             candidates.push(Candidate::new(
-                kind,
+                kind.label(),
+                Some(kind),
                 matched.start(),
                 matched.end(),
                 value,
@@ -2357,7 +2767,14 @@ fn detect_ipv6_candidates(input: &str) -> Vec<Candidate> {
 fn push_ipv6_candidate(input: &str, start: usize, end: usize, candidates: &mut Vec<Candidate>) {
     let value = &input[start..end];
     if value.contains(':') && value.parse::<Ipv6Addr>().is_ok() {
-        candidates.push(Candidate::new(RedactionKind::Ipv6, start, end, value, 65));
+        candidates.push(Candidate::new(
+            RedactionKind::Ipv6.label(),
+            Some(RedactionKind::Ipv6),
+            start,
+            end,
+            value,
+            65,
+        ));
     }
 }
 
@@ -2579,15 +2996,23 @@ fn looks_like_existing_sentinel(value: &str) -> bool {
     SENTINEL_REGEX.is_match(value)
 }
 
-fn sentinel_matches_kind(kind: RedactionKind, sentinel: &str) -> bool {
+fn sentinel_matches_rule_label(namespace: &str, rule_label: &str, sentinel: &str) -> bool {
     if !full_sentinel_match(sentinel) {
         return false;
     }
     sentinel
-        .strip_prefix(SENTINEL_PREFIX)
+        .strip_prefix('<')
         .and_then(|value| value.strip_suffix('>'))
-        .and_then(|value| value.split_once(':'))
-        .is_some_and(|(label, _)| label == kind.label())
+        .and_then(|value| {
+            let mut parts = value.split(':');
+            let actual_namespace = parts.next()?;
+            let actual_rule = parts.next()?;
+            let digest = parts.next()?;
+            (parts.next().is_none()).then_some((actual_namespace, actual_rule, digest))
+        })
+        .is_some_and(|(actual_namespace, actual_rule, _)| {
+            actual_namespace == namespace && actual_rule == rule_label
+        })
 }
 
 fn full_sentinel_match(value: &str) -> bool {
@@ -2596,18 +3021,18 @@ fn full_sentinel_match(value: &str) -> bool {
         .is_some_and(|matched| matched.start() == 0 && matched.end() == value.len())
 }
 
-fn normalize_redaction_value(kind: RedactionKind, value: &str) -> String {
+fn normalize_redaction_value(kind: Option<RedactionKind>, value: &str) -> String {
     match kind {
-        RedactionKind::Email => value.trim().to_ascii_lowercase(),
-        RedactionKind::ChinaMobile
-        | RedactionKind::ChinaLandline
-        | RedactionKind::Phone
-        | RedactionKind::PaymentCard => digits_only(value),
-        RedactionKind::AccessToken | RedactionKind::SecretKey => value
+        Some(RedactionKind::Email) => value.trim().to_ascii_lowercase(),
+        Some(RedactionKind::ChinaMobile)
+        | Some(RedactionKind::ChinaLandline)
+        | Some(RedactionKind::Phone)
+        | Some(RedactionKind::PaymentCard) => digits_only(value),
+        Some(RedactionKind::AccessToken) | Some(RedactionKind::SecretKey) => value
             .split_once([':', '='])
             .map(|(_, token)| token.trim().trim_matches(['\'', '"']).to_string())
             .unwrap_or_else(|| value.trim().to_string()),
-        RedactionKind::BearerToken => value
+        Some(RedactionKind::BearerToken) => value
             .split_once(char::is_whitespace)
             .map(|(_, token)| token.trim().to_string())
             .unwrap_or_else(|| value.trim().to_string()),
@@ -2615,21 +3040,56 @@ fn normalize_redaction_value(kind: RedactionKind, value: &str) -> String {
     }
 }
 
+fn candidate_priority(kind: Option<RedactionKind>, fallback_priority: u16) -> u16 {
+    match kind {
+        Some(RedactionKind::Email) => 10,
+        Some(RedactionKind::ChinaMobile) => 20,
+        Some(RedactionKind::ChinaLandline) => 21,
+        Some(RedactionKind::Phone) => 30,
+        Some(RedactionKind::ChinaResidentId) => 40,
+        Some(RedactionKind::PaymentCard) => 50,
+        Some(RedactionKind::Ipv4) => 60,
+        Some(RedactionKind::Ipv6) => 65,
+        Some(RedactionKind::AnthropicKey) => 70,
+        Some(RedactionKind::OpenAiKey) => 80,
+        Some(RedactionKind::GitHubToken) => 90,
+        Some(RedactionKind::SlackToken) => 100,
+        Some(RedactionKind::AwsKey) => 110,
+        Some(RedactionKind::BearerToken) => 115,
+        Some(RedactionKind::AccessToken) => 116,
+        Some(RedactionKind::SecretKey) => 117,
+        Some(RedactionKind::Jwt) => 120,
+        Some(RedactionKind::ApiKey) => 200,
+        None => fallback_priority,
+    }
+}
+
+fn redaction_candidate_is_valid(kind: RedactionKind, value: &str) -> bool {
+    match kind {
+        RedactionKind::Email => value.contains('@'),
+        RedactionKind::ChinaMobile => is_valid_cn_mobile(value),
+        RedactionKind::ChinaLandline => is_valid_cn_landline(value),
+        RedactionKind::Phone => is_valid_e164_phone(value),
+        RedactionKind::ChinaResidentId => is_valid_cn_resident_id(value),
+        RedactionKind::PaymentCard => is_valid_payment_card(value),
+        RedactionKind::Ipv4 => value.parse::<Ipv4Addr>().is_ok(),
+        RedactionKind::Ipv6 => value.parse::<Ipv6Addr>().is_ok(),
+        RedactionKind::OpenAiKey
+        | RedactionKind::AnthropicKey
+        | RedactionKind::GitHubToken
+        | RedactionKind::SlackToken
+        | RedactionKind::AwsKey => true,
+        RedactionKind::BearerToken => is_valid_bearer_token(value),
+        RedactionKind::Jwt => is_valid_jwt_like(value),
+        RedactionKind::AccessToken => is_valid_named_token(value),
+        RedactionKind::SecretKey => is_valid_named_token(value),
+        RedactionKind::ApiKey => is_strict_high_entropy_token(value),
+    }
+}
+
 fn normalized_value_cache_digest(normalized_value: &str) -> String {
     let digest = sha2::Sha256::digest(normalized_value.as_bytes());
     base32_no_pad(&digest[..HMAC96_BYTES])
-}
-
-fn parse_provider_scope(value: Option<&Value>) -> ChatPiiRedactionProviderScope {
-    match value
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("all_providers") => ChatPiiRedactionProviderScope::AllProviders,
-        _ => ChatPiiRedactionProviderScope::SelectedProviders,
-    }
 }
 
 fn parse_enabled_redaction_kinds(value: Option<&Value>) -> HashSet<RedactionKind> {
@@ -2719,23 +3179,28 @@ fn base32_no_pad(bytes: &[u8]) -> String {
 }
 
 fn redacted_sentinel_debug(sentinel: &str) -> String {
-    let kind = sentinel
-        .strip_prefix(SENTINEL_PREFIX)
+    let (namespace, kind) = sentinel
+        .strip_prefix('<')
         .and_then(|rest| rest.split_once(':'))
-        .map(|(kind, _)| kind)
-        .unwrap_or("UNKNOWN");
-    format!("<AETHER:{kind}:redacted>")
+        .map(|(namespace, rest)| {
+            let kind = rest
+                .split_once(':')
+                .map(|(kind, _)| kind)
+                .unwrap_or("UNKNOWN");
+            (namespace, kind)
+        })
+        .unwrap_or((DEFAULT_SENTINEL_NAMESPACE, "UNKNOWN"));
+    format!("<{namespace}:{kind}:redacted>")
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         build_redaction_session_config, detect_candidates_with_probe, mask_chat_request_json,
-        mask_chat_request_json_with_options, parse_enabled_redaction_kinds,
-        provider_chat_pii_redaction_enabled, restore_sync_response_body,
-        try_mask_chat_request_json_with_cache_options, try_mask_chat_request_json_with_options,
-        ChatPiiRedactionProviderScope, ChatPiiRedactionRuntimeConfig, DetectorProbe, MappingKey,
-        MaskChatRequestOptions, RedactionKind, RedactionLimitError, RedactionMapping,
+        mask_chat_request_json_with_options, parse_chat_pii_redaction_rules,
+        restore_sync_response_body, try_mask_chat_request_json_with_cache_options,
+        try_mask_chat_request_json_with_options, ChatPiiRedactionRuntimeConfig, DetectorProbe,
+        MappingKey, MaskChatRequestOptions, RedactionKind, RedactionLimitError, RedactionMapping,
         RedactionScanLimits, RedactionSession, RedactionSessionConfig, RedactionSessionSlot,
         RedisRedactionMappingCache, SentinelMatcher, StreamingResponseRestorer,
     };
@@ -2802,10 +3267,25 @@ mod tests {
         assert_ne!(payload.len(), 24, "old hex HMAC96 payload must not be used");
     }
 
+    fn assert_namespaced_base32_sentinel(sentinel: &str, namespace: &str, rule_label: &str) {
+        let body = sentinel
+            .strip_prefix('<')
+            .and_then(|rest| rest.strip_suffix('>'))
+            .expect("sentinel should use wrapper");
+        let parts = body.split(':').collect::<Vec<_>>();
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[0], namespace);
+        assert_eq!(parts[1], rule_label);
+        assert_eq!(parts[2].len(), 20, "HMAC96 base32 payload is 20 chars");
+        assert!(parts[2]
+            .chars()
+            .all(|ch| matches!(ch, 'A'..='Z' | '2'..='7')));
+    }
+
     fn session_with_response_mapping(original: &str, sentinel: &str) -> RedactionSession {
         let mut session = session_at(600);
         let key = MappingKey {
-            kind: RedactionKind::Email,
+            rule_label: "EMAIL".to_string(),
             original: original.to_string(),
         };
         session
@@ -2814,7 +3294,8 @@ mod tests {
         session.mappings.insert(
             key,
             RedactionMapping {
-                kind: RedactionKind::Email,
+                rule_label: "EMAIL".to_string(),
+                kind: Some(RedactionKind::Email),
                 original: original.to_string(),
                 normalized_value: original.to_string(),
                 sentinel: sentinel.to_string(),
@@ -2844,6 +3325,22 @@ mod tests {
         )
         .await
         .expect("redis runtime state should build")
+    }
+
+    fn email_only_runtime_config() -> ChatPiiRedactionRuntimeConfig {
+        ChatPiiRedactionRuntimeConfig {
+            enabled: true,
+            rules: parse_chat_pii_redaction_rules(Some(&json!([{
+                "id": "email",
+                "name": "邮箱",
+                "pattern": "(?i)[A-Z0-9._%+-]{1,64}@[A-Z0-9.-]{1,253}\\.[A-Z]{2,63}",
+                "enabled": true,
+                "kind": "email",
+                "system": true
+            }])))
+            .expect("email rule should compile"),
+            ..ChatPiiRedactionRuntimeConfig::default()
+        }
     }
 
     #[test]
@@ -2901,19 +3398,21 @@ mod tests {
             assert_base32_sentinel(&matched.sentinel);
         }
         assert!(redacted.matches.iter().any(|matched| {
-            matched.kind == RedactionKind::ChinaMobile && matched.sentinel.contains(":CN_PHONE:")
+            matched.kind == Some(RedactionKind::ChinaMobile)
+                && matched.sentinel.contains(":CN_PHONE:")
         }));
         assert!(redacted.matches.iter().any(|matched| {
-            matched.kind == RedactionKind::ChinaLandline && matched.sentinel.contains(":CN_PHONE:")
+            matched.kind == Some(RedactionKind::ChinaLandline)
+                && matched.sentinel.contains(":CN_PHONE:")
         }));
         assert!(redacted
             .matches
             .iter()
-            .any(|matched| matched.kind == RedactionKind::AccessToken));
+            .any(|matched| matched.kind == Some(RedactionKind::AccessToken)));
         assert!(redacted
             .matches
             .iter()
-            .any(|matched| matched.kind == RedactionKind::SecretKey));
+            .any(|matched| matched.kind == Some(RedactionKind::SecretKey)));
         assert_eq!(session.mapping_count(), originals.len());
 
         let first_email = session
@@ -2951,6 +3450,27 @@ mod tests {
         assert_ne!(
             collision_session.sentinel_for_original("alice@example.com"),
             Some(colliding_literal.as_str())
+        );
+    }
+
+    #[test]
+    fn pii_redaction_session_uses_configured_sentinel_namespace() {
+        let mut session = RedactionSession::new(
+            RedactionSessionConfig::new(b"redaction-test-key".to_vec(), 300, 600)
+                .with_sentinel_namespace("vendor_safe"),
+        );
+
+        let redacted = session.redact_text("contact alice@example.com");
+        let sentinel = session
+            .sentinel_for_original("alice@example.com")
+            .expect("email sentinel should exist");
+
+        assert_namespaced_base32_sentinel(sentinel, "VENDOR_SAFE", "EMAIL");
+        assert!(redacted.text.contains(sentinel));
+        assert!(!redacted.text.contains("<AETHER:"));
+        assert_eq!(
+            session.restore_text(&redacted.text).text,
+            "contact alice@example.com"
         );
     }
 
@@ -3652,43 +4172,18 @@ mod tests {
     }
 
     #[test]
-    fn proxy_pii_redaction_provider_scope_gates_master_selected_and_all_provider_modes() {
-        let provider_config = json!({"chat_pii_redaction": {"enabled": true}});
-        let disabled_provider_config = json!({"chat_pii_redaction": {"enabled": false}});
-        let mut config = ChatPiiRedactionRuntimeConfig {
-            enabled: false,
-            ..ChatPiiRedactionRuntimeConfig::default()
-        };
-
-        assert!(!provider_chat_pii_redaction_enabled(
-            Some(&provider_config),
-            &config
-        ));
-
-        config.enabled = true;
-        config.provider_scope = ChatPiiRedactionProviderScope::SelectedProviders;
-        assert!(provider_chat_pii_redaction_enabled(
-            Some(&provider_config),
-            &config
-        ));
-        assert!(!provider_chat_pii_redaction_enabled(None, &config));
-        assert!(!provider_chat_pii_redaction_enabled(
-            Some(&disabled_provider_config),
-            &config
-        ));
-
-        config.provider_scope = ChatPiiRedactionProviderScope::AllProviders;
-        assert!(provider_chat_pii_redaction_enabled(None, &config));
-        assert!(provider_chat_pii_redaction_enabled(
-            Some(&disabled_provider_config),
-            &config
-        ));
-    }
-
-    #[test]
-    fn proxy_pii_redaction_entity_selection_controls_email_and_phone_detectors() {
+    fn proxy_pii_redaction_rule_selection_controls_email_detector() {
         let config = ChatPiiRedactionRuntimeConfig {
-            enabled_kinds: [RedactionKind::Email].into_iter().collect(),
+            enabled: true,
+            rules: parse_chat_pii_redaction_rules(Some(&json!([{
+                "id": "email",
+                "name": "邮箱",
+                "pattern": "(?i)[A-Z0-9._%+-]{1,64}@[A-Z0-9.-]{1,253}\\.[A-Z]{2,63}",
+                "enabled": true,
+                "kind": "email",
+                "system": true
+            }])))
+            .expect("email rule should compile"),
             ..ChatPiiRedactionRuntimeConfig::default()
         };
         let request = json!({
@@ -3714,9 +4209,18 @@ mod tests {
     }
 
     #[test]
-    fn proxy_pii_redaction_empty_entity_selection_disables_all_detectors() {
+    fn proxy_pii_redaction_disabled_rules_disable_all_detectors() {
         let config = ChatPiiRedactionRuntimeConfig {
-            enabled_kinds: parse_enabled_redaction_kinds(Some(&json!([]))),
+            enabled: true,
+            rules: parse_chat_pii_redaction_rules(Some(&json!([{
+                "id": "email",
+                "name": "邮箱",
+                "pattern": "(?i)[A-Z0-9._%+-]{1,64}@[A-Z0-9.-]{1,253}\\.[A-Z]{2,63}",
+                "enabled": false,
+                "kind": "email",
+                "system": true
+            }])))
+            .expect("disabled email rule should compile"),
             ..ChatPiiRedactionRuntimeConfig::default()
         };
         let request = json!({
@@ -3914,7 +4418,7 @@ mod tests {
         assert_eq!(token_probe.validator_calls(RedactionKind::ApiKey), 1);
         assert!(token_candidates
             .iter()
-            .any(|candidate| candidate.kind == RedactionKind::ApiKey));
+            .any(|candidate| candidate.kind == Some(RedactionKind::ApiKey)));
     }
 
     #[test]
@@ -3981,10 +4485,7 @@ mod tests {
         let runtime_state =
             redis_cache_runtime_state(redis.redis_url(), "pii_redaction_performance_cache").await;
         let cache = RedisRedactionMappingCache::new(&runtime_state);
-        let config = ChatPiiRedactionRuntimeConfig {
-            enabled_kinds: [RedactionKind::Email].into_iter().collect(),
-            ..ChatPiiRedactionRuntimeConfig::default()
-        };
+        let config = email_only_runtime_config();
 
         let first_request = json!({
             "model": "gpt-5",
@@ -4109,10 +4610,7 @@ mod tests {
         )
         .await;
         let cache = RedisRedactionMappingCache::new(&runtime_state);
-        let config = ChatPiiRedactionRuntimeConfig {
-            enabled_kinds: [RedactionKind::Email].into_iter().collect(),
-            ..ChatPiiRedactionRuntimeConfig::default()
-        };
+        let config = email_only_runtime_config();
 
         let first_request = json!({
             "model": "gpt-5",
@@ -4209,13 +4707,10 @@ mod tests {
             redis_cache_runtime_state(redis.redis_url(), "pii_redaction_performance_bad_cache")
                 .await;
         let cache = RedisRedactionMappingCache::new(&runtime_state);
-        let config = ChatPiiRedactionRuntimeConfig {
-            enabled_kinds: [RedactionKind::Email].into_iter().collect(),
-            ..ChatPiiRedactionRuntimeConfig::default()
-        };
+        let config = email_only_runtime_config();
         runtime_state
             .kv_set(
-                &cache.forward_cache_key(RedactionKind::Email, "alice@example.com", 2),
+                &cache.forward_cache_key("EMAIL", "alice@example.com", 2),
                 "<AETHER:PHONE:ABCDEFGHIJKLMNOPQRST>",
                 Some(Duration::from_secs(300)),
             )
@@ -4243,6 +4738,51 @@ mod tests {
         assert_ne!(sentinel, "<AETHER:PHONE:ABCDEFGHIJKLMNOPQRST>");
     }
 
+    #[tokio::test]
+    async fn pii_redaction_performance_ignores_cached_sentinel_with_wrong_namespace() {
+        let Some(redis) = start_managed_redis_or_skip().await else {
+            return;
+        };
+        let runtime_state = redis_cache_runtime_state(
+            redis.redis_url(),
+            "pii_redaction_performance_wrong_namespace",
+        )
+        .await;
+        let cache = RedisRedactionMappingCache::new(&runtime_state);
+        let config = ChatPiiRedactionRuntimeConfig {
+            placeholder_prefix: "SAFE".to_string(),
+            ..email_only_runtime_config()
+        };
+        runtime_state
+            .kv_set(
+                &cache.forward_cache_key("EMAIL", "alice@example.com", 2),
+                "<AETHER:EMAIL:ABCDEFGHIJKLMNOPQRST>",
+                Some(Duration::from_secs(300)),
+            )
+            .await
+            .expect("wrong namespace cache value should write");
+
+        let request = json!({
+            "model": "gpt-5",
+            "messages": [{"role": "user", "content": "Contact alice@example.com"}]
+        });
+        let masked = try_mask_chat_request_json_with_cache_options(
+            &serde_json::to_vec(&request).expect("request should serialize"),
+            build_redaction_session_config(b"redaction-test-key".to_vec(), &config, 600),
+            MaskChatRequestOptions::runtime(false),
+            Some(&cache),
+        )
+        .await
+        .expect("masking should ignore wrong namespace cache value");
+
+        let sentinel = masked
+            .session
+            .sentinel_for_original("alice@example.com")
+            .expect("email sentinel should exist");
+        assert!(sentinel.starts_with("<SAFE:EMAIL:"));
+        assert_ne!(sentinel, "<AETHER:EMAIL:ABCDEFGHIJKLMNOPQRST>");
+    }
+
     #[test]
     fn pii_redaction_performance_restore_uses_large_mapping_matcher() {
         let mut session = session_at(600);
@@ -4250,14 +4790,15 @@ mod tests {
             let original = format!("user{index}@example.com");
             let sentinel = format!("<AETHER:EMAIL:{index:0>20}>");
             let key = MappingKey {
-                kind: RedactionKind::Email,
+                rule_label: "EMAIL".to_string(),
                 original: original.clone(),
             };
             session.sentinel_index.insert(sentinel.clone(), key.clone());
             session.mappings.insert(
                 key,
                 RedactionMapping {
-                    kind: RedactionKind::Email,
+                    rule_label: "EMAIL".to_string(),
+                    kind: Some(RedactionKind::Email),
                     original,
                     normalized_value: format!("user{index}@example.com"),
                     sentinel,
@@ -4276,14 +4817,15 @@ mod tests {
             let original = format!("user{index}@example.com");
             let sentinel = format!("<AETHER:EMAIL:{index:0>20}>");
             let key = MappingKey {
-                kind: RedactionKind::Email,
+                rule_label: "EMAIL".to_string(),
                 original: original.clone(),
             };
             session.sentinel_index.insert(sentinel.clone(), key.clone());
             session.mappings.insert(
                 key,
                 RedactionMapping {
-                    kind: RedactionKind::Email,
+                    rule_label: "EMAIL".to_string(),
+                    kind: Some(RedactionKind::Email),
                     original,
                     normalized_value: format!("user{index}@example.com"),
                     sentinel,

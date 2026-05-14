@@ -57,7 +57,7 @@ pub(crate) const ADMIN_MODULE_DEFINITIONS: &[AdminModuleDefinition] = &[
     },
     AdminModuleDefinition {
         name: "chat_pii_redaction",
-        display_name: "敏感信息替换保护",
+        display_name: "敏感信息保护",
         description: "发送给供应商前将聊天消息中的敏感信息替换为占位符，返回客户端前自动还原。",
         category: "security",
         env_key: "CHAT_PII_REDACTION_AVAILABLE",

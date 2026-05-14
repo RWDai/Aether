@@ -37,9 +37,9 @@ use crate::ai_serving::{
 };
 use crate::ai_serving::{ConversionMode, ExecutionStrategy};
 use crate::privacy::{
-    build_redaction_session_config, provider_chat_pii_redaction_enabled,
-    read_chat_pii_redaction_runtime_config, try_mask_chat_request_json_with_cache_options,
-    MaskChatRequestOptions, RedactionMaskError, RedactionSessionSlot, RedisRedactionMappingCache,
+    build_redaction_session_config, read_chat_pii_redaction_runtime_config,
+    try_mask_chat_request_json_with_cache_options, MaskChatRequestOptions, RedactionMaskError,
+    RedactionSessionSlot, RedisRedactionMappingCache,
 };
 use crate::{AppState, GatewayError};
 use tracing::warn;
@@ -89,6 +89,76 @@ impl<'a> ProviderChatRequestRedaction<'a> {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct ChatPiiRedactionFeatureSettings {
+    enabled: Option<bool>,
+    inject_model_instruction: Option<bool>,
+}
+
+impl ChatPiiRedactionFeatureSettings {
+    fn merge_from_value(&mut self, value: Option<&Value>) {
+        let Some(settings) = value
+            .and_then(Value::as_object)
+            .and_then(|features| features.get("chat_pii_redaction"))
+            .and_then(Value::as_object)
+        else {
+            return;
+        };
+        if let Some(enabled) = settings.get("enabled").and_then(Value::as_bool) {
+            self.enabled = Some(enabled);
+        }
+        if let Some(inject_model_instruction) = settings
+            .get("inject_model_instruction")
+            .and_then(Value::as_bool)
+        {
+            self.inject_model_instruction = Some(inject_model_instruction);
+        }
+    }
+
+    fn effective_enabled(self) -> bool {
+        self.enabled.unwrap_or(false)
+    }
+
+    fn effective_inject_model_instruction(self) -> bool {
+        self.inject_model_instruction.unwrap_or(true)
+    }
+}
+
+async fn resolve_chat_pii_redaction_feature_settings(
+    state: &AppState,
+    input: &LocalOpenAiChatDecisionInput,
+) -> Result<ChatPiiRedactionFeatureSettings, GatewayError> {
+    let user_settings = state
+        .read_user_feature_settings(&input.auth_context.user_id)
+        .await
+        .map_err(|err| {
+            warn!(
+                error = ?err,
+                "gateway failed to read user chat pii redaction feature settings"
+            );
+            GatewayError::Internal("chat pii redaction setup failed".to_string())
+        })?;
+    let key_settings = state
+        .read_auth_api_key_feature_settings(
+            &input.auth_context.user_id,
+            &input.auth_context.api_key_id,
+            input.auth_context.api_key_is_standalone,
+        )
+        .await
+        .map_err(|err| {
+            warn!(
+                error = ?err,
+                "gateway failed to read api key chat pii redaction feature settings"
+            );
+            GatewayError::Internal("chat pii redaction setup failed".to_string())
+        })?;
+
+    let mut settings = ChatPiiRedactionFeatureSettings::default();
+    settings.merge_from_value(user_settings.as_ref());
+    settings.merge_from_value(key_settings.as_ref());
+    Ok(settings)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn resolve_local_openai_chat_candidate_payload_parts(
     state: &AppState,
@@ -117,7 +187,7 @@ pub(crate) async fn resolve_local_openai_chat_candidate_payload_parts(
         )
         .await;
     let redaction =
-        resolve_provider_chat_request_redaction(state, parts, body_json, transport, candidate_id)
+        resolve_provider_chat_request_redaction(state, parts, body_json, input, candidate_id)
             .await?;
     let body_json = redaction.body_json.as_ref();
 
@@ -712,7 +782,7 @@ async fn resolve_provider_chat_request_redaction<'a>(
     state: &AppState,
     parts: &http::request::Parts,
     body_json: &'a Value,
-    transport: &GatewayProviderTransportSnapshot,
+    input: &LocalOpenAiChatDecisionInput,
     candidate_id: &str,
 ) -> Result<ProviderChatRequestRedaction<'a>, GatewayError> {
     if parts.uri.path() != "/v1/chat/completions" {
@@ -730,7 +800,11 @@ async fn resolve_provider_chat_request_redaction<'a>(
             );
             GatewayError::Internal("chat pii redaction setup failed".to_string())
         })?;
-    if !provider_chat_pii_redaction_enabled(transport.provider.config.as_ref(), &runtime_config) {
+    if !runtime_config.enabled {
+        return Ok(ProviderChatRequestRedaction::disabled(body_json, parts));
+    }
+    let feature_settings = resolve_chat_pii_redaction_feature_settings(state, input).await?;
+    if !feature_settings.effective_enabled() {
         return Ok(ProviderChatRequestRedaction::disabled(body_json, parts));
     }
     let Some(hmac_key) = state.encryption_key().map(str::as_bytes).map(Vec::from) else {
@@ -754,7 +828,7 @@ async fn resolve_provider_chat_request_redaction<'a>(
     let masked = try_mask_chat_request_json_with_cache_options(
         &body_bytes,
         build_redaction_session_config(hmac_key, &runtime_config, now_unix_secs),
-        MaskChatRequestOptions::runtime(runtime_config.inject_model_instruction),
+        MaskChatRequestOptions::runtime(feature_settings.effective_inject_model_instruction()),
         Some(&cache),
     )
     .await

@@ -785,7 +785,7 @@ async fn gateway_handles_admin_modules_status_locally_with_trusted_admin_princip
     assert_eq!(payload["chat_pii_redaction"]["enabled"], json!(false));
     assert_eq!(
         payload["chat_pii_redaction"]["display_name"],
-        "敏感信息替换保护"
+        "敏感信息保护"
     );
     assert_eq!(
         payload["chat_pii_redaction"]["config_validated"],
@@ -967,7 +967,7 @@ async fn gateway_handles_chat_pii_redaction_module_status_detail_locally_with_tr
     assert_eq!(response.status(), StatusCode::OK);
     let payload: serde_json::Value = response.json().await.expect("json body should parse");
     assert_eq!(payload["name"], "chat_pii_redaction");
-    assert_eq!(payload["display_name"], "敏感信息替换保护");
+    assert_eq!(payload["display_name"], "敏感信息保护");
     assert_eq!(payload["enabled"], json!(true));
     assert_eq!(payload["active"], json!(true));
     assert_eq!(payload["config_validated"], json!(true));

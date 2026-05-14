@@ -41,6 +41,46 @@ fn auth_snapshot(api_key_id: &str, user_id: &str) -> StoredAuthApiKeySnapshot {
     .expect("auth snapshot should build")
 }
 
+fn auth_export_record(
+    snapshot: &StoredAuthApiKeySnapshot,
+    key_hash: String,
+    feature_settings: Option<serde_json::Value>,
+) -> aether_data::repository::auth::StoredAuthApiKeyExportRecord {
+    aether_data::repository::auth::StoredAuthApiKeyExportRecord::new(
+        snapshot.user_id.clone(),
+        snapshot.api_key_id.clone(),
+        key_hash,
+        None,
+        snapshot.api_key_name.clone(),
+        snapshot
+            .api_key_allowed_providers
+            .as_ref()
+            .map(|value| serde_json::json!(value)),
+        snapshot
+            .api_key_allowed_api_formats
+            .as_ref()
+            .map(|value| serde_json::json!(value)),
+        snapshot
+            .api_key_allowed_models
+            .as_ref()
+            .map(|value| serde_json::json!(value)),
+        snapshot.api_key_rate_limit,
+        snapshot.api_key_concurrent_limit,
+        None,
+        snapshot.api_key_is_active,
+        snapshot
+            .api_key_expires_at_unix_secs
+            .map(|value| value as i64),
+        false,
+        0,
+        0,
+        0.0,
+        snapshot.api_key_is_standalone,
+    )
+    .expect("auth api key export record should build")
+    .with_feature_settings(feature_settings)
+}
+
 fn candidate_row(test_id: &str) -> StoredMinimalCandidateSelectionRow {
     StoredMinimalCandidateSelectionRow {
         provider_id: format!("provider-{test_id}"),
@@ -141,35 +181,88 @@ fn key(test_id: &str) -> StoredProviderCatalogKey {
 }
 
 fn redaction_config(module_enabled: bool) -> Vec<(String, serde_json::Value)> {
-    redaction_config_with_entities(
-        module_enabled,
-        json!(["email", "access_token", "secret_key"]),
-    )
+    redaction_config_with_rules(module_enabled, redaction_test_rules())
 }
 
-fn redaction_config_with_entities(
+fn redaction_config_with_rules(
     module_enabled: bool,
-    entities: serde_json::Value,
+    rules: serde_json::Value,
 ) -> Vec<(String, serde_json::Value)> {
     vec![
         (
             "module.chat_pii_redaction.enabled".to_string(),
             json!(module_enabled),
         ),
-        (
-            "module.chat_pii_redaction.provider_scope".to_string(),
-            json!("selected_providers"),
-        ),
-        ("module.chat_pii_redaction.entities".to_string(), entities),
+        ("module.chat_pii_redaction.rules".to_string(), rules),
         (
             "module.chat_pii_redaction.cache_ttl_seconds".to_string(),
             json!(300),
         ),
-        (
-            "module.chat_pii_redaction.inject_model_instruction".to_string(),
-            json!(true),
-        ),
     ]
+}
+
+fn redaction_test_rules() -> serde_json::Value {
+    json!([
+        {
+            "id": "email",
+            "name": "邮箱",
+            "pattern": r"(?i)[A-Z0-9._%+-]{1,64}@[A-Z0-9.-]{1,253}\.[A-Z]{2,63}",
+            "enabled": true,
+            "features": {"validator": "email"},
+            "system": true
+        },
+        {
+            "id": "access_token",
+            "name": "Access Token",
+            "pattern": r#"(?i)\baccess[_-]?token\s*[:=]\s*["']?[A-Za-z0-9._~+/=-]{20,}"#,
+            "enabled": true,
+            "features": {"validator": "access_token"},
+            "system": true
+        },
+        {
+            "id": "secret_key",
+            "name": "Secret Key",
+            "pattern": r#"(?i)\bsecret[_-]?key\s*[:=]\s*["']?[A-Za-z0-9._~+/=-]{20,}"#,
+            "enabled": true,
+            "features": {"validator": "secret_key"},
+            "system": true
+        }
+    ])
+}
+
+fn chat_pii_redaction_feature_settings(
+    enabled: bool,
+    inject_model_instruction: bool,
+) -> serde_json::Value {
+    json!({
+        "chat_pii_redaction": {
+            "enabled": enabled,
+            "inject_model_instruction": inject_model_instruction,
+        }
+    })
+}
+
+fn auth_repository_with_redaction_feature_settings(
+    test_id: &str,
+    feature_enabled: bool,
+    inject_model_instruction: bool,
+) -> Arc<InMemoryAuthApiKeySnapshotRepository> {
+    let snapshot = auth_snapshot(&format!("api-key-{test_id}"), &format!("user-{test_id}"));
+    let key_hash = hash_api_key(&format!("sk-client-{test_id}"));
+    Arc::new(
+        InMemoryAuthApiKeySnapshotRepository::seed(vec![(
+            Some(key_hash.clone()),
+            snapshot.clone(),
+        )])
+        .with_export_records(vec![auth_export_record(
+            &snapshot,
+            key_hash,
+            Some(chat_pii_redaction_feature_settings(
+                feature_enabled,
+                inject_model_instruction,
+            )),
+        )]),
+    )
 }
 
 fn collect_sentinels(text: &str, kind: &str) -> Vec<String> {
@@ -191,13 +284,13 @@ fn collect_sentinels(text: &str, kind: &str) -> Vec<String> {
 async fn run_sync_redaction_case(
     test_id: &str,
     module_enabled: bool,
-    provider_enabled: bool,
+    feature_enabled: bool,
     provider_response: &'static str,
     request_body: serde_json::Value,
 ) -> (serde_json::Value, SeenProviderRequest) {
     run_sync_redaction_case_with_system_config(
         test_id,
-        provider_enabled,
+        feature_enabled,
         provider_response,
         request_body,
         redaction_config(module_enabled),
@@ -207,7 +300,7 @@ async fn run_sync_redaction_case(
 
 async fn run_sync_redaction_case_with_system_config(
     test_id: &str,
-    provider_enabled: bool,
+    feature_enabled: bool,
     provider_response: &'static str,
     request_body: serde_json::Value,
     system_config: Vec<(String, serde_json::Value)>,
@@ -279,17 +372,15 @@ async fn run_sync_redaction_case_with_system_config(
         }),
     );
     let (provider_url, provider_handle) = start_server(provider_app).await;
-    let auth_repository = Arc::new(InMemoryAuthApiKeySnapshotRepository::seed(vec![(
-        Some(hash_api_key(&format!("sk-client-{test_id}"))),
-        auth_snapshot(&format!("api-key-{test_id}"), &format!("user-{test_id}")),
-    )]));
+    let auth_repository =
+        auth_repository_with_redaction_feature_settings(test_id, feature_enabled, true);
     let candidate_selection_repository =
         Arc::new(InMemoryMinimalCandidateSelectionReadRepository::seed(vec![
             candidate_row(test_id),
         ]));
     let request_candidate_repository = Arc::new(InMemoryRequestCandidateRepository::default());
     let provider_catalog_repository = Arc::new(InMemoryProviderCatalogReadRepository::seed(
-        vec![provider(test_id, provider_enabled)],
+        vec![provider(test_id, true)],
         vec![endpoint(test_id, provider_url)],
         vec![key(test_id)],
     ));
@@ -469,7 +560,7 @@ async fn ai_execute_pii_redaction_disabled_module_passes_original_chat_through()
 }
 
 #[tokio::test]
-async fn ai_execute_pii_redaction_disabled_provider_passes_original_chat_through() {
+async fn ai_execute_pii_redaction_disabled_feature_passes_original_chat_through() {
     let (response_json, seen) = run_sync_redaction_case(
         "ai-execute-pii-redaction-disabled-provider",
         true,
@@ -492,13 +583,13 @@ async fn ai_execute_pii_redaction_disabled_provider_passes_original_chat_through
 }
 
 #[tokio::test]
-async fn ai_execute_pii_redaction_empty_entities_passes_original_chat_through() {
+async fn ai_execute_pii_redaction_empty_rules_passes_original_chat_through() {
     let (response_json, seen) = run_sync_redaction_case_with_system_config(
         "ai-execute-pii-redaction-empty-entities",
         true,
         "pass_through",
         rich_pii_request(),
-        redaction_config_with_entities(true, json!([])),
+        redaction_config_with_rules(true, json!([])),
     )
     .await;
 
@@ -586,13 +677,8 @@ async fn ai_execute_pii_redaction_restores_executed_candidate_session_after_late
         }),
     );
     let (provider_url, provider_handle) = start_server(provider_app).await;
-    let auth_repository = Arc::new(InMemoryAuthApiKeySnapshotRepository::seed(vec![(
-        Some(hash_api_key("sk-client-redaction-candidate-session")),
-        auth_snapshot(
-            "api-key-redaction-candidate-session",
-            "user-redaction-candidate-session",
-        ),
-    )]));
+    let auth_repository =
+        auth_repository_with_redaction_feature_settings("redaction-candidate-session", true, true);
     let mut later_candidate = candidate_row("redaction-candidate-session");
     later_candidate.provider_id = "provider-redaction-candidate-session-later".to_string();
     later_candidate.endpoint_id = "endpoint-redaction-candidate-session-later".to_string();
@@ -702,10 +788,8 @@ async fn pii_redaction_performance_limits_do_not_forward_unredacted_body_upstrea
         }),
     );
     let (provider_url, provider_handle) = start_server(provider_app).await;
-    let auth_repository = Arc::new(InMemoryAuthApiKeySnapshotRepository::seed(vec![(
-        Some(hash_api_key("sk-client-pii-redaction-limit")),
-        auth_snapshot("api-key-pii-redaction-limit", "user-pii-redaction-limit"),
-    )]));
+    let auth_repository =
+        auth_repository_with_redaction_feature_settings("pii-redaction-limit", true, true);
     let candidate_selection_repository =
         Arc::new(InMemoryMinimalCandidateSelectionReadRepository::seed(vec![
             candidate_row("pii-redaction-limit"),
@@ -777,10 +861,7 @@ async fn ai_execute_pii_redaction_missing_encryption_key_fails_closed_before_pro
     );
     let (execution_runtime_url, execution_runtime_handle) = start_server(execution_runtime).await;
     let test_id = "ai-execute-pii-redaction-missing-encryption-key";
-    let auth_repository = Arc::new(InMemoryAuthApiKeySnapshotRepository::seed(vec![(
-        Some(hash_api_key(&format!("sk-client-{test_id}"))),
-        auth_snapshot(&format!("api-key-{test_id}"), &format!("user-{test_id}")),
-    )]));
+    let auth_repository = auth_repository_with_redaction_feature_settings(test_id, true, true);
     let candidate_selection_repository =
         Arc::new(InMemoryMinimalCandidateSelectionReadRepository::seed(vec![
             candidate_row(test_id),
@@ -791,17 +872,16 @@ async fn ai_execute_pii_redaction_missing_encryption_key_fails_closed_before_pro
         vec![endpoint(test_id, "https://example.com".to_string())],
         vec![key(test_id)],
     ));
+    let data_state = crate::data::GatewayDataState::with_auth_candidate_selection_provider_catalog_and_request_candidate_repository_for_tests(
+        auth_repository,
+        candidate_selection_repository,
+        provider_catalog_repository,
+        Arc::clone(&request_candidate_repository),
+        "",
+    )
+    .with_system_config_values_for_tests(redaction_config(true));
     let gateway_state = build_state_with_execution_runtime_override(execution_runtime_url.clone())
-        .with_data_state_for_tests(
-            crate::data::GatewayDataState::with_auth_candidate_selection_provider_catalog_and_request_candidate_repository_for_tests(
-                auth_repository,
-                candidate_selection_repository,
-                provider_catalog_repository,
-                Arc::clone(&request_candidate_repository),
-                "",
-            )
-            .with_system_config_values_for_tests(redaction_config(true)),
-        );
+        .with_data_state_for_tests(data_state);
     let gateway = build_router_with_state(gateway_state);
     let (gateway_url, gateway_handle) = start_server(gateway).await;
 

@@ -23,82 +23,125 @@ export interface AuthModuleInfo {
   active: boolean
 }
 
-export type ChatPiiRedactionProviderScope = 'all_providers' | 'selected_providers'
 export type ChatPiiRedactionTtlSeconds = 300 | 3600
-export type ChatPiiRedactionEntity =
-  | 'email'
-  | 'cn_phone'
-  | 'global_phone'
-  | 'cn_id'
-  | 'payment_card'
-  | 'ipv4'
-  | 'ipv6'
-  | 'api_key'
-  | 'access_token'
-  | 'secret_key'
-  | 'bearer_token'
-  | 'jwt'
+
+export interface ChatPiiRedactionRuleFeatures {
+  validator?: string | null
+  [key: string]: unknown
+}
+
+export interface ChatPiiRedactionRule {
+  id: string
+  name: string
+  pattern: string
+  enabled: boolean
+  system?: boolean
+  features?: ChatPiiRedactionRuleFeatures | null
+}
 
 export interface ChatPiiRedactionConfig {
   enabled: boolean
-  provider_scope: ChatPiiRedactionProviderScope
-  entities: ChatPiiRedactionEntity[]
+  rules: ChatPiiRedactionRule[]
   cache_ttl_seconds: ChatPiiRedactionTtlSeconds
-  inject_model_instruction: boolean
+  placeholder_prefix: string
 }
 
-const CHAT_PII_REDACTION_ENTITIES: ChatPiiRedactionEntity[] = [
-  'email',
-  'cn_phone',
-  'global_phone',
-  'cn_id',
-  'payment_card',
-  'ipv4',
-  'ipv6',
-  'api_key',
-  'access_token',
-  'secret_key',
-  'bearer_token',
-  'jwt',
+export const CHAT_PII_REDACTION_DEFAULT_RULES: ChatPiiRedactionRule[] = [
+  { id: 'email', name: '邮箱', pattern: '(?i)[A-Z0-9._%+-]{1,64}@[A-Z0-9.-]{1,253}\\.[A-Z]{2,63}', enabled: true, features: { validator: 'email' }, system: true },
+  { id: 'cn_phone', name: '手机号', pattern: '(?:\\+?86[- ]?)?(?:1[3-9]\\d[- ]?\\d{4}[- ]?\\d{4}|0\\d{2,3}[- ]\\d{7,8}(?:-\\d{1,6})?)', enabled: true, features: { validator: 'cn_phone' }, system: true },
+  { id: 'global_phone', name: '国际号码', pattern: '\\+[1-9]\\d(?:[ -]?\\d){6,13}\\d', enabled: true, features: { validator: 'global_phone' }, system: true },
+  { id: 'cn_id', name: '身份证号', pattern: '(?i)\\b\\d{17}[\\dX]\\b', enabled: true, features: { validator: 'cn_id' }, system: true },
+  { id: 'payment_card', name: '银行卡号', pattern: '\\b(?:\\d[ -]?){12,18}\\d\\b', enabled: true, features: { validator: 'payment_card' }, system: true },
+  { id: 'ipv4', name: 'IPv4', pattern: '\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b', enabled: true, features: { validator: 'ipv4' }, system: true },
+  { id: 'ipv6', name: 'IPv6', pattern: '\\b(?:[0-9A-Fa-f]{1,4}:){2,7}[0-9A-Fa-f:.]{1,39}\\b', enabled: true, features: { validator: 'ipv6' }, system: true },
+  { id: 'api_key', name: 'API Key', pattern: '\\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|(?:gh[pousr]_[A-Za-z0-9_]{30,}|github_pat_[A-Za-z0-9_]{30,})|xox[baprs]-[A-Za-z0-9-]{20,}|(?:AKIA|ASIA)[0-9A-Z]{16}|[A-Za-z0-9_-]{32,})\\b', enabled: true, features: { validator: 'api_key' }, system: true },
+  { id: 'access_token', name: 'Access Token', pattern: "(?i)\\baccess[_-]?token\\s*[:=]\\s*[\"']?[A-Za-z0-9._~+/=-]{20,}", enabled: true, features: { validator: 'access_token' }, system: true },
+  { id: 'secret_key', name: 'Secret Key', pattern: "(?i)\\bsecret[_-]?key\\s*[:=]\\s*[\"']?[A-Za-z0-9._~+/=-]{20,}", enabled: true, features: { validator: 'secret_key' }, system: true },
+  { id: 'bearer_token', name: 'Bearer Token', pattern: '(?i)\\bBearer\\s+[A-Za-z0-9._~+/=-]{20,}', enabled: true, features: { validator: 'bearer_token' }, system: true },
+  { id: 'jwt', name: 'JWT', pattern: '\\b[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\b', enabled: true, features: { validator: 'jwt' }, system: true },
 ]
 
 const CHAT_PII_REDACTION_CONFIG_KEYS = {
   enabled: 'module.chat_pii_redaction.enabled',
-  provider_scope: 'module.chat_pii_redaction.provider_scope',
-  entities: 'module.chat_pii_redaction.entities',
+  rules: 'module.chat_pii_redaction.rules',
   cache_ttl_seconds: 'module.chat_pii_redaction.cache_ttl_seconds',
-  inject_model_instruction: 'module.chat_pii_redaction.inject_model_instruction',
+  placeholder_prefix: 'module.chat_pii_redaction.placeholder_prefix',
 } as const
 
 const CHAT_PII_REDACTION_DEFAULT_CONFIG: ChatPiiRedactionConfig = {
   enabled: false,
-  provider_scope: 'selected_providers',
-  entities: [...CHAT_PII_REDACTION_ENTITIES],
+  rules: CHAT_PII_REDACTION_DEFAULT_RULES.map(rule => ({ ...rule })),
   cache_ttl_seconds: 300,
-  inject_model_instruction: true,
+  placeholder_prefix: 'AETHER',
 }
 
-function isChatPiiRedactionEntity(value: unknown): value is ChatPiiRedactionEntity {
-  return typeof value === 'string' && CHAT_PII_REDACTION_ENTITIES.includes(value as ChatPiiRedactionEntity)
+function cloneDefaultChatPiiRedactionRules(): ChatPiiRedactionRule[] {
+  return CHAT_PII_REDACTION_DEFAULT_RULES.map(rule => ({ ...rule }))
 }
 
-function normalizeChatPiiRedactionEntities(value: unknown): ChatPiiRedactionEntity[] {
-  if (!Array.isArray(value)) return [...CHAT_PII_REDACTION_DEFAULT_CONFIG.entities]
-  const unique = new Set<ChatPiiRedactionEntity>()
-  for (const item of value) {
-    if (isChatPiiRedactionEntity(item)) unique.add(item)
+function normalizeChatPiiRedactionRule(value: unknown, index: number): ChatPiiRedactionRule | null {
+  if (!value || typeof value !== 'object') return null
+  const item = value as Record<string, unknown>
+  const id = typeof item.id === 'string' && item.id.trim()
+    ? item.id.trim()
+    : `custom_${index + 1}`
+  const name = typeof item.name === 'string' && item.name.trim()
+    ? item.name.trim()
+    : id
+  const pattern = typeof item.pattern === 'string' ? item.pattern : ''
+  if (!pattern.trim()) return null
+  const rawFeatures = item.features && typeof item.features === 'object' && !Array.isArray(item.features)
+    ? { ...(item.features as Record<string, unknown>) }
+    : {}
+  const legacyValidator = typeof item.kind === 'string' && item.kind.trim()
+    ? item.kind.trim()
+    : null
+  const validator = typeof rawFeatures.validator === 'string' && rawFeatures.validator.trim()
+    ? rawFeatures.validator.trim()
+    : legacyValidator
+  if (validator) {
+    rawFeatures.validator = validator
+  } else {
+    delete rawFeatures.validator
   }
-  return CHAT_PII_REDACTION_ENTITIES.filter((item) => unique.has(item))
+  const features = Object.keys(rawFeatures).length > 0 ? rawFeatures : null
+  return {
+    id,
+    name,
+    pattern,
+    enabled: item.enabled !== false,
+    system: item.system === true,
+    features,
+  }
 }
 
-function normalizeChatPiiRedactionConfig(values: Record<keyof ChatPiiRedactionConfig, unknown>): ChatPiiRedactionConfig {
+function normalizeChatPiiRedactionRules(value: unknown): ChatPiiRedactionRule[] {
+  if (!Array.isArray(value)) return cloneDefaultChatPiiRedactionRules()
+  return value
+    .map((item, index) => normalizeChatPiiRedactionRule(item, index))
+    .filter((item): item is ChatPiiRedactionRule => item !== null)
+}
+
+function normalizeChatPiiRedactionConfig(values: {
+  enabled: unknown
+  rules: unknown
+  cache_ttl_seconds: unknown
+  placeholder_prefix: unknown
+}): ChatPiiRedactionConfig {
   return {
     enabled: values.enabled === true,
-    provider_scope: values.provider_scope === 'all_providers' ? 'all_providers' : 'selected_providers',
-    entities: normalizeChatPiiRedactionEntities(values.entities),
+    rules: normalizeChatPiiRedactionRules(values.rules),
     cache_ttl_seconds: values.cache_ttl_seconds === 3600 ? 3600 : 300,
-    inject_model_instruction: values.inject_model_instruction !== false,
+    placeholder_prefix: normalizePlaceholderPrefix(values.placeholder_prefix),
   }
+}
+
+function normalizePlaceholderPrefix(value: unknown): string {
+  if (typeof value !== 'string') return CHAT_PII_REDACTION_DEFAULT_CONFIG.placeholder_prefix
+  const normalized = value.trim().toUpperCase()
+  return /^[A-Z0-9_]{1,32}$/.test(normalized)
+    ? normalized
+    : CHAT_PII_REDACTION_DEFAULT_CONFIG.placeholder_prefix
 }
 
 async function getSystemConfigValue(key: string): Promise<unknown> {
@@ -147,38 +190,34 @@ export const modulesApi = {
   },
 
   async getChatPiiRedactionConfig(): Promise<ChatPiiRedactionConfig> {
-    const [enabled, providerScope, entities, cacheTtlSeconds, injectModelInstruction] = await Promise.all([
+    const [enabled, rules, cacheTtlSeconds, placeholderPrefix] = await Promise.all([
       getSystemConfigValue(CHAT_PII_REDACTION_CONFIG_KEYS.enabled),
-      getSystemConfigValue(CHAT_PII_REDACTION_CONFIG_KEYS.provider_scope),
-      getSystemConfigValue(CHAT_PII_REDACTION_CONFIG_KEYS.entities),
+      getSystemConfigValue(CHAT_PII_REDACTION_CONFIG_KEYS.rules),
       getSystemConfigValue(CHAT_PII_REDACTION_CONFIG_KEYS.cache_ttl_seconds),
-      getSystemConfigValue(CHAT_PII_REDACTION_CONFIG_KEYS.inject_model_instruction),
+      getSystemConfigValue(CHAT_PII_REDACTION_CONFIG_KEYS.placeholder_prefix),
     ])
 
     return normalizeChatPiiRedactionConfig({
       enabled,
-      provider_scope: providerScope,
-      entities,
+      rules,
       cache_ttl_seconds: cacheTtlSeconds,
-      inject_model_instruction: injectModelInstruction,
+      placeholder_prefix: placeholderPrefix,
     })
   },
 
   async updateChatPiiRedactionConfig(config: ChatPiiRedactionConfig): Promise<ChatPiiRedactionConfig> {
-    const [enabled, providerScope, entities, cacheTtlSeconds, injectModelInstruction] = await Promise.all([
-      updateSystemConfigValue(CHAT_PII_REDACTION_CONFIG_KEYS.enabled, config.enabled, '敏感信息替换保护总开关'),
-      updateSystemConfigValue(CHAT_PII_REDACTION_CONFIG_KEYS.provider_scope, config.provider_scope, '敏感信息替换保护启用范围'),
-      updateSystemConfigValue(CHAT_PII_REDACTION_CONFIG_KEYS.entities, config.entities, '敏感信息替换保护检测类型'),
-      updateSystemConfigValue(CHAT_PII_REDACTION_CONFIG_KEYS.cache_ttl_seconds, config.cache_ttl_seconds, '敏感信息替换保护缓存 TTL'),
-      updateSystemConfigValue(CHAT_PII_REDACTION_CONFIG_KEYS.inject_model_instruction, config.inject_model_instruction, '敏感信息替换保护模型提示说明'),
+    const [enabled, rules, cacheTtlSeconds, placeholderPrefix] = await Promise.all([
+      updateSystemConfigValue(CHAT_PII_REDACTION_CONFIG_KEYS.enabled, config.enabled, '敏感信息保护总开关'),
+      updateSystemConfigValue(CHAT_PII_REDACTION_CONFIG_KEYS.rules, config.rules, '敏感信息保护替换规则'),
+      updateSystemConfigValue(CHAT_PII_REDACTION_CONFIG_KEYS.cache_ttl_seconds, config.cache_ttl_seconds, '敏感信息保护缓存 TTL'),
+      updateSystemConfigValue(CHAT_PII_REDACTION_CONFIG_KEYS.placeholder_prefix, config.placeholder_prefix, '敏感信息保护占位符前缀'),
     ])
 
     return normalizeChatPiiRedactionConfig({
       enabled,
-      provider_scope: providerScope,
-      entities,
+      rules,
       cache_ttl_seconds: cacheTtlSeconds,
-      inject_model_instruction: injectModelInstruction,
+      placeholder_prefix: placeholderPrefix,
     })
   },
 

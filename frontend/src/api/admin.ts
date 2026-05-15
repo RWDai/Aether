@@ -91,6 +91,13 @@ export interface UsersExportData {
   standalone_keys?: StandaloneKeyExport[]
 }
 
+export interface AggregateExportData {
+  version: string
+  exported_at: string
+  config_data: ConfigExportData
+  user_data: UsersExportData
+}
+
 export interface UserGroupExport {
   id?: string
   name: string
@@ -419,6 +426,16 @@ export interface UsersImportResponse {
     standalone_keys?: { created: number; updated?: number; skipped: number }
     errors: string[]
   }
+}
+
+export interface AggregateImportRequest extends AggregateExportData {
+  merge_mode: 'skip' | 'overwrite' | 'error'
+}
+
+export interface AggregateImportResponse {
+  message: string
+  config: ConfigImportResponse
+  users: UsersImportResponse
 }
 
 export interface ConfigImportResponse {
@@ -832,6 +849,21 @@ export const adminApi = {
   async importUsers(data: UsersImportRequest): Promise<UsersImportResponse> {
     const response = await apiClient.post<UsersImportResponse>(
       '/api/admin/system/users/import',
+      data
+    )
+    return response.data
+  },
+
+  // 导出聚合数据（配置数据 + 用户数据）
+  async exportAggregateData(): Promise<AggregateExportData> {
+    const response = await apiClient.get<AggregateExportData>('/api/admin/system/data/export')
+    return response.data
+  },
+
+  // 导入聚合数据（配置数据 + 用户数据）
+  async importAggregateData(data: AggregateImportRequest): Promise<AggregateImportResponse> {
+    const response = await apiClient.post<AggregateImportResponse>(
+      '/api/admin/system/data/import',
       data
     )
     return response.data

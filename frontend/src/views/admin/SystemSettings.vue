@@ -21,26 +21,18 @@
             @update:site-subtitle="systemConfig.site_subtitle = $event"
           />
 
-          <!-- 配置导出/导入 -->
-          <ConfigManagementSection
-            id="section-config-mgmt"
-            :export-loading="exportLoading"
-            :import-loading="importLoading"
-            @export="handleExportConfig"
-            @file-select="handleConfigFileSelect"
-          />
-
-          <!-- 用户数据导出/导入 -->
-          <UserDataSection
-            id="section-user-data"
-            :export-loading="exportUsersLoading"
-            :import-loading="importUsersLoading"
-            @export="handleExportUsers"
-            @file-select="handleUsersFileSelect"
-          />
-
           <!-- 数据管理 -->
-          <DataManagementSection id="section-data-mgmt" />
+          <DataManagementSection
+            id="section-data-mgmt"
+            :config-export-loading="exportLoading"
+            :config-import-loading="importLoading"
+            :users-export-loading="exportUsersLoading"
+            :users-import-loading="importUsersLoading"
+            :aggregate-export-loading="exportAggregateLoading"
+            :aggregate-import-loading="importAggregateLoading"
+            @export="handleDataExport"
+            @file-select="handleDataFileSelect"
+          />
 
           <!-- 网络代理 -->
           <ProxyConfigSection
@@ -210,6 +202,22 @@
       @update:users-merge-mode="usersMergeMode = $event"
       @update:users-merge-mode-select-open="usersMergeModeSelectOpen = $event"
     />
+
+    <!-- 聚合数据导入对话框 -->
+    <AggregateImportDialog
+      :aggregate-import-dialog-open="aggregateImportDialogOpen"
+      :aggregate-import-result-dialog-open="aggregateImportResultDialogOpen"
+      :aggregate-import-preview="aggregateImportPreview"
+      :aggregate-import-result="aggregateImportResult"
+      :aggregate-merge-mode="aggregateMergeMode"
+      :aggregate-merge-mode-select-open="aggregateMergeModeSelectOpen"
+      :import-aggregate-loading="importAggregateLoading"
+      @confirm="confirmImportAggregate"
+      @update:aggregate-import-dialog-open="aggregateImportDialogOpen = $event"
+      @update:aggregate-import-result-dialog-open="aggregateImportResultDialogOpen = $event"
+      @update:aggregate-merge-mode="aggregateMergeMode = $event"
+      @update:aggregate-merge-mode-select-open="aggregateMergeModeSelectOpen = $event"
+    />
   </PageContainer>
 </template>
 
@@ -225,8 +233,6 @@ import { useScheduledTasks } from './system-settings/composables/useScheduledTas
 
 // Section components
 import SiteInfoSection from './system-settings/SiteInfoSection.vue'
-import ConfigManagementSection from './system-settings/ConfigManagementSection.vue'
-import UserDataSection from './system-settings/UserDataSection.vue'
 import DataManagementSection from './system-settings/DataManagementSection.vue'
 import ProxyConfigSection from './system-settings/ProxyConfigSection.vue'
 import BasicConfigSection from './system-settings/BasicConfigSection.vue'
@@ -238,14 +244,13 @@ import SystemInfoSection from './system-settings/SystemInfoSection.vue'
 // Dialog components
 import ConfigImportDialog from './system-settings/ConfigImportDialog.vue'
 import UsersImportDialog from './system-settings/UsersImportDialog.vue'
+import AggregateImportDialog from './system-settings/AggregateImportDialog.vue'
 
 const proxyNodesStore = useProxyNodesStore()
 
 // TOC 目录导航
 const tocItems = [
   { id: 'section-site-info', label: '站点信息' },
-  { id: 'section-config-mgmt', label: '配置管理' },
-  { id: 'section-user-data', label: '用户数据管理' },
   { id: 'section-data-mgmt', label: '数据管理' },
   { id: 'section-proxy', label: '网络代理' },
   { id: 'section-basic', label: '基础配置' },
@@ -331,7 +336,7 @@ const {
   handleAutoCleanupToggle,
 } = useSystemConfig()
 
-// Config export/import composable
+// 数据导出/导入 composable
 const {
   exportLoading,
   importLoading,
@@ -355,7 +360,40 @@ const {
   handleExportUsers,
   handleUsersFileSelect,
   confirmImportUsers,
+  exportAggregateLoading,
+  importAggregateLoading,
+  aggregateImportDialogOpen,
+  aggregateImportResultDialogOpen,
+  aggregateImportPreview,
+  aggregateImportResult,
+  aggregateMergeMode,
+  aggregateMergeModeSelectOpen,
+  handleExportAggregate,
+  handleAggregateFileSelect,
+  confirmImportAggregate,
 } = useConfigExportImport(systemConfig)
+
+type DataManagementKind = 'config' | 'users' | 'aggregate'
+
+function handleDataExport(kind: DataManagementKind) {
+  if (kind === 'config') {
+    handleExportConfig()
+  } else if (kind === 'users') {
+    handleExportUsers()
+  } else {
+    handleExportAggregate()
+  }
+}
+
+function handleDataFileSelect(kind: DataManagementKind, event: Event) {
+  if (kind === 'config') {
+    handleConfigFileSelect(event)
+  } else if (kind === 'users') {
+    handleUsersFileSelect(event)
+  } else {
+    handleAggregateFileSelect(event)
+  }
+}
 
 // Scheduled tasks composable
 const {

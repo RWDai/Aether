@@ -839,6 +839,7 @@ async fn gateway_handles_admin_system_unavailable_write_routes_locally_with_trus
     let unavailable_paths = [
         "/api/admin/system/config/import",
         "/api/admin/system/users/import",
+        "/api/admin/system/data/import",
     ];
     let local_paths = [
         "/api/admin/system/cleanup",
@@ -862,7 +863,11 @@ async fn gateway_handles_admin_system_unavailable_write_routes_locally_with_trus
             .await
             .expect("request should succeed");
 
-        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response.status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "path={path}"
+        );
         let payload: serde_json::Value = response.json().await.expect("json body should parse");
         assert_eq!(payload["detail"], DETAIL, "path={path}");
     }

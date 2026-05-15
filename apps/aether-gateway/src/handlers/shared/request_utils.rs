@@ -249,6 +249,7 @@ pub(crate) fn admin_proxy_local_requires_buffered_body(
                 | (Some("provider_oauth_manage"), http::Method::POST, Some("device_poll"))
                 | (Some("system_manage"), http::Method::POST, Some("config_import"))
                 | (Some("system_manage"), http::Method::POST, Some("users_import"))
+                | (Some("system_manage"), http::Method::POST, Some("data_import"))
                 | (Some("system_manage"), http::Method::PUT, Some("settings_set"))
                 | (Some("system_manage"), http::Method::PUT, Some("config_set"))
                 | (Some("system_manage"), http::Method::PUT, Some("email_template_set"))

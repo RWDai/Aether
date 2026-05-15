@@ -1,22 +1,28 @@
 use super::{
-    decrypt_catalog_secret_with_fallbacks, http, system_config_bool, system_config_string,
-    system_config_string_list, AppState,
+    auth_client_ip_with_cf, build_auth_error_response, decrypt_catalog_secret_with_fallbacks, http,
+    system_config_bool, system_config_string, system_config_string_list, AppState, Body, Response,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
+use tracing::warn;
 
 const TURNSTILE_SITEVERIFY_URL: &str = "https://challenges.cloudflare.com/turnstile/v0/siteverify";
+const TURNSTILE_TOKEN_MAX_LEN: usize = 2048;
+const TURNSTILE_SITEVERIFY_TIMEOUT: Duration = Duration::from_secs(10);
 
-#[derive(Debug, Clone)]
-pub(super) struct AuthTurnstilePublicSettings {
-    pub(super) enabled: bool,
-    pub(super) site_key: Option<String>,
+#[derive(Debug, Clone, Copy)]
+pub(super) enum AuthTurnstileAction {
+    SendVerificationCode,
+    Register,
 }
 
-#[derive(Debug)]
-pub(super) struct AuthTurnstileError {
-    pub(super) status: http::StatusCode,
-    pub(super) detail: String,
+impl AuthTurnstileAction {
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::SendVerificationCode => "send_verification_code",
+            Self::Register => "register",
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -24,61 +30,220 @@ struct AuthTurnstileConfig {
     enabled: bool,
     site_key: Option<String>,
     secret_key: Option<String>,
-    siteverify_url: String,
     allowed_hostnames: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct TurnstileSiteverifyRequest<'a> {
+    secret: &'a str,
+    response: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    remoteip: Option<&'a str>,
+    idempotency_key: String,
 }
 
 #[derive(Debug, Deserialize)]
 struct TurnstileSiteverifyResponse {
+    #[serde(default)]
     success: bool,
+    #[serde(default)]
+    action: Option<String>,
+    #[serde(default)]
     hostname: Option<String>,
     #[serde(default, rename = "error-codes")]
     error_codes: Vec<String>,
 }
 
-fn turnstile_error(status: http::StatusCode, detail: impl Into<String>) -> AuthTurnstileError {
-    AuthTurnstileError {
-        status,
-        detail: detail.into(),
+enum AuthTurnstileFailure {
+    BadRequest(&'static str),
+    ServiceUnavailable(&'static str),
+}
+
+impl AuthTurnstileFailure {
+    fn into_response(self) -> Response<Body> {
+        match self {
+            Self::BadRequest(detail) => {
+                build_auth_error_response(http::StatusCode::BAD_REQUEST, detail, false)
+            }
+            Self::ServiceUnavailable(detail) => {
+                build_auth_error_response(http::StatusCode::SERVICE_UNAVAILABLE, detail, false)
+            }
+        }
     }
 }
 
-fn turnstile_config_error(detail: impl Into<String>) -> AuthTurnstileError {
-    turnstile_error(http::StatusCode::INTERNAL_SERVER_ERROR, detail)
+pub(super) async fn verify_auth_turnstile(
+    state: &AppState,
+    headers: &http::HeaderMap,
+    cf_connecting_ip: Option<&str>,
+    token: Option<&str>,
+    action: AuthTurnstileAction,
+) -> Result<(), Response<Body>> {
+    match verify_auth_turnstile_inner(state, headers, cf_connecting_ip, token, action).await {
+        Ok(()) => Ok(()),
+        Err(err) => Err(err.into_response()),
+    }
+}
+
+async fn verify_auth_turnstile_inner(
+    state: &AppState,
+    headers: &http::HeaderMap,
+    cf_connecting_ip: Option<&str>,
+    token: Option<&str>,
+    action: AuthTurnstileAction,
+) -> Result<(), AuthTurnstileFailure> {
+    let config = read_auth_turnstile_config(state).await?;
+    if !config.enabled {
+        return Ok(());
+    }
+
+    let (Some(_site_key), Some(secret_key)) =
+        (config.site_key.as_deref(), config.secret_key.as_deref())
+    else {
+        warn!("turnstile is enabled but site key or secret key is missing");
+        return Err(AuthTurnstileFailure::ServiceUnavailable(
+            "人机验证服务暂不可用，请稍后重试",
+        ));
+    };
+
+    let token = token
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or(AuthTurnstileFailure::BadRequest("请先完成人机验证"))?;
+    if token.len() > TURNSTILE_TOKEN_MAX_LEN {
+        warn!(
+            token_len = token.len(),
+            "turnstile token exceeds maximum length"
+        );
+        return Err(AuthTurnstileFailure::BadRequest("人机验证失败，请重试"));
+    }
+
+    let remoteip = auth_client_ip_with_cf(headers, cf_connecting_ip);
+    let siteverify_request = TurnstileSiteverifyRequest {
+        secret: secret_key,
+        response: token,
+        remoteip: remoteip.as_deref(),
+        idempotency_key: uuid::Uuid::new_v4().to_string(),
+    };
+    let siteverify_url = turnstile_siteverify_url(state);
+    let response = tokio::time::timeout(
+        turnstile_siteverify_timeout(state),
+        state
+            .client
+            .post(siteverify_url)
+            .form(&siteverify_request)
+            .send(),
+    )
+    .await
+    .map_err(|_| {
+        warn!("turnstile siteverify request timed out");
+        AuthTurnstileFailure::ServiceUnavailable("人机验证服务暂不可用，请稍后重试")
+    })?
+    .map_err(|err| {
+        warn!(error = %err, "turnstile siteverify request failed");
+        AuthTurnstileFailure::ServiceUnavailable("人机验证服务暂不可用，请稍后重试")
+    })?;
+    if !response.status().is_success() {
+        let status = response.status().as_u16();
+        warn!(
+            status,
+            "turnstile siteverify returned non-success HTTP status"
+        );
+        return Err(AuthTurnstileFailure::ServiceUnavailable(
+            "人机验证服务暂不可用，请稍后重试",
+        ));
+    }
+    let payload = response
+        .json::<TurnstileSiteverifyResponse>()
+        .await
+        .map_err(|err| {
+            warn!(error = %err, "turnstile siteverify response decode failed");
+            AuthTurnstileFailure::ServiceUnavailable("人机验证服务暂不可用，请稍后重试")
+        })?;
+
+    if !payload.success {
+        warn!(
+            error_codes = ?payload.error_codes,
+            action = ?payload.action,
+            hostname = ?payload.hostname,
+            "turnstile siteverify rejected token"
+        );
+        if turnstile_siteverify_error_is_service_unavailable(&payload.error_codes) {
+            return Err(AuthTurnstileFailure::ServiceUnavailable(
+                "人机验证服务暂不可用，请稍后重试",
+            ));
+        }
+        return Err(AuthTurnstileFailure::BadRequest("人机验证失败，请重试"));
+    }
+    if payload.action.as_deref() != Some(action.as_str()) {
+        warn!(
+            expected_action = action.as_str(),
+            actual_action = ?payload.action,
+            "turnstile siteverify action mismatch"
+        );
+        return Err(AuthTurnstileFailure::BadRequest("人机验证失败，请重试"));
+    }
+    if !config.allowed_hostnames.is_empty() {
+        let Some(hostname) = payload.hostname.as_deref().map(str::to_ascii_lowercase) else {
+            warn!("turnstile siteverify response missing hostname");
+            return Err(AuthTurnstileFailure::BadRequest("人机验证失败，请重试"));
+        };
+        if !config
+            .allowed_hostnames
+            .iter()
+            .any(|allowed| allowed == &hostname)
+        {
+            warn!(
+                hostname = %hostname,
+                allowed_hostnames = ?config.allowed_hostnames,
+                "turnstile siteverify hostname mismatch"
+            );
+            return Err(AuthTurnstileFailure::BadRequest("人机验证失败，请重试"));
+        }
+    }
+
+    Ok(())
+}
+
+fn turnstile_siteverify_error_is_service_unavailable(error_codes: &[String]) -> bool {
+    error_codes.iter().any(|code| {
+        matches!(
+            code.trim().to_ascii_lowercase().as_str(),
+            "missing-input-secret" | "invalid-input-secret" | "internal-error"
+        )
+    })
 }
 
 async fn read_auth_turnstile_config(
     state: &AppState,
-) -> Result<AuthTurnstileConfig, AuthTurnstileError> {
+) -> Result<AuthTurnstileConfig, AuthTurnstileFailure> {
     let enabled = state
         .read_system_config_json_value("turnstile_enabled")
         .await
         .map_err(|err| {
-            turnstile_config_error(format!("auth turnstile settings lookup failed: {err:?}"))
+            warn!(error = ?err, "turnstile enabled config lookup failed");
+            AuthTurnstileFailure::ServiceUnavailable("人机验证服务暂不可用，请稍后重试")
         })?;
     let site_key = state
         .read_system_config_json_value("turnstile_site_key")
         .await
         .map_err(|err| {
-            turnstile_config_error(format!("auth turnstile settings lookup failed: {err:?}"))
+            warn!(error = ?err, "turnstile site key config lookup failed");
+            AuthTurnstileFailure::ServiceUnavailable("人机验证服务暂不可用，请稍后重试")
         })?;
     let secret_key = state
         .read_system_config_json_value("turnstile_secret_key")
         .await
         .map_err(|err| {
-            turnstile_config_error(format!("auth turnstile settings lookup failed: {err:?}"))
-        })?;
-    let siteverify_url = state
-        .read_system_config_json_value("turnstile_siteverify_url")
-        .await
-        .map_err(|err| {
-            turnstile_config_error(format!("auth turnstile settings lookup failed: {err:?}"))
+            warn!(error = ?err, "turnstile secret key config lookup failed");
+            AuthTurnstileFailure::ServiceUnavailable("人机验证服务暂不可用，请稍后重试")
         })?;
     let allowed_hostnames = state
         .read_system_config_json_value("turnstile_allowed_hostnames")
         .await
         .map_err(|err| {
-            turnstile_config_error(format!("auth turnstile settings lookup failed: {err:?}"))
+            warn!(error = ?err, "turnstile hostname config lookup failed");
+            AuthTurnstileFailure::ServiceUnavailable("人机验证服务暂不可用，请稍后重试")
         })?;
 
     let secret_key = system_config_string(secret_key.as_ref()).map(|value| {
@@ -89,121 +254,22 @@ async fn read_auth_turnstile_config(
         enabled: system_config_bool(enabled.as_ref(), false),
         site_key: system_config_string(site_key.as_ref()),
         secret_key,
-        siteverify_url: system_config_string(siteverify_url.as_ref())
-            .unwrap_or_else(|| TURNSTILE_SITEVERIFY_URL.to_string()),
         allowed_hostnames: system_config_string_list(allowed_hostnames.as_ref()),
     })
 }
 
-pub(super) async fn auth_turnstile_public_settings(
-    state: &AppState,
-) -> Result<AuthTurnstilePublicSettings, AuthTurnstileError> {
-    let config = read_auth_turnstile_config(state).await?;
-    let enabled = config.enabled && config.site_key.is_some();
-    Ok(AuthTurnstilePublicSettings {
-        enabled,
-        site_key: enabled.then_some(config.site_key).flatten(),
-    })
+fn turnstile_siteverify_url(state: &AppState) -> &str {
+    #[cfg(test)]
+    if let Some(url) = state.turnstile_siteverify_url_override.as_deref() {
+        return url;
+    }
+    TURNSTILE_SITEVERIFY_URL
 }
 
-fn turnstile_service_error(error_codes: &[String]) -> bool {
-    error_codes.iter().any(|code| {
-        matches!(
-            code.trim(),
-            "missing-input-secret" | "invalid-input-secret" | "internal-error"
-        )
-    })
-}
-
-fn turnstile_hostname_allowed(hostname: Option<&str>, allowed_hostnames: &[String]) -> bool {
-    if allowed_hostnames.is_empty() {
-        return true;
+fn turnstile_siteverify_timeout(state: &AppState) -> Duration {
+    #[cfg(test)]
+    if let Some(timeout) = state.turnstile_siteverify_timeout_override {
+        return timeout;
     }
-    let Some(hostname) = hostname.map(str::trim).filter(|value| !value.is_empty()) else {
-        return false;
-    };
-    let hostname = hostname.to_ascii_lowercase();
-    allowed_hostnames.iter().any(|allowed| allowed == &hostname)
-}
-
-pub(super) async fn verify_auth_turnstile_token(
-    state: &AppState,
-    token: Option<&str>,
-    remote_ip: Option<&str>,
-) -> Result<(), AuthTurnstileError> {
-    let config = read_auth_turnstile_config(state).await?;
-    if !config.enabled || config.site_key.is_none() {
-        return Ok(());
-    }
-    let token = token
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| turnstile_error(http::StatusCode::BAD_REQUEST, "请先完成人机验证"))?;
-    let secret_key = config.secret_key.as_deref().ok_or_else(|| {
-        turnstile_error(http::StatusCode::SERVICE_UNAVAILABLE, "人机验证服务未配置")
-    })?;
-
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(8))
-        .build()
-        .map_err(|err| {
-            turnstile_error(
-                http::StatusCode::SERVICE_UNAVAILABLE,
-                format!("人机验证服务暂不可用: {err}"),
-            )
-        })?;
-    let mut form = vec![
-        ("secret", secret_key.to_string()),
-        ("response", token.to_string()),
-    ];
-    if let Some(remote_ip) = remote_ip.map(str::trim).filter(|value| !value.is_empty()) {
-        form.push(("remoteip", remote_ip.to_string()));
-    }
-
-    let response = client
-        .post(config.siteverify_url)
-        .form(&form)
-        .send()
-        .await
-        .map_err(|_| {
-            turnstile_error(
-                http::StatusCode::SERVICE_UNAVAILABLE,
-                "人机验证服务暂不可用",
-            )
-        })?;
-    if !response.status().is_success() {
-        return Err(turnstile_error(
-            http::StatusCode::SERVICE_UNAVAILABLE,
-            "人机验证服务暂不可用",
-        ));
-    }
-
-    let payload = response
-        .json::<TurnstileSiteverifyResponse>()
-        .await
-        .map_err(|_| {
-            turnstile_error(
-                http::StatusCode::SERVICE_UNAVAILABLE,
-                "人机验证服务暂不可用",
-            )
-        })?;
-    if payload.success {
-        if turnstile_hostname_allowed(payload.hostname.as_deref(), &config.allowed_hostnames) {
-            return Ok(());
-        }
-        return Err(turnstile_error(
-            http::StatusCode::BAD_REQUEST,
-            "人机验证失败，请重试",
-        ));
-    }
-    if turnstile_service_error(&payload.error_codes) {
-        return Err(turnstile_error(
-            http::StatusCode::SERVICE_UNAVAILABLE,
-            "人机验证服务暂不可用",
-        ));
-    }
-    Err(turnstile_error(
-        http::StatusCode::BAD_REQUEST,
-        "人机验证失败，请重试",
-    ))
+    TURNSTILE_SITEVERIFY_TIMEOUT
 }

@@ -85,6 +85,7 @@ export interface RegistrationSettingsResponse {
   password_policy_level: string
   turnstile_enabled?: boolean
   turnstile_site_key?: string | null
+  turnstile_required_actions?: string[]
 }
 
 export interface AuthSettingsResponse {

@@ -16,6 +16,11 @@ export interface SystemConfig {
   rate_limit_per_minute: number
   enable_registration: boolean
   password_policy_level: string
+  turnstile_enabled: boolean
+  turnstile_site_key: string | null
+  turnstile_secret_key: string
+  turnstile_secret_key_is_set: boolean
+  turnstile_allowed_hostnames: string[]
   // 独立余额 Key 过期管理
   auto_delete_expired_keys: boolean
   // 格式转换
@@ -58,6 +63,10 @@ const CONFIG_KEYS = [
   'rate_limit_per_minute',
   'enable_registration',
   'password_policy_level',
+  'turnstile_enabled',
+  'turnstile_site_key',
+  'turnstile_secret_key',
+  'turnstile_allowed_hostnames',
   // 独立余额 Key 过期管理
   'auto_delete_expired_keys',
   // 格式转换
@@ -101,6 +110,11 @@ function createDefaultConfig(): SystemConfig {
     rate_limit_per_minute: 0,
     enable_registration: false,
     password_policy_level: 'weak',
+    turnstile_enabled: false,
+    turnstile_site_key: null,
+    turnstile_secret_key: '',
+    turnstile_secret_key_is_set: false,
+    turnstile_allowed_hostnames: [],
     // 独立余额 Key 过期管理
     auto_delete_expired_keys: false,
     // 格式转换
@@ -169,6 +183,11 @@ export function useSystemConfig() {
       systemConfig.value.rate_limit_per_minute !== originalConfig.value.rate_limit_per_minute ||
       systemConfig.value.enable_registration !== originalConfig.value.enable_registration ||
       systemConfig.value.password_policy_level !== originalConfig.value.password_policy_level ||
+      systemConfig.value.turnstile_enabled !== originalConfig.value.turnstile_enabled ||
+      systemConfig.value.turnstile_site_key !== originalConfig.value.turnstile_site_key ||
+      systemConfig.value.turnstile_secret_key.trim() !== '' ||
+      JSON.stringify(systemConfig.value.turnstile_allowed_hostnames) !==
+      JSON.stringify(originalConfig.value.turnstile_allowed_hostnames) ||
       systemConfig.value.auto_delete_expired_keys !== originalConfig.value.auto_delete_expired_keys ||
       systemConfig.value.enable_format_conversion !== originalConfig.value.enable_format_conversion ||
       systemConfig.value.enable_openai_image_sync_heartbeat !== originalConfig.value.enable_openai_image_sync_heartbeat
@@ -237,12 +256,27 @@ export function useSystemConfig() {
     },
   })
 
+  const turnstileAllowedHostnamesStr = computed({
+    get: () => systemConfig.value.turnstile_allowed_hostnames.join(', '),
+    set: (val: string) => {
+      systemConfig.value.turnstile_allowed_hostnames = val
+        .split(',')
+        .map((s) => s.trim().toLowerCase())
+        .filter((s) => s.length > 0)
+    },
+  })
+
   // 加载配置
   async function loadSystemConfig() {
     try {
       for (const key of CONFIG_KEYS) {
         try {
           const response = await adminApi.getSystemConfig(key)
+          if (key === 'turnstile_secret_key') {
+            systemConfig.value.turnstile_secret_key = ''
+            systemConfig.value.turnstile_secret_key_is_set = !!response.is_set
+            continue
+          }
           if (response.value !== null && response.value !== undefined) {
             ; (systemConfig.value as Record<string, unknown>)[key] = response.value
           }
@@ -348,6 +382,21 @@ export function useSystemConfig() {
           description: '密码策略等级',
         },
         {
+          key: 'turnstile_enabled',
+          value: systemConfig.value.turnstile_enabled,
+          description: 'Cloudflare Turnstile 注册人机验证开关',
+        },
+        {
+          key: 'turnstile_site_key',
+          value: systemConfig.value.turnstile_site_key?.trim() || null,
+          description: 'Cloudflare Turnstile 站点 Key',
+        },
+        {
+          key: 'turnstile_allowed_hostnames',
+          value: systemConfig.value.turnstile_allowed_hostnames,
+          description: 'Cloudflare Turnstile 允许的 hostname 列表',
+        },
+        {
           key: 'auto_delete_expired_keys',
           value: systemConfig.value.auto_delete_expired_keys,
           description: '是否自动删除过期的API Key',
@@ -363,6 +412,14 @@ export function useSystemConfig() {
           description: '同步生图心跳开关：开启后外层 HTTP 状态固定为 200，上游失败写入响应体',
         },
       ]
+      const turnstileSecret = systemConfig.value.turnstile_secret_key.trim()
+      if (turnstileSecret) {
+        configItems.push({
+          key: 'turnstile_secret_key',
+          value: turnstileSecret,
+          description: 'Cloudflare Turnstile Secret Key',
+        })
+      }
 
       await Promise.all(
         configItems.map((item) =>
@@ -374,6 +431,17 @@ export function useSystemConfig() {
         originalConfig.value.rate_limit_per_minute = systemConfig.value.rate_limit_per_minute
         originalConfig.value.enable_registration = systemConfig.value.enable_registration
         originalConfig.value.password_policy_level = systemConfig.value.password_policy_level
+        originalConfig.value.turnstile_enabled = systemConfig.value.turnstile_enabled
+        originalConfig.value.turnstile_site_key = systemConfig.value.turnstile_site_key?.trim() || null
+        originalConfig.value.turnstile_allowed_hostnames = [
+          ...systemConfig.value.turnstile_allowed_hostnames,
+        ]
+        if (turnstileSecret) {
+          systemConfig.value.turnstile_secret_key = ''
+          systemConfig.value.turnstile_secret_key_is_set = true
+          originalConfig.value.turnstile_secret_key = ''
+          originalConfig.value.turnstile_secret_key_is_set = true
+        }
         originalConfig.value.auto_delete_expired_keys =
           systemConfig.value.auto_delete_expired_keys
         originalConfig.value.enable_format_conversion =
@@ -385,6 +453,29 @@ export function useSystemConfig() {
     } catch (err) {
       error('保存配置失败')
       log.error('保存基础配置失败:', err)
+    } finally {
+      basicConfigLoading.value = false
+    }
+  }
+
+  async function clearTurnstileSecret() {
+    basicConfigLoading.value = true
+    try {
+      await adminApi.updateSystemConfig(
+        'turnstile_secret_key',
+        '',
+        'Cloudflare Turnstile Secret Key'
+      )
+      systemConfig.value.turnstile_secret_key = ''
+      systemConfig.value.turnstile_secret_key_is_set = false
+      if (originalConfig.value) {
+        originalConfig.value.turnstile_secret_key = ''
+        originalConfig.value.turnstile_secret_key_is_set = false
+      }
+      success('Turnstile 密钥已清空')
+    } catch (err) {
+      error('清空 Turnstile 密钥失败')
+      log.error('清空 Turnstile 密钥失败:', err)
     } finally {
       basicConfigLoading.value = false
     }
@@ -569,6 +660,7 @@ export function useSystemConfig() {
     maxRequestBodySizeKB,
     maxResponseBodySizeKB,
     sensitiveHeadersStr,
+    turnstileAllowedHostnamesStr,
     // 加载函数
     loadSystemConfig,
     loadSystemVersion,
@@ -576,6 +668,7 @@ export function useSystemConfig() {
     saveSiteInfo,
     saveProxyConfig,
     saveBasicConfig,
+    clearTurnstileSecret,
     saveLogConfig,
     saveCleanupConfig,
     handleAutoCleanupToggle,

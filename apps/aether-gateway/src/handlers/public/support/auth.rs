@@ -262,6 +262,7 @@ pub(super) async fn maybe_build_local_auth_response(
     state: &AppState,
     request_context: &GatewayPublicRequestContext,
     headers: &http::HeaderMap,
+    cf_connecting_ip: Option<&str>,
     request_body: Option<&axum::body::Bytes>,
 ) -> Option<Response<Body>> {
     let decision = request_context.control_decision.as_ref()?;
@@ -273,13 +274,16 @@ pub(super) async fn maybe_build_local_auth_response(
         Some("send_verification_code")
             if request_context.request_path == "/api/auth/send-verification-code" =>
         {
-            Some(handle_auth_send_verification_code(state, request_body).await)
+            Some(
+                handle_auth_send_verification_code(state, headers, cf_connecting_ip, request_body)
+                    .await,
+            )
         }
         Some("login") if request_context.request_path == "/api/auth/login" => {
             Some(handle_auth_login(state, request_context, headers, request_body).await)
         }
         Some("register") if request_context.request_path == "/api/auth/register" => {
-            Some(handle_auth_register(state, request_body).await)
+            Some(handle_auth_register(state, headers, cf_connecting_ip, request_body).await)
         }
         Some("verify_email") if request_context.request_path == "/api/auth/verify-email" => {
             Some(handle_auth_verify_email(state, request_body).await)
@@ -329,10 +333,15 @@ mod tests {
     async fn auth_unhandled_route_returns_local_not_implemented_response() {
         let state = AppState::new().expect("gateway should build");
         let request_context = request_context(Method::POST, "/api/auth/login/history", "login");
-        let response =
-            maybe_build_local_auth_response(&state, &request_context, &HeaderMap::new(), None)
-                .await
-                .expect("auth handler should return response");
+        let response = maybe_build_local_auth_response(
+            &state,
+            &request_context,
+            &HeaderMap::new(),
+            None,
+            None,
+        )
+        .await
+        .expect("auth handler should return response");
 
         assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
         let body = to_bytes(response.into_body(), usize::MAX)

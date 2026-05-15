@@ -18,6 +18,10 @@ pub(super) use serde_json::json;
 mod auth_helpers;
 pub(crate) use auth_helpers::*;
 
+#[path = "auth_turnstile.rs"]
+mod auth_turnstile;
+use auth_turnstile::*;
+
 #[path = "auth_email.rs"]
 mod auth_email;
 use auth_email::*;

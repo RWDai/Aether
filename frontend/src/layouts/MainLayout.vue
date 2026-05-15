@@ -325,6 +325,7 @@
           </button>
           <!-- GitHub Link -->
           <a
+            v-if="showGithubLink"
             href="https://github.com/fawney19/Aether"
             target="_blank"
             rel="noopener noreferrer"
@@ -412,7 +413,7 @@ const route = useRoute()
 const authStore = useAuthStore()
 const moduleStore = useModuleStore()
 const { themeMode, toggleDarkMode } = useDarkMode()
-const { siteName, siteSubtitle } = useSiteInfo()
+const { siteName, siteSubtitle, showGithubLink } = useSiteInfo()
 const isDemo = computed(() => isDemoMode())
 const isAdmin = computed(() => authStore.user?.role === 'admin')
 

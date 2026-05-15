@@ -17,6 +17,13 @@ use aether_data::repository::auth::{
     read_resolved_auth_api_key_snapshot_by_user_api_key_ids,
 };
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct GatewayUserEffectiveListPolicies {
+    pub(crate) allowed_providers: Option<Vec<String>>,
+    pub(crate) allowed_api_formats: Option<Vec<String>>,
+    pub(crate) allowed_models: Option<Vec<String>>,
+}
+
 impl GatewayDataState {
     pub(crate) async fn is_other_user_auth_email_taken(
         &self,
@@ -1732,29 +1739,9 @@ impl GatewayDataState {
             apply_admin_unrestricted_auth_snapshot(&mut snapshot);
             return Ok(Some(snapshot));
         }
-        let mut groups = repository
-            .list_user_groups_for_user(&snapshot.user_id)
+        let groups = self
+            .effective_user_groups_for_user(&snapshot.user_id)
             .await?;
-        let dynamic_group_ids = self
-            .active_membership_group_ids_for_user(&snapshot.user_id)
-            .await?;
-        if !dynamic_group_ids.is_empty() {
-            groups.extend(
-                repository
-                    .list_user_groups_by_ids(&dynamic_group_ids)
-                    .await?,
-            );
-            let mut deduped = std::collections::BTreeMap::new();
-            for group in groups {
-                deduped.insert(group.id.clone(), group);
-            }
-            groups = deduped.into_values().collect();
-        }
-        groups.sort_by(|left, right| {
-            left.name
-                .cmp(&right.name)
-                .then_with(|| left.id.cmp(&right.id))
-        });
 
         let mut allowed_providers =
             resolve_effective_list_policy(None, "unrestricted", &groups, |group| {
@@ -1796,6 +1783,80 @@ impl GatewayDataState {
             user_rate_limit,
         );
         Ok(Some(snapshot))
+    }
+
+    pub(crate) async fn resolve_user_effective_list_policies(
+        &self,
+        user: &StoredUserAuthRecord,
+    ) -> Result<GatewayUserEffectiveListPolicies, DataLayerError> {
+        if user.role.eq_ignore_ascii_case("admin") {
+            return Ok(GatewayUserEffectiveListPolicies::default());
+        }
+
+        let groups = if self.user_reader.is_some() {
+            self.effective_user_groups_for_user(&user.id).await?
+        } else {
+            Vec::new()
+        };
+        Ok(GatewayUserEffectiveListPolicies {
+            allowed_providers: resolve_effective_list_policy(
+                user.allowed_providers.clone(),
+                &user.allowed_providers_mode,
+                &groups,
+                |group| {
+                    (
+                        &group.allowed_providers_mode,
+                        group.allowed_providers.clone(),
+                    )
+                },
+            ),
+            allowed_api_formats: resolve_effective_list_policy(
+                user.allowed_api_formats.clone(),
+                &user.allowed_api_formats_mode,
+                &groups,
+                |group| {
+                    (
+                        &group.allowed_api_formats_mode,
+                        group.allowed_api_formats.clone(),
+                    )
+                },
+            ),
+            allowed_models: resolve_effective_list_policy(
+                user.allowed_models.clone(),
+                &user.allowed_models_mode,
+                &groups,
+                |group| (&group.allowed_models_mode, group.allowed_models.clone()),
+            ),
+        })
+    }
+
+    async fn effective_user_groups_for_user(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<aether_data::repository::users::StoredUserGroup>, DataLayerError> {
+        let Some(repository) = self.user_reader.as_ref() else {
+            return Ok(Vec::new());
+        };
+        let mut groups = repository.list_user_groups_for_user(user_id).await?;
+        let dynamic_group_ids = self.active_membership_group_ids_for_user(user_id).await?;
+        if !dynamic_group_ids.is_empty() {
+            groups.extend(
+                repository
+                    .list_user_groups_by_ids(&dynamic_group_ids)
+                    .await?,
+            );
+            let mut deduped = std::collections::BTreeMap::new();
+            for group in groups {
+                deduped.insert(group.id.clone(), group);
+            }
+            groups = deduped.into_values().collect();
+        }
+        groups.sort_by(|left, right| {
+            left.name
+                .cmp(&right.name)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        Ok(groups)
     }
 
     async fn active_membership_group_ids_for_user(

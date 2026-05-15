@@ -29,6 +29,7 @@ async fn gateway_refreshes_admin_provider_quota_locally_for_codex_with_trusted_a
     struct SeenExecutionRuntimeRequest {
         url: String,
         authorization: String,
+        accept: String,
         provider_api_format: String,
         total_ms: Option<u64>,
     }
@@ -68,6 +69,7 @@ async fn gateway_refreshes_admin_provider_quota_locally_for_codex_with_trusted_a
                         .get("authorization")
                         .cloned()
                         .unwrap_or_default(),
+                    accept: plan.headers.get("accept").cloned().unwrap_or_default(),
                     provider_api_format: plan.provider_api_format.clone(),
                     total_ms: plan
                         .timeouts
@@ -78,41 +80,22 @@ async fn gateway_refreshes_admin_provider_quota_locally_for_codex_with_trusted_a
                     request_id: plan.request_id,
                     candidate_id: None,
                     status_code: 200,
-                    headers: BTreeMap::from([
-                        (
-                            "x-codex-primary-reset-after-seconds".to_string(),
-                            "18000".to_string(),
-                        ),
-                        (
-                            "x-codex-primary-reset-at".to_string(),
-                            "1900000000".to_string(),
-                        ),
-                        (
-                            "x-codex-secondary-reset-after-seconds".to_string(),
-                            "604800".to_string(),
-                        ),
-                        (
-                            "x-codex-secondary-reset-at".to_string(),
-                            "1900500000".to_string(),
-                        ),
-                    ]),
+                    headers: BTreeMap::new(),
                     body: Some(aether_contracts::ResponseBody {
                         json_body: Some(json!({
-                            "plan_type": "plus",
-                            "rate_limit": {
-                                "primary_window": {
-                                    "used_percent": 12.5,
-                                    "window_minutes": 300
-                                },
-                                "secondary_window": {
-                                    "used_percent": 55.0,
-                                    "window_minutes": 10080
-                                }
+                            "user": {
+                                "id": "user-codex-123",
+                                "email": "codex@example.com",
+                                "name": "Codex User"
                             },
-                            "credits": {
-                                "has_credits": true,
-                                "balance": 42.0,
-                                "unlimited": false
+                            "account": {
+                                "id": "acct-codex-123",
+                                "name": "Personal",
+                                "plan_type": "plus"
+                            },
+                            "plan": {
+                                "type": "Plus",
+                                "title": "ChatGPT Plus"
                             }
                         })),
                         body_bytes_b64: None,
@@ -147,7 +130,7 @@ async fn gateway_refreshes_admin_provider_quota_locally_for_codex_with_trusted_a
         )],
     ));
 
-    let (upstream_url, upstream_handle) = start_server(upstream).await;
+    let (_upstream_url, upstream_handle) = start_server(upstream).await;
     let (execution_runtime_url, execution_runtime_handle) = start_server(execution_runtime).await;
     let gateway = build_router_with_state(
         build_state_with_execution_runtime_override(execution_runtime_url.clone())
@@ -184,18 +167,22 @@ async fn gateway_refreshes_admin_provider_quota_locally_for_codex_with_trusted_a
     );
     assert_eq!(payload["results"][0]["quota_snapshot"]["plan_type"], "plus");
     assert_eq!(
-        payload["results"][0]["quota_snapshot"]["reset_at"],
-        1_900_000_000u64
-    );
-    assert_eq!(
-        payload["results"][0]["quota_snapshot"]["credits"]["balance"],
-        json!(42.0)
+        payload["results"][0]["quota_snapshot"]["exhausted"],
+        json!(false)
     );
     assert_eq!(
         payload["results"][0]["quota_snapshot"]["windows"]
             .as_array()
             .map(Vec::len),
-        Some(2usize)
+        Some(0usize)
+    );
+    assert_eq!(
+        payload["results"][0]["metadata"]["email"],
+        "codex@example.com"
+    );
+    assert_eq!(
+        payload["results"][0]["metadata"]["account_id"],
+        "acct-codex-123"
     );
     assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
 
@@ -206,12 +193,13 @@ async fn gateway_refreshes_admin_provider_quota_locally_for_codex_with_trusted_a
         .expect("execution runtime request should be captured");
     assert_eq!(
         seen_execution_runtime_request.url,
-        "https://chatgpt.com/backend-api/wham/usage"
+        "https://chatgpt.com/backend-api/me"
     );
     assert_eq!(
         seen_execution_runtime_request.authorization,
         "Bearer sk-codex-123"
     );
+    assert_eq!(seen_execution_runtime_request.accept, "application/json");
     assert_eq!(
         seen_execution_runtime_request.provider_api_format,
         "openai:responses"
@@ -237,32 +225,130 @@ async fn gateway_refreshes_admin_provider_quota_locally_for_codex_with_trusted_a
             .upstream_metadata
             .as_ref()
             .and_then(|value| value.get("codex"))
-            .and_then(|value| value.get("primary_used_percent")),
-        Some(&json!(55.0))
+            .and_then(|value| value.get("email")),
+        Some(&json!("codex@example.com"))
     );
     assert_eq!(
         reloaded[0]
             .upstream_metadata
             .as_ref()
             .and_then(|value| value.get("codex"))
-            .and_then(|value| value.get("primary_reset_at")),
-        Some(&json!(1_900_500_000u64))
+            .and_then(|value| value.get("account_id")),
+        Some(&json!("acct-codex-123"))
     );
-    assert_eq!(
-        reloaded[0]
-            .upstream_metadata
-            .as_ref()
-            .and_then(|value| value.get("codex"))
-            .and_then(|value| value.get("secondary_used_percent")),
-        Some(&json!(12.5))
+    assert!(reloaded[0]
+        .upstream_metadata
+        .as_ref()
+        .and_then(|value| value.get("codex"))
+        .and_then(|value| value.get("primary_used_percent"))
+        .is_none());
+
+    gateway_handle.abort();
+    execution_runtime_handle.abort();
+    upstream_handle.abort();
+}
+
+#[tokio::test]
+async fn gateway_marks_codex_key_invalid_when_backend_me_returns_payment_required() {
+    let upstream = Router::new().route(
+        "/api/admin/endpoints/providers/provider-codex/refresh-quota",
+        any(move |_request: Request| async move {
+            (StatusCode::OK, Body::from("unexpected upstream hit"))
+        }),
     );
+
+    let execution_runtime = Router::new().route(
+        "/v1/execute/sync",
+        any(move |request: Request| async move {
+            let plan: aether_contracts::ExecutionPlan = serde_json::from_slice(
+                &to_bytes(request.into_body(), usize::MAX)
+                    .await
+                    .expect("body should read"),
+            )
+            .expect("plan should parse");
+            let result = aether_contracts::ExecutionResult {
+                request_id: plan.request_id,
+                candidate_id: None,
+                status_code: 402,
+                headers: BTreeMap::new(),
+                body: Some(aether_contracts::ResponseBody {
+                    json_body: Some(json!({
+                        "error": {
+                            "message": "payment required"
+                        }
+                    })),
+                    body_bytes_b64: None,
+                }),
+                telemetry: None,
+                error: None,
+            };
+            (StatusCode::OK, Json(result))
+        }),
+    );
+
+    let provider_catalog_repository = Arc::new(InMemoryProviderCatalogReadRepository::seed(
+        vec![StoredProviderCatalogProvider::new(
+            "provider-codex".to_string(),
+            "codex".to_string(),
+            Some("https://example.com".to_string()),
+            "codex".to_string(),
+        )
+        .expect("provider should build")],
+        vec![sample_endpoint(
+            "endpoint-codex-cli",
+            "provider-codex",
+            "openai:responses",
+            "https://chatgpt.com/backend-api",
+        )],
+        vec![sample_key(
+            "key-codex-a",
+            "provider-codex",
+            "openai:responses",
+            "sk-codex-123",
+        )],
+    ));
+
+    let (_upstream_url, upstream_handle) = start_server(upstream).await;
+    let (execution_runtime_url, execution_runtime_handle) = start_server(execution_runtime).await;
+    let gateway = build_router_with_state(
+        build_state_with_execution_runtime_override(execution_runtime_url.clone())
+            .with_data_state_for_tests(
+                GatewayDataState::with_provider_catalog_repository_for_tests(
+                    provider_catalog_repository.clone(),
+                )
+                .with_encryption_key_for_tests(DEVELOPMENT_ENCRYPTION_KEY),
+            ),
+    );
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+
+    let response = reqwest::Client::new()
+        .post(format!(
+            "{gateway_url}/api/admin/endpoints/providers/provider-codex/refresh-quota"
+        ))
+        .header(GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .send()
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: serde_json::Value = response.json().await.expect("json body should parse");
+    assert_eq!(payload["success"], 0);
+    assert_eq!(payload["failed"], 1);
+    assert_eq!(payload["results"][0]["status"], "payment_required");
+    assert_eq!(payload["results"][0]["status_code"], 402);
+
+    let reloaded = provider_catalog_repository
+        .list_keys_by_ids(&["key-codex-a".to_string()])
+        .await
+        .expect("keys should read");
+    assert_eq!(reloaded.len(), 1);
+    assert!(reloaded[0].oauth_invalid_at_unix_secs.is_some());
     assert_eq!(
-        reloaded[0]
-            .upstream_metadata
-            .as_ref()
-            .and_then(|value| value.get("codex"))
-            .and_then(|value| value.get("secondary_reset_at")),
-        Some(&json!(1_900_000_000u64))
+        reloaded[0].oauth_invalid_reason.as_deref(),
+        Some("[ACCOUNT_BLOCK] payment required")
     );
 
     gateway_handle.abort();
@@ -1139,7 +1225,7 @@ async fn gateway_reports_codex_quota_runtime_failures_locally_without_falling_ba
     assert!(payload["results"][0]["message"]
         .as_str()
         .expect("message should be string")
-        .contains("wham/usage 请求执行失败: execution runtime returned HTTP 500"));
+        .contains("backend-api/me 请求执行失败: execution runtime returned HTTP 500"));
     assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
 
     let reloaded = provider_catalog_repository

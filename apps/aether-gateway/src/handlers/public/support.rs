@@ -2,8 +2,8 @@ use super::{
     build_api_format_health_monitor_payload, build_public_auth_modules_status_payload,
     build_public_catalog_models_payload, build_public_catalog_search_models_payload,
     build_public_providers_payload, capability_detail_by_name, ldap_module_config_is_valid,
-    serialize_public_capability, supported_capability_names, ApiFormatHealthMonitorOptions,
-    PUBLIC_CAPABILITY_DEFINITIONS,
+    sanitize_public_model_config_for_user, serialize_public_capability, supported_capability_names,
+    ApiFormatHealthMonitorOptions, PUBLIC_CAPABILITY_DEFINITIONS,
 };
 use crate::control::GatewayPublicRequestContext;
 use crate::handlers::shared::{
@@ -232,10 +232,17 @@ pub(crate) async fn maybe_build_local_public_support_response(
                 .flatten()
                 .and_then(|value| value.as_str().map(ToOwned::to_owned))
                 .unwrap_or_else(|| "AI Gateway".to_string());
+            let show_github_link = state
+                .read_system_config_json_value("show_github_link")
+                .await
+                .ok()
+                .flatten();
+            let show_github_link = system_config_bool(show_github_link.as_ref(), true);
             return Some(
                 Json(json!({
                     "site_name": site_name,
                     "site_subtitle": site_subtitle,
+                    "show_github_link": show_github_link,
                 }))
                 .into_response(),
             );
@@ -374,7 +381,7 @@ pub(crate) async fn maybe_build_local_public_support_response(
                         "default_price_per_request": model.default_price_per_request,
                         "default_tiered_pricing": model.default_tiered_pricing,
                         "supported_capabilities": model.supported_capabilities,
-                        "config": model.config,
+                        "config": sanitize_public_model_config_for_user(model.config),
                         "usage_count": model.usage_count,
                     })
                 })
@@ -576,15 +583,11 @@ pub(crate) async fn maybe_build_local_public_support_response(
                 .await
                 .ok()
                 .unwrap_or_default();
-            let current_provider = providers
-                .first()
-                .map(|provider| provider.name.clone())
-                .unwrap_or_else(|| "None".to_string());
             return Some(
                 Json(json!({
                     "message": "AI Proxy with Modular Architecture v4.0.0",
                     "status": "running",
-                    "current_provider": current_provider,
+                    "current_provider": serde_json::Value::Null,
                     "available_providers": providers.len(),
                     "config": {},
                     "endpoints": {
@@ -647,10 +650,8 @@ pub(crate) async fn maybe_build_local_public_support_response(
                         .into_iter()
                         .map(|provider| {
                             let provider_id = provider.id.clone();
-                            let provider_name = provider.name.clone();
                             let mut payload = json!({
                                 "id": provider_id.clone(),
-                                "name": provider_name,
                                 "is_active": provider.is_active,
                                 "provider_priority": provider.provider_priority,
                             });
@@ -661,7 +662,6 @@ pub(crate) async fn maybe_build_local_public_support_response(
                                         .filter(|endpoint| endpoint.provider_id == provider_id)
                                         .map(|endpoint| json!({
                                             "id": endpoint.id,
-                                            "base_url": endpoint.base_url,
                                             "api_format": endpoint.api_format,
                                             "is_active": endpoint.is_active,
                                         }))
@@ -709,19 +709,19 @@ pub(crate) async fn maybe_build_local_public_support_response(
             };
             let provider = match provider {
                 Some(provider) => provider,
-                None => state
-                    .list_provider_catalog_providers(false)
-                    .await
-                    .ok()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .find(|provider| provider.name == provider_identifier)?,
+                None => {
+                    return Some(
+                        (
+                            http::StatusCode::NOT_FOUND,
+                            Json(json!({ "detail": "Provider not found" })),
+                        )
+                            .into_response(),
+                    );
+                }
             };
             let provider_id = provider.id.clone();
-            let provider_name = provider.name.clone();
             let mut payload = json!({
                 "id": provider_id.clone(),
-                "name": provider_name,
                 "is_active": provider.is_active,
                 "provider_priority": provider.provider_priority,
             });
@@ -739,7 +739,6 @@ pub(crate) async fn maybe_build_local_public_support_response(
                         .map(|endpoint| {
                             json!({
                                 "id": endpoint.id,
-                                "base_url": endpoint.base_url,
                                 "api_format": endpoint.api_format,
                                 "is_active": endpoint.is_active,
                             })

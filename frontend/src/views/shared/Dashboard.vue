@@ -789,7 +789,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed, onBeforeUnmount, nextTick, watch } from 'vue'
+import { ref, onMounted, computed, onBeforeUnmount, nextTick, watch, markRaw } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { dashboardApi, type DashboardStat, type DailyStat, type ProviderSummary } from '@/api/dashboard'
 import { getDateRangeFromPeriod } from '@/features/usage/composables'
@@ -1328,7 +1328,7 @@ async function loadDashboardData() {
     })
     stats.value = statsData.stats.map(stat => ({
       ...stat,
-      icon: iconMap[stat.icon] || Activity
+      icon: markRaw(iconMap[stat.icon] || Activity)
     }))
     if (statsData.today) todayStats.value = statsData.today
     if (isAdmin.value) {

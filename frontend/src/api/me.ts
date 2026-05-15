@@ -30,7 +30,7 @@ export interface UserPreferences {
   avatar_url?: string
   bio?: string
   default_provider_id?: string // UUID
-  default_provider?: Record<string, unknown>
+  default_provider?: Record<string, unknown> | string | null // 仅管理员可见
   theme: string
   language: string
   timezone?: string
@@ -52,7 +52,7 @@ export interface ProviderConfig {
 // 使用记录接口
 export interface UsageRecordDetail {
   id: string
-  provider: string
+  provider?: string // 仅管理员可见
   model: string
   input_tokens: number
   effective_input_tokens?: number

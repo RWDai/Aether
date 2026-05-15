@@ -261,6 +261,7 @@
             />
           </button>
           <a
+            v-if="showGithubLink"
             href="https://github.com/fawney19/Aether"
             target="_blank"
             rel="noopener noreferrer"
@@ -340,7 +341,7 @@ import { guideNavItems } from './guide-config'
 
 const route = useRoute()
 const { themeMode, toggleDarkMode } = useDarkMode()
-const { siteName, siteSubtitle } = useSiteInfo()
+const { siteName, siteSubtitle, showGithubLink } = useSiteInfo()
 
 const mobileMenuOpen = ref(false)
 const baseUrl = ref(typeof window !== 'undefined' ? window.location.origin : 'https://your-aether.com')

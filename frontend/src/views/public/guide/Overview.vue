@@ -12,10 +12,12 @@ import {
   Zap,
 } from 'lucide-vue-next'
 import { panelClasses } from './guide-config'
+import { useSiteInfo } from '@/composables/useSiteInfo'
 
 // 部署步骤数据
 const activeDeployTab = ref(0)
 const copiedStep = ref<string | null>(null)
+const { showGithubLink } = useSiteInfo()
 
 const productionSteps = [
   {
@@ -397,6 +399,7 @@ function copyStep(stepId: string, code: string) {
           <h3>1. Aether-Proxy</h3>
           <p>Rust实现, 超小资源占有, 适合性能低的VPS直接使用。</p>
           <a
+            v-if="showGithubLink"
             href="https://github.com/fawney19/Aether/tree/main/aether-proxy"
             target="_blank"
             rel="noopener noreferrer"

@@ -722,24 +722,26 @@ pub(super) async fn handle_users_me_usage_get(
                 );
             }
         };
-        summary_by_provider = match state
-            .summarize_usage_breakdown(&UsageBreakdownSummaryQuery {
-                created_from_unix_secs,
-                created_until_unix_secs,
-                user_id: Some(auth.user.id.clone()),
-                group_by: UsageBreakdownGroupBy::Provider,
-            })
-            .await
-        {
-            Ok(value) => value,
-            Err(err) => {
-                return build_auth_error_response(
-                    http::StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("user usage provider breakdown lookup failed: {err:?}"),
-                    false,
-                );
-            }
-        };
+        if include_actual_cost {
+            summary_by_provider = match state
+                .summarize_usage_breakdown(&UsageBreakdownSummaryQuery {
+                    created_from_unix_secs,
+                    created_until_unix_secs,
+                    user_id: Some(auth.user.id.clone()),
+                    group_by: UsageBreakdownGroupBy::Provider,
+                })
+                .await
+            {
+                Ok(value) => value,
+                Err(err) => {
+                    return build_auth_error_response(
+                        http::StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("user usage provider breakdown lookup failed: {err:?}"),
+                        false,
+                    );
+                }
+            };
+        }
         summary_by_api_format = match state
             .summarize_usage_breakdown(&UsageBreakdownSummaryQuery {
                 created_from_unix_secs,
@@ -936,7 +938,6 @@ pub(super) async fn handle_users_me_usage_get(
         "avg_response_time": avg_response_time,
         "billing": build_auth_wallet_summary_payload(wallet.as_ref()),
         "summary_by_model": build_users_me_usage_summary_by_model(&summary_by_model, include_actual_cost),
-        "summary_by_provider": build_users_me_usage_summary_by_provider(&summary_by_provider),
         "summary_by_api_format": build_users_me_usage_summary_by_api_format(&summary_by_api_format),
         "pagination": {
             "total": total_record_count,
@@ -948,6 +949,9 @@ pub(super) async fn handle_users_me_usage_get(
     });
     if include_actual_cost {
         payload["total_actual_cost"] = json!(total_actual_cost);
+        payload["summary_by_provider"] = json!(build_users_me_usage_summary_by_provider(
+            &summary_by_provider
+        ));
     }
     Json(payload).into_response()
 }

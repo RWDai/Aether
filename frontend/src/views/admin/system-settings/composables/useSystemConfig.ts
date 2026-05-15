@@ -8,6 +8,7 @@ export interface SystemConfig {
   // 站点信息
   site_name: string
   site_subtitle: string
+  show_github_link: boolean
   // 网络代理
   system_proxy_node_id: string | null
   // 基础配置
@@ -49,6 +50,7 @@ const CONFIG_KEYS = [
   // 站点信息
   'site_name',
   'site_subtitle',
+  'show_github_link',
   // 网络代理
   'system_proxy_node_id',
   // 基础配置
@@ -91,6 +93,7 @@ function createDefaultConfig(): SystemConfig {
     // 站点信息
     site_name: 'Aether',
     site_subtitle: 'AI Gateway',
+    show_github_link: true,
     // 网络代理
     system_proxy_node_id: null,
     // 基础配置
@@ -149,7 +152,8 @@ export function useSystemConfig() {
     if (!originalConfig.value) return false
     return (
       systemConfig.value.site_name !== originalConfig.value.site_name ||
-      systemConfig.value.site_subtitle !== originalConfig.value.site_subtitle
+      systemConfig.value.site_subtitle !== originalConfig.value.site_subtitle ||
+      systemConfig.value.show_github_link !== originalConfig.value.show_github_link
     )
   })
 
@@ -273,6 +277,11 @@ export function useSystemConfig() {
           value: systemConfig.value.site_subtitle,
           description: '站点副标题',
         },
+        {
+          key: 'show_github_link',
+          value: systemConfig.value.show_github_link,
+          description: '是否显示 GitHub 仓库入口',
+        },
       ]
       await Promise.all(
         configItems.map((item) =>
@@ -282,6 +291,7 @@ export function useSystemConfig() {
       if (originalConfig.value) {
         originalConfig.value.site_name = systemConfig.value.site_name
         originalConfig.value.site_subtitle = systemConfig.value.site_subtitle
+        originalConfig.value.show_github_link = systemConfig.value.show_github_link
       }
       await refreshSiteInfo()
       success('站点信息已保存')

@@ -5,7 +5,8 @@ use super::{
     clear_auth_email_pending_code, clear_auth_email_verification, generate_auth_verification_code,
     http, json, mark_auth_email_verified, read_auth_email_verification_code, read_auth_smtp_config,
     send_auth_email, store_auth_email_verification_code, system_config_bool, system_config_f64,
-    system_config_string, system_config_string_list, AppState, Body, GatewayError, Regex, Response,
+    system_config_string, system_config_string_list, verify_auth_turnstile_token, AppState, Body,
+    GatewayError, Regex, Response,
 };
 use serde::Deserialize;
 
@@ -16,11 +17,13 @@ struct AuthRegisterRequest {
     email: Option<String>,
     username: String,
     password: String,
+    turnstile_token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct AuthEmailRequest {
     email: String,
+    turnstile_token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -195,20 +198,6 @@ pub(super) async fn handle_auth_send_verification_code(
         return build_auth_error_response(http::StatusCode::BAD_REQUEST, "邮箱格式无效", false);
     };
 
-    if state
-        .find_user_auth_by_identifier(&email)
-        .await
-        .ok()
-        .flatten()
-        .is_some()
-    {
-        return build_auth_error_response(
-            http::StatusCode::BAD_REQUEST,
-            "该邮箱已被注册，请直接登录或使用其他邮箱",
-            false,
-        );
-    }
-
     match validate_auth_email_suffix(state, &email).await {
         Ok(Ok(())) => {}
         Ok(Err(detail)) => {
@@ -221,6 +210,26 @@ pub(super) async fn handle_auth_send_verification_code(
                 false,
             );
         }
+    }
+
+    if let Err(err) =
+        verify_auth_turnstile_token(state, payload.turnstile_token.as_deref(), None).await
+    {
+        return build_auth_error_response(err.status, err.detail, false);
+    }
+
+    if state
+        .find_user_auth_by_identifier(&email)
+        .await
+        .ok()
+        .flatten()
+        .is_some()
+    {
+        return build_auth_error_response(
+            http::StatusCode::BAD_REQUEST,
+            "该邮箱已被注册，请直接登录或使用其他邮箱",
+            false,
+        );
     }
 
     let smtp_config = match read_auth_smtp_config(state).await {
@@ -421,6 +430,10 @@ pub(super) async fn handle_auth_register(
                 );
             }
         }
+    } else if let Err(err) =
+        verify_auth_turnstile_token(state, payload.turnstile_token.as_deref(), None).await
+    {
+        return build_auth_error_response(err.status, err.detail, false);
     }
     if let Some(email) = email.as_deref() {
         match validate_auth_email_suffix(state, email).await {

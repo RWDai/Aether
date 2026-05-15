@@ -49,7 +49,7 @@ fn build_wallet_balance_payload(
     payload
 }
 
-async fn build_wallet_balance_payload_for_user(
+pub(in crate::handlers::public::support) async fn build_wallet_balance_payload_for_user(
     state: &AppState,
     user_id: &str,
     wallet: Option<&aether_data::repository::wallet::StoredWalletSnapshot>,

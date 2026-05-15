@@ -1,7 +1,7 @@
 use super::{
-    http, json, ldap_module_config_is_valid, module_available_from_env, system_config_bool,
-    system_config_string, AppState, Body, GatewayError, GatewayPublicRequestContext, IntoResponse,
-    Json, Response,
+    auth_turnstile_public_settings, http, json, ldap_module_config_is_valid,
+    module_available_from_env, system_config_bool, system_config_string, AppState, Body,
+    GatewayError, GatewayPublicRequestContext, IntoResponse, Json, Response,
 };
 
 pub(crate) async fn build_auth_registration_settings_payload(
@@ -40,12 +40,17 @@ pub(crate) async fn build_auth_registration_settings_payload(
         Some(value) if matches!(value.as_str(), "weak" | "medium" | "strong") => value,
         _ => "weak".to_string(),
     };
+    let turnstile_settings = auth_turnstile_public_settings(state)
+        .await
+        .map_err(|err| GatewayError::Internal(err.detail))?;
 
     Ok(json!({
         "enable_registration": enable_registration,
         "require_email_verification": require_email_verification,
         "email_configured": email_configured,
         "password_policy_level": password_policy_level,
+        "turnstile_enabled": turnstile_settings.enabled,
+        "turnstile_site_key": turnstile_settings.site_key,
     }))
 }
 

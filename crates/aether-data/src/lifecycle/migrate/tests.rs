@@ -304,12 +304,14 @@ fn empty_database_snapshot_covers_current_cutoff_versions() {
             20260512000000,
             20260512090000,
             20260512110000,
+            20260515000000,
         ]
     );
 }
 
 #[test]
-fn empty_database_snapshot_sql_includes_usage_body_blobs() {
+fn empty_database_snapshot_sql_includes_usage_body_blobs_and_audit_admin_role() {
+    assert!(EMPTY_DATABASE_SNAPSHOT_SQL.contains("'audit_admin'"));
     assert!(
         EMPTY_DATABASE_SNAPSHOT_SQL.contains("CREATE TABLE IF NOT EXISTS public.usage_body_blobs")
     );
@@ -1116,6 +1118,7 @@ fn pending_migrations_from_applied_skips_versions_already_applied() {
             20260512000000,
             20260512090000,
             20260512110000,
+            20260515000000,
         ]
     );
 }
@@ -1442,6 +1445,17 @@ async fn prepare_database_for_startup_bootstraps_clean_database() {
     assert!(column_exists(&pool, "api_keys", "total_tokens")
         .await
         .expect("api_keys.total_tokens lookup should succeed"));
+
+    let audit_admin_exists: bool = query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM pg_enum WHERE enumtypid = 'public.userrole'::regtype AND enumlabel = 'audit_admin')",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("public.userrole audit_admin lookup should succeed");
+    assert!(
+        audit_admin_exists,
+        "fresh database snapshot should include public.userrole.audit_admin"
+    );
 
     let applied_count: i64 = query_scalar("SELECT COUNT(*)::BIGINT FROM public._sqlx_migrations")
         .fetch_one(&pool)

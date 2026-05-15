@@ -28,6 +28,43 @@ Tunnel 模式下代理节点**无需对外监听端口**，仅需出站连接到
 
 ## 快速开始
 
+### 一键安装 / 添加节点
+
+一键脚本会自动从 GitHub Releases 中筛选最新的 `proxy-v*` tag，并按当前系统下载对应制品：Linux x86_64/ARM64（GNU 或 musl）、macOS x86_64/ARM64、Windows x86_64。仓库的通用 `latest` release 可能不是 proxy 版本，因此脚本不会使用 `/releases/latest`。
+
+脚本会安装/更新 `aether-proxy` 二进制，并把新的服务器配置追加到 `aether-proxy.toml` 的 `[[servers]]` 数组中；如果配置文件已存在，不会覆盖原有内容。检测到相同 `aether_url + node_name` 时会跳过追加。
+
+macOS / Linux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fawney19/Aether/main/apps/aether-proxy/install.sh | sh
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/fawney19/Aether/main/apps/aether-proxy/install.ps1 | iex
+```
+
+也可以用环境变量非交互式执行，适合在控制台“添加代理节点”时生成命令：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fawney19/Aether/main/apps/aether-proxy/install.sh | \
+  AETHER_PROXY_AETHER_URL="https://aether.example.com" \
+  AETHER_PROXY_MANAGEMENT_TOKEN="ae_xxx" \
+  AETHER_PROXY_NODE_NAME="jp-proxy-01" \
+  sh
+```
+
+```powershell
+$env:AETHER_PROXY_AETHER_URL = "https://aether.example.com"
+$env:AETHER_PROXY_MANAGEMENT_TOKEN = "ae_xxx"
+$env:AETHER_PROXY_NODE_NAME = "jp-proxy-01"
+irm https://raw.githubusercontent.com/fawney19/Aether/main/apps/aether-proxy/install.ps1 | iex
+```
+
+可选变量：`AETHER_PROXY_RELEASE_TAG` 固定安装某个 `proxy-v*` tag，`AETHER_PROXY_CONFIG` 指定配置文件路径，`AETHER_PROXY_INSTALL_DIR` 指定二进制安装目录。
+
 ```bash
 # 1. 首次安装配置（TUI 向导，勾选 Install Service 随系统启动服务）
 sudo ./aether-proxy setup

@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - master
-      - aether-rust-pioneer
+      - main
     paths:
       - "Cargo.toml"
       - "Cargo.lock"
@@ -35,9 +35,7 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
+        run: rustup component add rustfmt
 
       - name: Format
         run: cargo fmt --all --check
@@ -49,9 +47,7 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
+        run: rustup component add clippy
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -82,9 +78,7 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
+        run: rustup component add clippy
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -115,9 +109,7 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
+        run: rustup component add clippy
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2

@@ -65,6 +65,8 @@ curl -fsSL https://raw.githubusercontent.com/fawney19/Aether/main/install.sh | s
 
 Aether Proxy 是配套的正向代理节点，部署在海外 VPS 上，为墙内的 Aether 实例中转 API 流量。
 
+- Docker Compose 部署或下载预编译二进制直接运行
+- 提供 macOS/Linux 与 Windows 一键脚本，自动下载最新 `proxy-v*` 制品并向现有 `aether-proxy.toml` 追加 `[[servers]]`
 - 通过 `aether-proxy setup` 完成交互式配置，自动注册为系统服务
 - 详细文档见 [apps/aether-proxy/README.md](apps/aether-proxy/README.md)
 

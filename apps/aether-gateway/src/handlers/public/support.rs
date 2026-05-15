@@ -64,7 +64,8 @@ use self::support_auth::{
 };
 use self::support_dashboard::maybe_build_local_dashboard_response;
 pub(crate) use self::support_install::{
-    build_api_key_install_session_response, CreateApiKeyInstallSessionRequest,
+    build_api_key_install_session_response, build_proxy_node_install_session_response,
+    CreateApiKeyInstallSessionRequest,
 };
 use self::support_install::{
     handle_users_me_api_key_install_session_create, maybe_build_local_install_response,

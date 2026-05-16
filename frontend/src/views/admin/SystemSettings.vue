@@ -14,13 +14,11 @@
             id="section-site-info"
             :site-name="systemConfig.site_name"
             :site-subtitle="systemConfig.site_subtitle"
-            :show-github-link="systemConfig.show_github_link"
             :loading="siteInfoLoading"
             :has-changes="hasSiteInfoChanges"
             @save="saveSiteInfo"
             @update:site-name="systemConfig.site_name = $event"
             @update:site-subtitle="systemConfig.site_subtitle = $event"
-            @update:show-github-link="systemConfig.show_github_link = $event"
           />
 
           <!-- 配置导出/导入 -->

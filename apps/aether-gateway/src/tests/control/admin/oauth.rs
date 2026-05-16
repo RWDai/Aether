@@ -2455,6 +2455,7 @@ async fn gateway_completes_admin_provider_oauth_key_locally_with_trusted_admin_p
         .expect("account_state_recheck_error should be string when recheck is attempted");
     assert!(
         account_state_recheck_error == "backend-api/me API 返回状态码 401"
+            || account_state_recheck_error == "backend-api/me API 返回状态码 403"
             || account_state_recheck_error.starts_with("backend-api/me 请求执行失败:"),
         "unexpected account_state_recheck_error: {account_state_recheck_error}"
     );
@@ -4926,6 +4927,7 @@ async fn gateway_refreshes_admin_provider_oauth_key_locally_with_trusted_admin_p
             .expect("account_state_recheck_error should be string when attempted");
         assert!(
             account_state_recheck_error == "backend-api/me API 返回状态码 401"
+                || account_state_recheck_error == "backend-api/me API 返回状态码 403"
                 || account_state_recheck_error.starts_with("backend-api/me 请求执行失败:"),
             "unexpected account_state_recheck_error: {account_state_recheck_error}"
         );

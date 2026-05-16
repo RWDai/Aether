@@ -35,23 +35,21 @@ vi.mock('@/components/ui/button.vue', () => ({
 
 const mountedApps: Array<{ app: App, root: HTMLElement }> = []
 
-function mountSection(onUpdateShowGithubLink = vi.fn()) {
+function mountSection() {
   const root = document.createElement('div')
   document.body.appendChild(root)
   const app = createApp(SiteInfoSection, {
     siteName: 'Aether',
     siteSubtitle: 'AI Gateway',
-    showGithubLink: false,
     loading: false,
     hasChanges: true,
     onSave: vi.fn(),
     'onUpdate:siteName': vi.fn(),
     'onUpdate:siteSubtitle': vi.fn(),
-    'onUpdate:showGithubLink': onUpdateShowGithubLink,
   })
   app.mount(root)
   mountedApps.push({ app, root })
-  return { root, onUpdateShowGithubLink }
+  return { root }
 }
 
 afterEach(() => {
@@ -63,15 +61,11 @@ afterEach(() => {
 })
 
 describe('SiteInfoSection', () => {
-  it('renders and emits the github link display switch', async () => {
-    const { root, onUpdateShowGithubLink } = mountSection()
+  it('renders site name and subtitle fields', async () => {
+    const { root } = mountSection()
     await nextTick()
 
-    expect(root.textContent).toContain('GitHub 仓库入口')
-    const switchButton = root.querySelector('[role="switch"]') as HTMLButtonElement | null
-    expect(switchButton?.getAttribute('aria-checked')).toBe('false')
-
-    switchButton?.click()
-    expect(onUpdateShowGithubLink).toHaveBeenCalledWith(true)
+    expect(root.textContent).toContain('站点名称')
+    expect(root.textContent).toContain('站点副标题')
   })
 })

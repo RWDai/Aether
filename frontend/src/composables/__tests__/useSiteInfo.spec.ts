@@ -14,21 +14,19 @@ describe('useSiteInfo', () => {
     apiClientMocks.get.mockReset()
   })
 
-  it('loads github link display setting from public site info', async () => {
+  it('loads public site info', async () => {
     apiClientMocks.get.mockResolvedValue({
       data: {
         site_name: 'Custom Aether',
         site_subtitle: 'Gateway',
-        show_github_link: false,
       },
     })
 
     const { useSiteInfo } = await import('../useSiteInfo')
-    const { siteName, siteSubtitle, showGithubLink, refreshSiteInfo } = useSiteInfo()
+    const { siteName, siteSubtitle, refreshSiteInfo } = useSiteInfo()
     await refreshSiteInfo()
 
     expect(siteName.value).toBe('Custom Aether')
     expect(siteSubtitle.value).toBe('Gateway')
-    expect(showGithubLink.value).toBe(false)
   })
 })

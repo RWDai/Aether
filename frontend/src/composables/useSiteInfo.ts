@@ -4,13 +4,11 @@ import apiClient from '@/api/client'
 interface SiteInfo {
   site_name: string
   site_subtitle: string
-  show_github_link?: boolean
 }
 
 // 模块级缓存，所有组件共享同一份数据
 const siteName = ref('Aether')
 const siteSubtitle = ref('AI Gateway')
-const showGithubLink = ref(true)
 const loaded = ref(false)
 let fetchPromise: Promise<void> | null = null
 
@@ -19,7 +17,6 @@ async function fetchSiteInfo() {
     const response = await apiClient.get<SiteInfo>('/api/public/site-info')
     siteName.value = response.data.site_name
     siteSubtitle.value = response.data.site_subtitle
-    showGithubLink.value = response.data.show_github_link !== false
     loaded.value = true
   } catch {
     // 加载失败时保持默认值，允许后续重试
@@ -38,7 +35,7 @@ export function useSiteInfo() {
   if (!loaded.value && !fetchPromise) {
     fetchPromise = fetchSiteInfo()
   }
-  return { siteName, siteSubtitle, showGithubLink, refreshSiteInfo }
+  return { siteName, siteSubtitle, refreshSiteInfo }
 }
 
 // 站点名称变化时同步更新 document.title

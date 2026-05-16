@@ -75,7 +75,6 @@
             />
           </button>
           <a
-            v-if="showGithubLink"
             href="https://github.com/fawney19/Aether"
             target="_blank"
             rel="noopener noreferrer"
@@ -90,10 +89,7 @@
       <!-- Desktop layout (>= md): Centered nav with balanced spacing -->
       <div class="h-16 hidden md:flex items-center justify-between px-8">
         <!-- Left spacer for balance (matches right icons width) -->
-        <div
-          class="shrink-0"
-          :class="showGithubLink ? 'w-[76px]' : 'w-9'"
-        />
+        <div class="w-[76px] shrink-0" />
 
         <!-- Center: Logo + Nav + Login Button -->
         <div class="flex items-center">
@@ -190,7 +186,6 @@
             />
           </button>
           <a
-            v-if="showGithubLink"
             href="https://github.com/fawney19/Aether"
             target="_blank"
             rel="noopener noreferrer"
@@ -500,7 +495,7 @@ import {
 const authStore = useAuthStore()
 const { isDark, themeMode, toggleDarkMode } = useDarkMode()
 const { copyToClipboard } = useClipboard()
-const { siteName, siteSubtitle, showGithubLink } = useSiteInfo()
+const { siteName, siteSubtitle } = useSiteInfo()
 
 const dashboardPath = computed(() =>
   authStore.canAccessAdmin ? '/admin/dashboard' : '/dashboard'

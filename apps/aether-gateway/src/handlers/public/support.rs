@@ -10,7 +10,7 @@ use crate::handlers::shared::{
     decrypt_catalog_secret_with_fallbacks, encrypt_catalog_secret_with_fallbacks,
     escape_admin_email_template_html, module_available_from_env, query_param_bool,
     query_param_optional_bool, query_param_value, read_admin_email_template_payload,
-    render_admin_email_template_html, system_config_bool, system_config_string,
+    render_admin_email_template_html, system_config_string,
     unix_secs_to_rfc3339,
 };
 use crate::{AppState, GatewayError};
@@ -239,17 +239,10 @@ pub(crate) async fn maybe_build_local_public_support_response(
                 .flatten()
                 .and_then(|value| value.as_str().map(ToOwned::to_owned))
                 .unwrap_or_else(|| "AI Gateway".to_string());
-            let show_github_link = state
-                .read_system_config_json_value("show_github_link")
-                .await
-                .ok()
-                .flatten();
-            let show_github_link = system_config_bool(show_github_link.as_ref(), true);
             return Some(
                 Json(json!({
                     "site_name": site_name,
                     "site_subtitle": site_subtitle,
-                    "show_github_link": show_github_link,
                 }))
                 .into_response(),
             );

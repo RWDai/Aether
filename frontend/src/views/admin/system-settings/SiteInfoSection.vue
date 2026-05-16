@@ -51,21 +51,6 @@
           显示在导航栏品牌名称下方
         </p>
       </div>
-      <div class="md:col-span-2 flex items-center justify-between gap-4 rounded-lg border border-border/60 bg-muted/20 p-4">
-        <div>
-          <Label class="block text-sm font-medium">
-            GitHub 仓库入口
-          </Label>
-          <p class="mt-1 text-xs text-muted-foreground">
-            控制首页、指南页和控制台顶部的 GitHub 链接是否展示
-          </p>
-        </div>
-        <Switch
-          :model-value="showGithubLink"
-          :disabled="loading"
-          @update:model-value="$emit('update:showGithubLink', $event)"
-        />
-      </div>
     </div>
   </CardSection>
 </template>
@@ -74,13 +59,11 @@
 import Button from '@/components/ui/button.vue'
 import Input from '@/components/ui/input.vue'
 import Label from '@/components/ui/label.vue'
-import Switch from '@/components/ui/switch.vue'
 import { CardSection } from '@/components/layout'
 
 defineProps<{
   siteName: string
   siteSubtitle: string
-  showGithubLink: boolean
   loading: boolean
   hasChanges: boolean
 }>()
@@ -89,6 +72,5 @@ defineEmits<{
   save: []
   'update:siteName': [value: string]
   'update:siteSubtitle': [value: string]
-  'update:showGithubLink': [value: boolean]
 }>()
 </script>

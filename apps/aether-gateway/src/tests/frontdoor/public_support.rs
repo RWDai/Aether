@@ -685,6 +685,7 @@ async fn gateway_handles_public_catalog_site_info_without_proxying_upstream() {
     let payload: serde_json::Value = response.json().await.expect("json body should parse");
     assert_eq!(payload["site_name"], "Aether Local");
     assert_eq!(payload["site_subtitle"], "Rust Only");
+    assert_eq!(payload.as_object().map(|object| object.len()), Some(2));
     assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
 
     gateway_handle.abort();

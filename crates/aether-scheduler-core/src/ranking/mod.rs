@@ -295,6 +295,47 @@ mod tests {
     }
 
     #[test]
+    fn cache_affinity_keeps_conversion_priority_when_cross_format_is_not_demoted() {
+        let same_format_low_priority = candidate("same", 10, 0, Some(10));
+        let mut cross_format_high_priority = candidate("cross", 0, 0, Some(0));
+        cross_format_high_priority.format_preference = (1, 1);
+
+        assert_eq!(
+            ranked_ids(
+                &[same_format_low_priority, cross_format_high_priority],
+                SchedulerRankingContext {
+                    priority_mode: SchedulerPriorityMode::Provider,
+                    ranking_mode: SchedulerRankingMode::CacheAffinity,
+                    include_health: false,
+                    load_balance_seed: 0,
+                },
+            ),
+            vec!["provider-cross", "provider-same"]
+        );
+    }
+
+    #[test]
+    fn cache_affinity_keeps_cached_match_above_conversion_priority() {
+        let mut cached_same_format_low_priority = candidate("same", 10, 0, Some(10));
+        cached_same_format_low_priority.cached_affinity_match = true;
+        let mut cross_format_high_priority = candidate("cross", 0, 0, Some(0));
+        cross_format_high_priority.format_preference = (1, 1);
+
+        assert_eq!(
+            ranked_ids(
+                &[cross_format_high_priority, cached_same_format_low_priority],
+                SchedulerRankingContext {
+                    priority_mode: SchedulerPriorityMode::Provider,
+                    ranking_mode: SchedulerRankingMode::CacheAffinity,
+                    include_health: false,
+                    load_balance_seed: 0,
+                },
+            ),
+            vec!["provider-same", "provider-cross"]
+        );
+    }
+
+    #[test]
     fn cache_affinity_promotes_cached_candidate_before_cross_format_demotion() {
         let same_format = candidate("same", 10, 0, Some(10));
         let mut cached_cross_format = candidate("cross", 0, 0, Some(0));

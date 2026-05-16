@@ -212,20 +212,6 @@ pub(super) async fn handle_auth_send_verification_code(
         return response;
     }
 
-    if state
-        .find_user_auth_by_identifier(&email)
-        .await
-        .ok()
-        .flatten()
-        .is_some()
-    {
-        return build_auth_error_response(
-            http::StatusCode::BAD_REQUEST,
-            "该邮箱已被注册，请直接登录或使用其他邮箱",
-            false,
-        );
-    }
-
     match validate_auth_email_suffix(state, &email).await {
         Ok(Ok(())) => {}
         Ok(Err(detail)) => {
@@ -238,6 +224,20 @@ pub(super) async fn handle_auth_send_verification_code(
                 false,
             );
         }
+    }
+
+    if state
+        .find_user_auth_by_identifier(&email)
+        .await
+        .ok()
+        .flatten()
+        .is_some()
+    {
+        return build_auth_error_response(
+            http::StatusCode::BAD_REQUEST,
+            "该邮箱已被注册，请直接登录或使用其他邮箱",
+            false,
+        );
     }
 
     let smtp_config = match read_auth_smtp_config(state).await {

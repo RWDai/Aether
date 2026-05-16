@@ -365,6 +365,133 @@ pub fn parse_codex_wham_usage_response(
     Some(serde_json::Value::Object(result))
 }
 
+fn codex_json_object<'a>(
+    root: &'a serde_json::Map<String, serde_json::Value>,
+    keys: &[&str],
+) -> Option<&'a serde_json::Map<String, serde_json::Value>> {
+    keys.iter()
+        .find_map(|key| root.get(*key).and_then(serde_json::Value::as_object))
+}
+
+fn codex_json_string_from_object(
+    object: Option<&serde_json::Map<String, serde_json::Value>>,
+    keys: &[&str],
+) -> Option<String> {
+    let object = object?;
+    keys.iter()
+        .find_map(|key| coerce_json_string(object.get(*key)))
+}
+
+fn codex_json_string_from_root(
+    root: &serde_json::Map<String, serde_json::Value>,
+    keys: &[&str],
+) -> Option<String> {
+    keys.iter()
+        .find_map(|key| coerce_json_string(root.get(*key)))
+}
+
+fn codex_backend_me_account_object(
+    root: &serde_json::Map<String, serde_json::Value>,
+) -> Option<&serde_json::Map<String, serde_json::Value>> {
+    codex_json_object(root, &["account", "current_account", "selected_account"])
+        .or_else(|| {
+            root.get("accounts")
+                .and_then(serde_json::Value::as_array)?
+                .iter()
+                .filter_map(serde_json::Value::as_object)
+                .find(|account| {
+                    account
+                        .get("is_default")
+                        .or_else(|| account.get("selected"))
+                        .or_else(|| account.get("current"))
+                        .and_then(coerce_json_bool)
+                        .unwrap_or(false)
+                })
+        })
+        .or_else(|| {
+            root.get("accounts")
+                .and_then(serde_json::Value::as_array)?
+                .iter()
+                .find_map(serde_json::Value::as_object)
+        })
+}
+
+fn codex_backend_me_plan_object<'a>(
+    root: &'a serde_json::Map<String, serde_json::Value>,
+    account: Option<&'a serde_json::Map<String, serde_json::Value>>,
+) -> Option<&'a serde_json::Map<String, serde_json::Value>> {
+    codex_json_object(root, &["plan", "subscription", "workspace_plan"]).or_else(|| {
+        account
+            .and_then(|account| account.get("plan"))
+            .and_then(serde_json::Value::as_object)
+    })
+}
+
+pub fn parse_codex_backend_me_response(
+    value: &serde_json::Value,
+    updated_at_unix_secs: u64,
+) -> Option<serde_json::Value> {
+    let root = value.as_object()?;
+    if root.is_empty() {
+        return None;
+    }
+
+    let user = codex_json_object(root, &["user", "auth_user", "profile"]);
+    let account = codex_backend_me_account_object(root);
+    let plan = codex_backend_me_plan_object(root, account);
+    let mut result = serde_json::Map::new();
+
+    if let Some(user_id) = codex_json_string_from_object(user, &["id", "user_id"])
+        .or_else(|| codex_json_string_from_root(root, &["user_id"]))
+    {
+        result.insert("user_id".to_string(), json!(user_id));
+    }
+    if let Some(email) = codex_json_string_from_object(user, &["email"])
+        .or_else(|| codex_json_string_from_root(root, &["email"]))
+    {
+        result.insert("email".to_string(), json!(email));
+    }
+    if let Some(name) = codex_json_string_from_object(user, &["name", "display_name", "full_name"])
+        .or_else(|| codex_json_string_from_root(root, &["name", "display_name", "full_name"]))
+    {
+        result.insert("user_name".to_string(), json!(name));
+    }
+    if let Some(account_id) =
+        codex_json_string_from_object(account, &["id", "account_id", "accountId", "workspace_id"])
+            .or_else(|| {
+                codex_json_string_from_root(root, &["account_id", "accountId", "workspace_id"])
+            })
+    {
+        result.insert("account_id".to_string(), json!(account_id));
+    }
+    if let Some(account_name) =
+        codex_json_string_from_object(account, &["name", "title", "display_name"])
+    {
+        result.insert("account_name".to_string(), json!(account_name));
+    }
+
+    let plan_type = codex_json_string_from_object(
+        account,
+        &["plan_type", "planType", "subscription_plan", "tier"],
+    )
+    .or_else(|| codex_json_string_from_object(plan, &["type", "plan_type", "name", "tier"]))
+    .or_else(|| codex_json_string_from_root(root, &["plan_type", "planType"]));
+    if let Some(plan_type) = normalize_codex_plan_type(plan_type.as_deref()) {
+        result.insert("plan_type".to_string(), json!(plan_type));
+    }
+    if let Some(plan_title) =
+        codex_json_string_from_object(plan, &["title", "display_name", "label"])
+    {
+        result.insert("plan_title".to_string(), json!(plan_title));
+    }
+
+    if result.is_empty() {
+        return None;
+    }
+    result.insert("updated_at".to_string(), json!(updated_at_unix_secs));
+    Some(serde_json::Value::Object(result))
+}
+
 pub fn parse_codex_usage_headers(
     headers: &BTreeMap<String, String>,
     updated_at_unix_secs: u64,
@@ -574,6 +701,14 @@ pub fn codex_structured_invalid_reason(status_code: u16, upstream_message: Optio
         };
         return format!("{OAUTH_ACCOUNT_BLOCK_PREFIX}{detail}");
     }
+    if status_code == 402 {
+        let detail = if message.is_empty() {
+            "Codex 账户需要付款 (402)"
+        } else {
+            message
+        };
+        return format!("{OAUTH_ACCOUNT_BLOCK_PREFIX}{detail}");
+    }
     message.to_string()
 }
 
@@ -583,9 +718,7 @@ pub fn codex_runtime_invalid_reason(
 ) -> Option<String> {
     match status_code {
         401 => Some(codex_structured_invalid_reason(401, upstream_message)),
-        402 if codex_looks_like_workspace_deactivated(upstream_message) => {
-            Some(codex_structured_invalid_reason(402, upstream_message))
-        }
+        402 => Some(codex_structured_invalid_reason(402, upstream_message)),
         403 if codex_looks_like_token_invalidated(upstream_message)
             || codex_looks_like_account_deactivated(upstream_message) =>
         {
@@ -975,9 +1108,9 @@ pub fn parse_chatgpt_web_conversation_init_response(
 mod tests {
     use super::{
         codex_build_invalid_state, codex_runtime_invalid_reason,
-        parse_chatgpt_web_conversation_init_response, parse_codex_wham_usage_response,
-        OAUTH_ACCOUNT_BLOCK_PREFIX, OAUTH_EXPIRED_PREFIX, OAUTH_REFRESH_FAILED_PREFIX,
-        OAUTH_REQUEST_FAILED_PREFIX,
+        parse_chatgpt_web_conversation_init_response, parse_codex_backend_me_response,
+        parse_codex_wham_usage_response, OAUTH_ACCOUNT_BLOCK_PREFIX, OAUTH_EXPIRED_PREFIX,
+        OAUTH_REFRESH_FAILED_PREFIX, OAUTH_REQUEST_FAILED_PREFIX,
     };
     use aether_data_contracts::repository::provider_catalog::StoredProviderCatalogKey;
     use serde_json::json;
@@ -997,6 +1130,14 @@ mod tests {
             Some(format!(
                 "{OAUTH_ACCOUNT_BLOCK_PREFIX}account has been deactivated"
             ))
+        );
+    }
+
+    #[test]
+    fn codex_runtime_invalid_reason_marks_402_as_account_blocked() {
+        assert_eq!(
+            codex_runtime_invalid_reason(402, Some("payment required")),
+            Some(format!("{OAUTH_ACCOUNT_BLOCK_PREFIX}payment required"))
         );
     }
 
@@ -1207,6 +1348,40 @@ mod tests {
             parsed.get("spark_secondary_window_minutes"),
             Some(&json!(10_080u64))
         );
+    }
+
+    #[test]
+    fn parses_codex_backend_me_identity_metadata_without_quota_windows() {
+        let parsed = parse_codex_backend_me_response(
+            &json!({
+                "user": {
+                    "id": "user-codex-123",
+                    "email": "codex@example.com",
+                    "name": "Codex User"
+                },
+                "account": {
+                    "id": "acct-codex-123",
+                    "name": "Personal",
+                    "plan_type": "plus"
+                },
+                "plan": {
+                    "type": "Plus",
+                    "title": "ChatGPT Plus"
+                }
+            }),
+            1_777_000_000,
+        )
+        .expect("codex backend me should parse");
+
+        assert_eq!(parsed.get("user_id"), Some(&json!("user-codex-123")));
+        assert_eq!(parsed.get("email"), Some(&json!("codex@example.com")));
+        assert_eq!(parsed.get("account_id"), Some(&json!("acct-codex-123")));
+        assert_eq!(parsed.get("account_name"), Some(&json!("Personal")));
+        assert_eq!(parsed.get("plan_type"), Some(&json!("plus")));
+        assert_eq!(parsed.get("plan_title"), Some(&json!("ChatGPT Plus")));
+        assert_eq!(parsed.get("updated_at"), Some(&json!(1_777_000_000u64)));
+        assert!(parsed.get("primary_used_percent").is_none());
+        assert!(parsed.get("secondary_used_percent").is_none());
     }
 
     #[test]

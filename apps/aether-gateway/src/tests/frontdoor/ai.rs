@@ -167,7 +167,7 @@ async fn gateway_handles_public_openai_models_without_hitting_fallback_probe() {
     assert_eq!(payload["object"], "list");
     assert_eq!(payload["data"][0]["id"], "gpt-4.1");
     assert_eq!(payload["data"][1]["id"], "gpt-5");
-    assert_eq!(payload["data"][0]["owned_by"], "openai");
+    assert_eq!(payload["data"][0]["owned_by"], "aether");
     assert_eq!(*fallback_probe_hits.lock().expect("mutex should lock"), 0);
 
     gateway_handle.abort();
@@ -231,7 +231,7 @@ async fn gateway_handles_public_openai_models_with_cross_format_candidates_witho
         list_response.json().await.expect("json body should parse");
     assert_eq!(list_payload["object"], "list");
     assert_eq!(list_payload["data"][0]["id"], "claude-3-7-sonnet");
-    assert_eq!(list_payload["data"][0]["owned_by"], "claude");
+    assert_eq!(list_payload["data"][0]["owned_by"], "aether");
 
     let detail_response = client
         .get(format!("{gateway_url}/v1/models/claude-3-7-sonnet"))
@@ -245,7 +245,7 @@ async fn gateway_handles_public_openai_models_with_cross_format_candidates_witho
         .await
         .expect("json body should parse");
     assert_eq!(detail_payload["id"], "claude-3-7-sonnet");
-    assert_eq!(detail_payload["owned_by"], "claude");
+    assert_eq!(detail_payload["owned_by"], "aether");
 
     assert_eq!(*fallback_probe_hits.lock().expect("mutex should lock"), 0);
 

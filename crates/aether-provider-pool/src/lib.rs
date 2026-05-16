@@ -21,8 +21,8 @@ pub use providers::{
     AntigravityProviderPoolAdapter, ChatGptWebProviderPoolAdapter, CodexProviderPoolAdapter,
     DefaultProviderPoolAdapter, KiroPoolQuotaAuthInput, KiroProviderPoolAdapter,
     UnsupportedQuotaProviderPoolAdapter, ANTIGRAVITY_FETCH_AVAILABLE_MODELS_PATH,
-    CHATGPT_WEB_CONVERSATION_INIT_PATH, CHATGPT_WEB_DEFAULT_BASE_URL, CODEX_WHAM_USAGE_URL,
-    KIRO_USAGE_LIMITS_PATH, KIRO_USAGE_SDK_VERSION,
+    CHATGPT_WEB_CONVERSATION_INIT_PATH, CHATGPT_WEB_DEFAULT_BASE_URL, CODEX_BACKEND_ME_URL,
+    CODEX_WHAM_USAGE_URL, KIRO_USAGE_LIMITS_PATH, KIRO_USAGE_SDK_VERSION,
 };
 pub use quota::{
     provider_pool_key_account_quota_exhausted, provider_pool_key_scheduling_label,
@@ -116,6 +116,29 @@ mod tests {
             spec.headers.get("chatgpt-account-id").map(String::as_str),
             Some("acct-1")
         );
+    }
+
+    #[test]
+    fn codex_quota_request_uses_backend_me_probe_endpoint() {
+        let spec = build_codex_pool_quota_request(
+            "key-1",
+            Some(("authorization".to_string(), "Bearer access".to_string())),
+            None,
+            None,
+        )
+        .expect("spec should build");
+
+        assert_eq!(spec.method, "GET");
+        assert_eq!(spec.url, "https://chatgpt.com/backend-api/me");
+        assert_eq!(
+            spec.headers.get("authorization").map(String::as_str),
+            Some("Bearer access")
+        );
+        assert_eq!(
+            spec.headers.get("accept").map(String::as_str),
+            Some("application/json")
+        );
+        assert_eq!(spec.model_name.as_deref(), Some("codex-backend-me"));
     }
 
     #[test]

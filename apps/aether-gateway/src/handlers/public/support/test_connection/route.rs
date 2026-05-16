@@ -338,7 +338,7 @@ pub(super) async fn maybe_build_local_test_connection_route_response(
     Some(
         Json(json!({
             "status": "success",
-            "provider": provider.name,
+            "provider_id": provider.id,
             "endpoint_id": endpoint.id,
             "api_format": format_value,
             "timestamp": timestamp,

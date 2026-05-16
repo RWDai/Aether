@@ -50,6 +50,28 @@ pub(crate) fn normalize_admin_base_url(base_url: &str) -> Result<String, String>
     Ok(normalized.to_string())
 }
 
+pub(crate) fn sanitize_public_model_config_for_user(
+    config: Option<serde_json::Value>,
+) -> Option<serde_json::Value> {
+    let Some(mut config) = config else {
+        return None;
+    };
+    if let Some(object) = config.as_object_mut() {
+        for key in [
+            "model_mappings",
+            "model_mapping",
+            "global_model_mappings",
+            "provider_model_mappings",
+            "provider_model_aliases",
+            "mapping_preview",
+            "model_mapping_preview",
+        ] {
+            object.remove(key);
+        }
+    }
+    Some(config)
+}
+
 pub(crate) fn admin_requested_force_stream(value: &serde_json::Value) -> bool {
     match value {
         serde_json::Value::Bool(value) => *value,
@@ -165,21 +187,12 @@ pub(crate) async fn build_public_providers_payload(
         .into_iter()
         .map(|provider| {
             let provider_id = provider.id.clone();
-            let description = provider
-                .config
-                .as_ref()
-                .and_then(|value| value.get("description"))
-                .and_then(serde_json::Value::as_str)
-                .map(ToOwned::to_owned);
             let model_count = models_by_provider
                 .get(&provider_id)
                 .map(BTreeSet::len)
                 .unwrap_or(0);
             json!({
                 "id": provider_id.clone(),
-                "name": provider.name,
-                "description": description,
-                "website": provider.website,
                 "is_active": provider.is_active,
                 "provider_priority": provider.provider_priority,
                 "models_count": model_count,
@@ -196,8 +209,6 @@ pub(crate) async fn build_public_providers_payload(
 fn serialize_public_catalog_model(model: StoredPublicCatalogModel) -> serde_json::Value {
     json!({
         "id": model.id,
-        "provider_id": model.provider_id,
-        "provider_name": model.provider_name,
         "name": model.name,
         "display_name": model.display_name,
         "description": model.description,

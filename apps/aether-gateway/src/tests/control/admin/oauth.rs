@@ -194,16 +194,17 @@ fn codex_quota_execution_result(request_id: &str) -> serde_json::Value {
         "headers": {},
         "body": {
             "json_body": {
-                "plan_type": "plus",
-                "rate_limit": {
-                    "primary_window": {
-                        "used_percent": 10.0,
-                        "window_minutes": 300
-                    },
-                    "secondary_window": {
-                        "used_percent": 20.0,
-                        "window_minutes": 10080
-                    }
+                "user": {
+                    "id": "user-codex-123",
+                    "email": "alice@example.com"
+                },
+                "account": {
+                    "id": "acct-codex-123",
+                    "plan_type": "plus"
+                },
+                "plan": {
+                    "type": "Plus",
+                    "title": "ChatGPT Plus"
                 }
             }
         }
@@ -2453,8 +2454,9 @@ async fn gateway_completes_admin_provider_oauth_key_locally_with_trusted_admin_p
         .as_str()
         .expect("account_state_recheck_error should be string when recheck is attempted");
     assert!(
-        account_state_recheck_error == "wham/usage API 返回状态码 401"
-            || account_state_recheck_error.starts_with("wham/usage 请求执行失败:"),
+        account_state_recheck_error == "backend-api/me API 返回状态码 401"
+            || account_state_recheck_error == "backend-api/me API 返回状态码 403"
+            || account_state_recheck_error.starts_with("backend-api/me 请求执行失败:"),
         "unexpected account_state_recheck_error: {account_state_recheck_error}"
     );
     assert_eq!(*upstream_hits.lock().expect("mutex should lock"), 0);
@@ -4924,8 +4926,9 @@ async fn gateway_refreshes_admin_provider_oauth_key_locally_with_trusted_admin_p
             .as_str()
             .expect("account_state_recheck_error should be string when attempted");
         assert!(
-            account_state_recheck_error == "wham/usage API 返回状态码 401"
-                || account_state_recheck_error.starts_with("wham/usage 请求执行失败:"),
+            account_state_recheck_error == "backend-api/me API 返回状态码 401"
+                || account_state_recheck_error == "backend-api/me API 返回状态码 403"
+                || account_state_recheck_error.starts_with("backend-api/me 请求执行失败:"),
             "unexpected account_state_recheck_error: {account_state_recheck_error}"
         );
     } else {
@@ -4943,7 +4946,7 @@ async fn gateway_refreshes_admin_provider_oauth_key_locally_with_trusted_admin_p
         .expect("execution runtime request should be captured");
     assert_eq!(
         seen_execution_runtime_request.url,
-        "https://chatgpt.com/backend-api/wham/usage"
+        "https://chatgpt.com/backend-api/me"
     );
     assert_eq!(
         seen_execution_runtime_request.authorization,
@@ -4967,7 +4970,7 @@ async fn gateway_refreshes_admin_provider_oauth_key_locally_with_trusted_admin_p
     .expect("refreshed api key should decrypt");
     assert_eq!(decrypted_api_key, "refreshed-codex-access-token");
     if account_state_recheck_attempted
-        && payload["account_state_recheck_error"] == "wham/usage API 返回状态码 401"
+        && payload["account_state_recheck_error"] == "backend-api/me API 返回状态码 401"
     {
         assert!(stored_key.oauth_invalid_at_unix_secs.is_some());
         assert_eq!(

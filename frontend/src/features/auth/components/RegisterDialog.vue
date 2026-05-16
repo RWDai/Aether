@@ -55,6 +55,21 @@
           />
         </div>
 
+        <div
+          v-if="turnstileRequired"
+          class="space-y-2"
+        >
+          <Label>人机验证 <span class="text-destructive">*</span></Label>
+          <TurnstileWidget
+            ref="turnstileWidgetRef"
+            v-model="turnstileToken"
+            :site-key="turnstileSiteKey"
+            :action="currentTurnstileAction"
+            :disabled="isLoading || isSendingCode"
+            @error="handleTurnstileError"
+          />
+        </div>
+
         <!-- Verification Code Section (仅当需要邮箱验证时显示) -->
         <div
           v-if="emailConfigured && requireEmailVerification"
@@ -197,11 +212,6 @@
           </p>
         </div>
 
-        <TurnstileWidget
-          v-if="turnstileRequired && turnstileSiteKey"
-          ref="turnstileWidgetRef"
-          :site-key="turnstileSiteKey"
-        />
       </form>
 
       <!-- 登录链接 -->
@@ -240,7 +250,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onUnmounted, nextTick } from 'vue'
-import { authApi } from '@/api/auth'
+import { authApi, type RegisterRequest } from '@/api/auth'
 import { useToast } from '@/composables/useToast'
 import { parseApiError } from '@/utils/errorParser'
 import {
@@ -392,32 +402,53 @@ const codeSentAt = ref<number | null>(null)
 const cooldownSeconds = ref(0)
 const expireMinutes = ref(5)
 const cooldownTimer = ref<number | null>(null)
+type TurnstileAction = 'send_verification_code' | 'register'
+const turnstileToken = ref('')
 const turnstileWidgetRef = ref<InstanceType<typeof TurnstileWidget> | null>(null)
-const turnstileAction = ref<'send_verification_code' | 'register' | null>(null)
-const turnstileRequired = computed(() => !!props.turnstileEnabled && !!props.turnstileSiteKey)
+
+const turnstileSiteKey = computed(() => props.turnstileSiteKey || '')
+const turnstileRequired = computed(() => !!props.turnstileEnabled && !!turnstileSiteKey.value)
+const currentTurnstileAction = computed<TurnstileAction>(() =>
+  props.requireEmailVerification && !emailVerified.value
+    ? 'send_verification_code'
+    : 'register'
+)
+
+const resetTurnstile = () => {
+  turnstileToken.value = ''
+  turnstileWidgetRef.value?.reset()
+}
+
+const handleTurnstileError = (message: string) => {
+  showError(message, '人机验证失败')
+}
 
 // Send code cooldown timer
 const canSendCode = computed(() => {
   if (!formData.value.email) return false
   if (cooldownSeconds.value > 0) return false
+  if (
+    turnstileRequired.value &&
+    currentTurnstileAction.value === 'send_verification_code' &&
+    !turnstileToken.value
+  ) return false
   return true
 })
 
 const sendCodeButtonText = computed(() => {
-  if (isSendingCode.value) {
-    return turnstileAction.value === 'send_verification_code' ? '验证中...' : '发送中...'
-  }
+  if (isSendingCode.value) return '发送中...'
   if (emailVerified.value) return '验证成功'
   if (cooldownSeconds.value > 0) return `${cooldownSeconds.value}秒后重试`
+  if (
+    turnstileRequired.value &&
+    currentTurnstileAction.value === 'send_verification_code' &&
+    !turnstileToken.value
+  ) return '请先完成人机验证'
   if (codeSentAt.value) return '重新发送验证码'
   return '发送验证码'
 })
 
-const sendCodeLoadingText = computed(() =>
-  turnstileAction.value === 'send_verification_code'
-    ? '正在进行人机验证...'
-    : '正在发送验证码...'
-)
+const sendCodeLoadingText = computed(() => '正在发送验证码...')
 
 // 用户名验证
 const usernameRegex = /^[a-zA-Z0-9_.-]+$/
@@ -452,6 +483,14 @@ const canSubmit = computed(() => {
     if (!formData.value.email || !emailVerified.value) {
       return false
     }
+  }
+
+  if (
+    turnstileRequired.value &&
+    currentTurnstileAction.value === 'register' &&
+    !turnstileToken.value
+  ) {
+    return false
   }
 
   // Check password match
@@ -508,6 +547,7 @@ watch(
         cooldownTimer.value = null
       }
       codeDigits.value = ['', '', '', '', '', '']
+      resetTurnstile()
     }
 
     // 清除之前的定时器
@@ -525,6 +565,10 @@ watch(
     }, 500)
   }
 )
+
+watch(currentTurnstileAction, () => {
+  resetTurnstile()
+})
 
 // Reset form when dialog opens
 watch(isOpen, (newValue) => {
@@ -575,6 +619,7 @@ const resetForm = () => {
   isSendingCode.value = false
   codeSentAt.value = null
   cooldownSeconds.value = 0
+  resetTurnstile()
 
   // Reset password field nonce
   formNonce.value = createFormNonce()
@@ -588,24 +633,6 @@ const resetForm = () => {
   // Clear verification code inputs
   codeDigits.value = ['', '', '', '', '', '']
   resetTurnstile()
-}
-
-const resetTurnstile = () => {
-  turnstileAction.value = null
-  turnstileWidgetRef.value?.reset()
-}
-
-const executeTurnstile = async (action: 'send_verification_code' | 'register') => {
-  if (!turnstileRequired.value) return undefined
-  turnstileAction.value = action
-  try {
-    return await turnstileWidgetRef.value?.execute(action)
-  } catch {
-    showError('人机验证失败，请重试', '验证失败')
-    return null
-  } finally {
-    turnstileAction.value = null
-  }
 }
 
 const handleSendCode = async () => {
@@ -624,16 +651,13 @@ const handleSendCode = async () => {
   isSendingCode.value = true
 
   try {
-    const turnstileToken = await executeTurnstile('send_verification_code')
-    if (turnstileRequired.value && !turnstileToken) {
-      return
-    }
     const response = await authApi.sendVerificationCode(
       formData.value.email,
-      turnstileToken || undefined
+      turnstileRequired.value ? turnstileToken.value : undefined
     )
 
     if (response.success) {
+      resetTurnstile()
       codeSentAt.value = Date.now()
       if (response.expire_minutes) {
         expireMinutes.value = response.expire_minutes
@@ -649,9 +673,11 @@ const handleSendCode = async () => {
         codeInputRefs.value[0]?.focus()
       })
     } else {
+      resetTurnstile()
       showError(response.message || '请稍后重试', '发送失败')
     }
   } catch (error: unknown) {
+    resetTurnstile()
     showError(parseApiError(error, '网络错误，请重试'), '发送失败')
   } finally {
     isSendingCode.value = false
@@ -708,23 +734,21 @@ const handleSubmit = async () => {
     showError('请先完成邮箱验证')
     return
   }
+  if (
+    turnstileRequired.value &&
+    currentTurnstileAction.value === 'register' &&
+    !turnstileToken.value
+  ) {
+    showError('请先完成人机验证')
+    return
+  }
 
   isLoading.value = true
-  loadingText.value = turnstileRequired.value ? '验证中...' : '注册中...'
+  loadingText.value = '注册中...'
 
   try {
-    const turnstileToken = await executeTurnstile('register')
-    if (turnstileRequired.value && !turnstileToken) {
-      return
-    }
-    loadingText.value = '注册中...'
     // 构建请求数据：邮箱可选
-    const registerData: {
-      email?: string
-      username: string
-      password: string
-      turnstile_token?: string
-    } = {
+    const registerData: RegisterRequest = {
       username: formData.value.username,
       password: formData.value.password
     }
@@ -732,8 +756,8 @@ const handleSubmit = async () => {
     if (formData.value.email && formData.value.email.trim()) {
       registerData.email = formData.value.email
     }
-    if (turnstileToken) {
-      registerData.turnstile_token = turnstileToken
+    if (turnstileRequired.value && currentTurnstileAction.value === 'register') {
+      registerData.turnstile_token = turnstileToken.value
     }
 
     const response = await authApi.register(registerData)
@@ -743,6 +767,7 @@ const handleSubmit = async () => {
     emit('success')
     isOpen.value = false
   } catch (error: unknown) {
+    resetTurnstile()
     showError(parseApiError(error, '注册失败，请重试'), '注册失败')
   } finally {
     isLoading.value = false

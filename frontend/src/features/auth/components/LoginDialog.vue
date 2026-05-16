@@ -272,9 +272,9 @@ const showRegisterDialog = ref(false)
 const requireEmailVerification = ref(false)
 const emailConfigured = ref(true) // 邮箱服务是否已配置
 const passwordPolicyLevel = ref<PasswordPolicyLevel>('weak')
-const allowRegistration = ref(false) // 由系统配置控制，默认关闭
 const turnstileEnabled = ref(false)
 const turnstileSiteKey = ref<string | null>(null)
+const allowRegistration = ref(false) // 由系统配置控制，默认关闭
 
 // LDAP authentication settings
 const PREFERRED_AUTH_TYPE_KEY = 'aether_preferred_auth_type'

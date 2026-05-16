@@ -440,6 +440,127 @@ mod tests {
     }
 
     #[test]
+    fn load_balance_distribution_can_precede_conversion_priority() {
+        let mut same_format_low_priority = candidate("same", 10, 0, Some(10));
+        same_format_low_priority.format_preference = (0, 0);
+        let mut cross_format_high_priority = candidate("cross", 0, 0, Some(0));
+        cross_format_high_priority.format_preference = (1, 1);
+
+        let probe_same = candidate("same", 0, 0, Some(0));
+        let mut probe_cross = candidate("cross", 0, 0, Some(0));
+        probe_cross.format_preference = (0, 0);
+        let seed = (0..512)
+            .find(|seed| {
+                ranked_ids(
+                    &[probe_same.clone(), probe_cross.clone()],
+                    SchedulerRankingContext {
+                        priority_mode: SchedulerPriorityMode::Provider,
+                        ranking_mode: SchedulerRankingMode::LoadBalance,
+                        include_health: false,
+                        load_balance_seed: *seed,
+                    },
+                )
+                .first()
+                .is_some_and(|provider| provider == "provider-same")
+            })
+            .expect("test seed should put same-format provider first by load balance");
+
+        assert_eq!(
+            ranked_ids(
+                &[same_format_low_priority, cross_format_high_priority],
+                SchedulerRankingContext {
+                    priority_mode: SchedulerPriorityMode::Provider,
+                    ranking_mode: SchedulerRankingMode::LoadBalance,
+                    include_health: false,
+                    load_balance_seed: seed,
+                },
+            ),
+            vec!["provider-same", "provider-cross"]
+        );
+    }
+
+    #[test]
+    fn load_balance_conversion_priority_applies_within_provider_distribution() {
+        let mut same_format_low_priority = candidate("same", 10, 0, Some(10));
+        same_format_low_priority.provider_id = "provider-shared".to_string();
+        same_format_low_priority.format_preference = (0, 0);
+        let mut cross_format_high_priority = candidate("cross", 0, 0, Some(0));
+        cross_format_high_priority.provider_id = "provider-shared".to_string();
+        cross_format_high_priority.format_preference = (1, 1);
+
+        let mut probe_same = same_format_low_priority.clone();
+        probe_same.provider_priority = 0;
+        let mut probe_cross = cross_format_high_priority.clone();
+        probe_cross.format_preference = (0, 0);
+        let seed = (0..512)
+            .find(|seed| {
+                ranked_keys(
+                    &[probe_same.clone(), probe_cross.clone()],
+                    SchedulerRankingContext {
+                        priority_mode: SchedulerPriorityMode::Provider,
+                        ranking_mode: SchedulerRankingMode::LoadBalance,
+                        include_health: false,
+                        load_balance_seed: *seed,
+                    },
+                )
+                .first()
+                .is_some_and(|key| key == "key-same")
+            })
+            .expect("test seed should put same-format key first by load balance tiebreaker");
+
+        assert_eq!(
+            ranked_keys(
+                &[same_format_low_priority, cross_format_high_priority],
+                SchedulerRankingContext {
+                    priority_mode: SchedulerPriorityMode::Provider,
+                    ranking_mode: SchedulerRankingMode::LoadBalance,
+                    include_health: false,
+                    load_balance_seed: seed,
+                },
+            ),
+            vec!["key-cross", "key-same"]
+        );
+    }
+
+    #[test]
+    fn load_balance_distribution_can_precede_format_preference() {
+        let same_format = candidate("same", 0, 0, Some(0));
+        let mut cross_format = candidate("cross", 0, 0, Some(0));
+        cross_format.format_preference = (1, 1);
+
+        let mut probe_cross = cross_format.clone();
+        probe_cross.format_preference = (0, 0);
+        let seed = (0..512)
+            .find(|seed| {
+                ranked_ids(
+                    &[same_format.clone(), probe_cross.clone()],
+                    SchedulerRankingContext {
+                        priority_mode: SchedulerPriorityMode::Provider,
+                        ranking_mode: SchedulerRankingMode::LoadBalance,
+                        include_health: false,
+                        load_balance_seed: *seed,
+                    },
+                )
+                .first()
+                .is_some_and(|provider| provider == "provider-cross")
+            })
+            .expect("test seed should put cross-format provider first by load balance");
+
+        assert_eq!(
+            ranked_ids(
+                &[same_format, cross_format],
+                SchedulerRankingContext {
+                    priority_mode: SchedulerPriorityMode::Provider,
+                    ranking_mode: SchedulerRankingMode::LoadBalance,
+                    include_health: false,
+                    load_balance_seed: seed,
+                },
+            ),
+            vec!["provider-cross", "provider-same"]
+        );
+    }
+
+    #[test]
     fn load_balance_provider_mode_randomizes_providers_then_uses_internal_key_priority() {
         let mut provider_a_primary = candidate("a-primary", 0, 0, Some(0));
         provider_a_primary.provider_id = "provider-a".to_string();

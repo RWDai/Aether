@@ -321,6 +321,35 @@ fn users_me_usage_upstream_is_stream(item: &StoredRequestUsageAudit) -> bool {
         .unwrap_or(item.is_stream)
 }
 
+fn users_me_usage_metadata_string<'a>(
+    item: &'a StoredRequestUsageAudit,
+    key: &str,
+) -> Option<&'a str> {
+    item.request_metadata
+        .as_ref()
+        .and_then(serde_json::Value::as_object)
+        .and_then(|metadata| metadata.get(key))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn users_me_usage_client_family(item: &StoredRequestUsageAudit) -> Option<&str> {
+    item.request_metadata
+        .as_ref()
+        .and_then(serde_json::Value::as_object)
+        .and_then(|metadata| {
+            metadata
+                .get("client_session_affinity")
+                .and_then(serde_json::Value::as_object)
+                .and_then(|affinity| affinity.get("client_family"))
+                .and_then(serde_json::Value::as_str)
+                .or_else(|| metadata.get("client_family").and_then(serde_json::Value::as_str))
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
 fn build_users_me_usage_record_payload(
     item: &StoredRequestUsageAudit,
     include_actual_cost: bool,
@@ -353,6 +382,11 @@ fn build_users_me_usage_record_payload(
         "upstream_is_stream": upstream_is_stream,
         "client_requested_stream": client_is_stream,
         "client_is_stream": client_is_stream,
+        "client_family": users_me_usage_client_family(item),
+        "client_ip": users_me_usage_metadata_string(item, "client_ip"),
+        "user_agent": users_me_usage_metadata_string(item, "user_agent"),
+        "request_path": users_me_usage_metadata_string(item, "request_path"),
+        "request_path_and_query": users_me_usage_metadata_string(item, "request_path_and_query"),
         "status": item.status,
         "has_fallback": item.has_fallback(),
         "created_at": unix_secs_to_rfc3339(item.created_at_unix_ms),

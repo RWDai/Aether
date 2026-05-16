@@ -998,6 +998,35 @@ fn admin_usage_upstream_is_stream(item: &StoredRequestUsageAudit) -> bool {
         .unwrap_or(item.is_stream)
 }
 
+fn admin_usage_metadata_string<'a>(
+    item: &'a StoredRequestUsageAudit,
+    key: &str,
+) -> Option<&'a str> {
+    item.request_metadata
+        .as_ref()
+        .and_then(Value::as_object)
+        .and_then(|metadata| metadata.get(key))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+pub fn admin_usage_client_family(item: &StoredRequestUsageAudit) -> Option<&str> {
+    item.request_metadata
+        .as_ref()
+        .and_then(Value::as_object)
+        .and_then(|metadata| {
+            metadata
+                .get("client_session_affinity")
+                .and_then(Value::as_object)
+                .and_then(|affinity| affinity.get("client_family"))
+                .and_then(Value::as_str)
+                .or_else(|| metadata.get("client_family").and_then(Value::as_str))
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
 fn admin_usage_active_request_json(
     item: &StoredRequestUsageAudit,
     api_key_name: Option<String>,
@@ -1030,6 +1059,11 @@ fn admin_usage_active_request_json(
         "upstream_is_stream": upstream_is_stream,
         "client_requested_stream": client_is_stream,
         "client_is_stream": client_is_stream,
+        "client_family": admin_usage_client_family(item),
+        "client_ip": admin_usage_metadata_string(item, "client_ip"),
+        "user_agent": admin_usage_metadata_string(item, "user_agent"),
+        "request_path": admin_usage_metadata_string(item, "request_path"),
+        "request_path_and_query": admin_usage_metadata_string(item, "request_path_and_query"),
         "has_fallback": admin_usage_has_fallback(item),
     });
     if let Some(api_format) = item.api_format.as_ref() {
@@ -1131,6 +1165,15 @@ pub fn admin_usage_record_json(
         json!(client_is_stream),
     );
     object.insert("client_is_stream".to_string(), json!(client_is_stream));
+    maybe_insert_string_field(object, "client_family", admin_usage_client_family(item));
+    maybe_insert_string_field(object, "client_ip", admin_usage_metadata_string(item, "client_ip"));
+    maybe_insert_string_field(object, "user_agent", admin_usage_metadata_string(item, "user_agent"));
+    maybe_insert_string_field(object, "request_path", admin_usage_metadata_string(item, "request_path"));
+    maybe_insert_string_field(
+        object,
+        "request_path_and_query",
+        admin_usage_metadata_string(item, "request_path_and_query"),
+    );
     payload
 }
 

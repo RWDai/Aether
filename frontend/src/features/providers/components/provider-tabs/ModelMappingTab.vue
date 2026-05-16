@@ -370,6 +370,7 @@ import { normalizeApiFormatAlias } from '@/api/endpoints/types/api-format'
 import {
   buildDefaultModelTestRequestHeaders,
   buildDefaultModelTestRequestBody,
+  isModelTestableApiFormat,
   isModelTestableEndpoint,
   parseModelTestRequestHeadersDraft,
   parseModelTestRequestBodyDraft,
@@ -436,7 +437,14 @@ const testRequestBodyResetValue = ref('')
 const mappingTestEndpoints = ref<ProviderEndpoint[] | null>(null)
 const providerKeysState = computed(() => props.providerKeys ?? [])
 const activeEndpoints = computed(() => (props.endpoints ?? [])
-  .filter(endpoint => isModelTestableEndpoint(endpoint, providerKeysState.value)))
+  .filter(endpoint => {
+    if (typeof endpoint.active_keys === 'number') {
+      return endpoint.is_active !== false
+        && isModelTestableApiFormat(endpoint.api_format)
+        && endpoint.active_keys > 0
+    }
+    return isModelTestableEndpoint(endpoint, providerKeysState.value)
+  }))
 const selectableTestEndpoints = computed(() => mappingTestEndpoints.value ?? activeEndpoints.value)
 const parsedTestRequestHeaders = computed(() => parseModelTestRequestHeadersDraft(testRequestHeadersDraft.value))
 const testRequestHeadersError = computed(() => parsedTestRequestHeaders.value.error)
@@ -448,9 +456,9 @@ const isLoading = computed(() => Boolean(props.loading) || localLoading.value)
 const models = computed(() => props.models ?? [])
 const aliasMappingPreview = computed(() => props.mappingPreview ?? null)
 
-// 是否有 key 配置了自动获取上游模型
+// 后端分页下当前页不一定包含 auto_fetch key；有活跃 key 时允许弹窗尝试拉取上游模型。
 const hasAutoFetchKey = computed(() => {
-  return providerKeysState.value.some(k => k.auto_fetch_models)
+  return providerKeysState.value.some(k => k.auto_fetch_models) || props.provider.active_keys > 0
 })
 
 // 展开状态

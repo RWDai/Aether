@@ -1,5 +1,6 @@
 pub(crate) use self::{
-    create::build_admin_create_provider_key_record, payload::build_admin_provider_keys_payload,
+    create::build_admin_create_provider_key_record,
+    payload::{build_admin_provider_keys_page_payload, build_admin_provider_keys_payload},
     update::build_admin_update_provider_key_record,
 };
 

@@ -260,10 +260,8 @@
 
                 <div
                   v-else-if="allKeys.length > 0"
-                  ref="keysListRef"
                   class="divide-y divide-border/40"
                   :class="shouldPaginateKeys && 'flex flex-col'"
-                  :style="keysFixedHeight ? { minHeight: keysFixedHeight + 'px' } : undefined"
                 >
                   <div
                     v-for="({ key, endpoint }, localIdx) in paginatedKeys"
@@ -1037,8 +1035,8 @@
                         variant="ghost"
                         size="sm"
                         class="h-6 px-2 text-xs"
-                        :disabled="currentKeyPage <= 1"
-                        @click="currentKeyPage--"
+                        :disabled="loadingProviderKeys || currentKeyPage <= 1"
+                        @click="goToKeyPage(currentKeyPage - 1)"
                       >
                         ‹
                       </Button>
@@ -1047,8 +1045,8 @@
                         variant="ghost"
                         size="sm"
                         class="h-6 px-2 text-xs"
-                        :disabled="currentKeyPage >= totalKeyPages"
-                        @click="currentKeyPage++"
+                        :disabled="loadingProviderKeys || currentKeyPage >= totalKeyPages"
+                        @click="goToKeyPage(currentKeyPage + 1)"
                       >
                         ›
                       </Button>
@@ -1219,7 +1217,6 @@
 
 <script setup lang="ts">
 import { ref, watch, computed, nextTick } from 'vue'
-import { useSmartPagination } from '@/composables/useSmartPagination'
 import {
   Plus,
   Key,
@@ -1278,7 +1275,7 @@ import { useProxyNodesStore } from '@/stores/proxy-nodes'
 import {
   deleteEndpointKey,
   recoverKeyHealth,
-  getProviderKeys,
+  getProviderKeysPage,
   updateProviderKey,
   revealEndpointKey,
   exportKey,
@@ -1362,7 +1359,9 @@ const loadingProviderModels = ref(false)
 const loadingProviderMappingPreview = ref(false)
 let providerLoadRequestId = 0
 let endpointsLoadRequestId = 0
+let keysLoadRequestId = 0
 let mappingPreviewLoadRequestId = 0
+const PROVIDER_KEYS_PAGE_SIZE = 20
 
 // 系统级格式转换配置
 const systemFormatConversionEnabled = ref(false)
@@ -1455,34 +1454,9 @@ const hasBlockingDialogOpen = computed(() =>
   modelMappingTabRef.value?.dialogOpen
 )
 
-// 所有密钥的扁平列表（带端点信息）
-// key 通过 api_formats 字段确定支持的格式，endpoint 可能为 undefined
+// 当前后端分页页内的密钥列表。key 通过 api_formats 字段确定支持的格式，endpoint 可能为 undefined。
 const allKeys = computed(() => {
-  const result: { key: EndpointAPIKey; endpoint?: ProviderEndpointWithKeys }[] = []
-  const seenKeyIds = new Set<string>()
-
-  // 1. 先添加 Provider 级别的 keys
-  for (const key of providerKeys.value) {
-    if (!seenKeyIds.has(key.id)) {
-      seenKeyIds.add(key.id)
-      // key 没有关联特定 endpoint
-      result.push({ key, endpoint: undefined })
-    }
-  }
-
-  // 2. 再遍历所有端点的 keys（历史数据）
-  for (const endpoint of endpoints.value) {
-    if (endpoint.keys) {
-      for (const key of endpoint.keys) {
-        if (!seenKeyIds.has(key.id)) {
-          seenKeyIds.add(key.id)
-          result.push({ key, endpoint })
-        }
-      }
-    }
-  }
-
-  return result
+  return providerKeys.value.map(key => ({ key, endpoint: undefined as ProviderEndpointWithKeys | undefined }))
 })
 
 const availableKeyApiFormats = computed(() => {
@@ -1544,23 +1518,33 @@ function syncCurrentSelections(
   }
 }
 
-// ===== 账号列表智能分页 =====
-const keysListRef = ref<HTMLElement | null>(null)
-const {
-  currentPage: currentKeyPage,
-  totalPages: totalKeyPages,
-  shouldPaginate: shouldPaginateKeys,
-  paginatedItems: paginatedKeys,
-  fixedHeight: keysFixedHeight,
-  getGlobalIndex: getGlobalKeyIndex,
-  reset: resetKeysPagination,
-} = useSmartPagination(allKeys, keysListRef)
+// ===== 账号列表后端分页 =====
+const providerKeysTotal = ref(0)
+const currentKeyPage = ref(1)
+const keyPageSize = ref(PROVIDER_KEYS_PAGE_SIZE)
+const totalKeyPages = computed(() => Math.max(1, Math.ceil(providerKeysTotal.value / keyPageSize.value)))
+const shouldPaginateKeys = computed(() => totalKeyPages.value > 1)
+const paginatedKeys = computed(() => allKeys.value)
+
+function getGlobalKeyIndex(localIdx: number): number {
+  return localIdx
+}
+
+async function goToKeyPage(page: number) {
+  const nextPage = Math.min(Math.max(page, 1), totalKeyPages.value)
+  if (nextPage === currentKeyPage.value && providerKeys.value.length > 0) return
+  await loadProviderKeysPage(nextPage)
+}
 
 // 合并监听 providerId 和 open，避免同一 tick 内两个 watcher 都触发导致重复请求
 watch(
   [() => props.providerId, () => props.open],
   async ([newId, newOpen], [_oldId, oldOpen]) => {
     if (newOpen && newId) {
+      if (!oldOpen || provider.value?.id !== newId) {
+        currentKeyPage.value = 1
+        providerKeysTotal.value = 0
+      }
       const hasInitialProvider = props.initialProvider?.id === newId
       if (hasInitialProvider) {
         provider.value = props.initialProvider
@@ -1582,6 +1566,7 @@ watch(
       // 使在途请求失效，避免关闭后旧响应回写
       providerLoadRequestId += 1
       endpointsLoadRequestId += 1
+      keysLoadRequestId += 1
       mappingPreviewLoadRequestId += 1
 
       // 停止倒计时定时器
@@ -1591,15 +1576,15 @@ watch(
       provider.value = null
       endpoints.value = []
       providerKeys.value = []  // 清空 Provider 级别的 keys
+      providerKeysTotal.value = 0
+      currentKeyPage.value = 1
+      keyPageSize.value = PROVIDER_KEYS_PAGE_SIZE
       providerModels.value = []
       providerMappingPreview.value = null
       loadingProviderEndpoints.value = false
       loadingProviderKeys.value = false
       loadingProviderModels.value = false
       loadingProviderMappingPreview.value = false
-
-      // 重置分页状态
-      resetKeysPagination()
 
       // 重置所有对话框状态
       endpointDialogOpen.value = false
@@ -1851,11 +1836,14 @@ async function handleRefreshOAuth(key: EndpointAPIKey) {
     if (keyInList) {
       keyInList.oauth_expires_at = refreshedExpiresAt
     }
-    // 只重新加载 keys 数据，避免整个表格刷新
+    // 只重新加载当前 keys 页，避免整个表格刷新
     if (props.providerId) {
-      const freshKeys = await getProviderKeys(props.providerId).catch(() => null)
-      if (freshKeys) {
-        const mergedKeys = freshKeys.map((item) => {
+      const freshPage = await getProviderKeysPage(props.providerId, {
+        page: currentKeyPage.value,
+        page_size: keyPageSize.value,
+      }).catch(() => null)
+      if (freshPage) {
+        const mergedKeys = freshPage.keys.map((item) => {
           if (item.id !== key.id) return item
           if (refreshedExpiresAt == null) return item
           if (typeof item.oauth_expires_at === 'number' && item.oauth_expires_at >= refreshedExpiresAt) {
@@ -1864,6 +1852,9 @@ async function handleRefreshOAuth(key: EndpointAPIKey) {
           return { ...item, oauth_expires_at: refreshedExpiresAt }
         })
         providerKeys.value = mergedKeys
+        providerKeysTotal.value = freshPage.total
+        currentKeyPage.value = freshPage.page
+        keyPageSize.value = freshPage.page_size
         syncCurrentSelections(endpoints.value, mergedKeys)
         refreshedKey = mergedKeys.find(item => item.id === key.id) ?? null
       }
@@ -3507,6 +3498,43 @@ async function loadProvider() {
   }
 }
 
+async function loadProviderKeysPage(page = currentKeyPage.value) {
+  if (!props.providerId) return
+  const providerId = props.providerId
+  const requestId = ++keysLoadRequestId
+  loadingProviderKeys.value = true
+
+  try {
+    const result = await getProviderKeysPage(providerId, {
+      page,
+      page_size: keyPageSize.value,
+    })
+    if (requestId !== keysLoadRequestId || props.providerId !== providerId) return
+
+    const nextTotalPages = Math.max(1, Math.ceil(result.total / result.page_size))
+    if (result.keys.length === 0 && result.total > 0 && result.page > nextTotalPages) {
+      await loadProviderKeysPage(nextTotalPages)
+      return
+    }
+
+    providerKeys.value = result.keys
+    providerKeysTotal.value = result.total
+    currentKeyPage.value = Math.min(result.page, nextTotalPages)
+    keyPageSize.value = result.page_size
+    syncCurrentSelections(endpoints.value, result.keys)
+  } catch (err: unknown) {
+    if (requestId !== keysLoadRequestId || props.providerId !== providerId) return
+    providerKeys.value = []
+    providerKeysTotal.value = 0
+    syncCurrentSelections(endpoints.value, [])
+    showError(parseApiError(err, '加载密钥失败'), '错误')
+  } finally {
+    if (requestId === keysLoadRequestId) {
+      loadingProviderKeys.value = false
+    }
+  }
+}
+
 // 加载端点列表
 async function loadEndpoints() {
   if (!props.providerId) return
@@ -3546,18 +3574,7 @@ async function loadEndpoints() {
       }
     })
 
-  const providerKeysPromise = getProviderKeys(providerId)
-    .catch(() => [])
-    .then((providerKeysResult) => {
-      if (requestId !== endpointsLoadRequestId) return
-      providerKeys.value = providerKeysResult
-      syncCurrentSelections(endpoints.value, providerKeysResult)
-    })
-    .finally(() => {
-      if (requestId === endpointsLoadRequestId) {
-        loadingProviderKeys.value = false
-      }
-    })
+  const providerKeysPromise = loadProviderKeysPage(currentKeyPage.value)
 
   const modelsPromise = getProviderModels(providerId)
     .catch(() => [])

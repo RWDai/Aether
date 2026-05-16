@@ -70,6 +70,21 @@ impl<'a> AdminAppState<'a> {
         .await
     }
 
+    pub(crate) async fn build_admin_provider_keys_page_payload(
+        &self,
+        provider_id: &str,
+        page: usize,
+        page_size: usize,
+    ) -> Option<serde_json::Value> {
+        crate::handlers::admin::provider::write::keys::build_admin_provider_keys_page_payload(
+            self,
+            provider_id,
+            page,
+            page_size,
+        )
+        .await
+    }
+
     pub(crate) fn build_admin_reveal_key_payload(
         &self,
         key: &aether_data_contracts::repository::provider_catalog::StoredProviderCatalogKey,

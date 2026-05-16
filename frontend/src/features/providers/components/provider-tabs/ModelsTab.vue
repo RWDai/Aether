@@ -266,6 +266,7 @@ import ModelTestDialog from './ModelTestDialog.vue'
 import {
   buildDefaultModelTestRequestHeaders,
   buildDefaultModelTestRequestBody,
+  isModelTestableApiFormat,
   isModelTestableEndpoint,
   listModelTestMappedModelOptions,
   normalizeModelTestMappedModelSelection,
@@ -307,7 +308,14 @@ const testRequestBodyResetValue = ref('')
 const selectedTestMappedModelName = ref<string | null>(null)
 const isPoolManagedProvider = computed(() => Boolean(props.provider.pool_advanced))
 const activeEndpoints = computed(() => (props.endpoints ?? [])
-  .filter(endpoint => isModelTestableEndpoint(endpoint, props.providerKeys ?? [])))
+  .filter(endpoint => {
+    if (typeof endpoint.active_keys === 'number') {
+      return endpoint.is_active !== false
+        && isModelTestableApiFormat(endpoint.api_format)
+        && endpoint.active_keys > 0
+    }
+    return isModelTestableEndpoint(endpoint, props.providerKeys ?? [])
+  }))
 const parsedTestRequestHeaders = computed(() => parseModelTestRequestHeadersDraft(testRequestHeadersDraft.value))
 const testRequestHeadersError = computed(() => parsedTestRequestHeaders.value.error)
 const parsedTestRequestBody = computed(() => parseModelTestRequestBodyDraft(testRequestBodyDraft.value))

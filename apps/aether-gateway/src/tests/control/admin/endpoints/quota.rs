@@ -271,6 +271,126 @@ async fn gateway_refreshes_admin_provider_quota_locally_for_codex_with_trusted_a
 }
 
 #[tokio::test]
+async fn gateway_auto_removes_codex_key_when_refresh_and_access_tokens_are_invalid() {
+    let upstream = Router::new().route(
+        "/api/admin/endpoints/providers/provider-codex/refresh-quota",
+        any(move |_request: Request| async move {
+            (StatusCode::OK, Body::from("unexpected upstream hit"))
+        }),
+    );
+
+    let execution_runtime = Router::new().route(
+        "/v1/execute/sync",
+        any(move |request: Request| async move {
+            let plan: aether_contracts::ExecutionPlan = serde_json::from_slice(
+                &to_bytes(request.into_body(), usize::MAX)
+                    .await
+                    .expect("body should read"),
+            )
+            .expect("plan should parse");
+            let result = aether_contracts::ExecutionResult {
+                request_id: plan.request_id,
+                candidate_id: None,
+                status_code: 401,
+                headers: BTreeMap::new(),
+                body: Some(aether_contracts::ResponseBody {
+                    json_body: Some(json!({
+                        "error": {
+                            "message": "session expired"
+                        }
+                    })),
+                    body_bytes_b64: None,
+                }),
+                telemetry: None,
+                error: None,
+            };
+            (StatusCode::OK, Json(result))
+        }),
+    );
+
+    let mut provider = StoredProviderCatalogProvider::new(
+        "provider-codex".to_string(),
+        "codex".to_string(),
+        Some("https://example.com".to_string()),
+        "codex".to_string(),
+    )
+    .expect("provider should build");
+    provider.config = Some(json!({
+        "pool_advanced": {
+            "auto_remove_banned_keys": true
+        }
+    }));
+
+    let mut key = sample_key(
+        "key-codex-expired",
+        "provider-codex",
+        "openai:responses",
+        "stale-access-token",
+    );
+    key.auth_type = "oauth".to_string();
+    key.expires_at_unix_secs = Some(1);
+    key.oauth_invalid_at_unix_secs = Some(1);
+    key.oauth_invalid_reason = Some(
+        "[REFRESH_FAILED] Token 续期失败 (401): refresh_token 无效、已过期或已撤销，请重新登录授权"
+            .to_string(),
+    );
+
+    let provider_catalog_repository = Arc::new(InMemoryProviderCatalogReadRepository::seed(
+        vec![provider],
+        vec![sample_endpoint(
+            "endpoint-codex-cli",
+            "provider-codex",
+            "openai:responses",
+            "https://chatgpt.com/backend-api",
+        )],
+        vec![key],
+    ));
+
+    let (_upstream_url, upstream_handle) = start_server(upstream).await;
+    let (execution_runtime_url, execution_runtime_handle) = start_server(execution_runtime).await;
+    let gateway = build_router_with_state(
+        build_state_with_execution_runtime_override(execution_runtime_url.clone())
+            .with_data_state_for_tests(
+                GatewayDataState::with_provider_catalog_repository_for_tests(
+                    provider_catalog_repository.clone(),
+                )
+                .with_encryption_key_for_tests(DEVELOPMENT_ENCRYPTION_KEY),
+            ),
+    );
+    let (gateway_url, gateway_handle) = start_server(gateway).await;
+
+    let response = reqwest::Client::new()
+        .post(format!(
+            "{gateway_url}/api/admin/endpoints/providers/provider-codex/refresh-quota"
+        ))
+        .header(GATEWAY_HEADER, "rust-phase3b")
+        .header(TRUSTED_ADMIN_USER_ID_HEADER, "admin-user-123")
+        .header(TRUSTED_ADMIN_USER_ROLE_HEADER, "admin")
+        .header(TRUSTED_ADMIN_SESSION_ID_HEADER, "session-123")
+        .send()
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload: serde_json::Value = response.json().await.expect("json body should parse");
+    assert_eq!(payload["success"], 0);
+    assert_eq!(payload["failed"], 1);
+    assert_eq!(payload["auto_removed"], 1);
+    assert_eq!(payload["results"][0]["status"], "auth_invalid");
+    assert_eq!(payload["results"][0]["auto_removed"], true);
+
+    let reloaded = provider_catalog_repository
+        .list_keys_by_ids(&["key-codex-expired".to_string()])
+        .await
+        .expect("keys should read");
+    assert!(reloaded.is_empty());
+
+    gateway_handle.abort();
+    execution_runtime_handle.abort();
+    upstream_handle.abort();
+}
+
+#[tokio::test]
 async fn gateway_refreshes_admin_provider_quota_locally_for_requested_codex_keys_only() {
     let upstream_hits = Arc::new(Mutex::new(0usize));
     let upstream_hits_clone = Arc::clone(&upstream_hits);

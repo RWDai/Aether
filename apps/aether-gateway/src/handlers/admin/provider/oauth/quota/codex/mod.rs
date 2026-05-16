@@ -15,7 +15,7 @@ use self::plan::{build_codex_quota_request_spec, execute_codex_quota_plan};
 use super::shared::{
     build_quota_snapshot_payload, extract_execution_error_message,
     persist_provider_quota_refresh_state, provider_auto_remove_banned_keys,
-    quota_refresh_success_invalid_state, should_auto_remove_structured_reason,
+    quota_refresh_success_invalid_state, should_auto_remove_oauth_invalid_key,
     ProviderQuotaExecutionOutcome,
 };
 use crate::handlers::admin::request::AdminAppState;
@@ -261,8 +261,22 @@ pub(crate) async fn refresh_codex_provider_quota_locally(
             }
         }
 
+        let auto_remove_key = if auto_remove_abnormal_keys {
+            state
+                .read_provider_catalog_keys_by_ids(std::slice::from_ref(&key.id))
+                .await?
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| key.clone())
+        } else {
+            key.clone()
+        };
         let auto_removed = auto_remove_abnormal_keys
-            && should_auto_remove_structured_reason(oauth_invalid_reason.as_deref());
+            && should_auto_remove_oauth_invalid_key(
+                &auto_remove_key,
+                oauth_invalid_reason.as_deref(),
+                now_unix_secs,
+            );
         if auto_removed {
             if state.delete_provider_catalog_key(&key.id).await? {
                 auto_removed_count += 1;

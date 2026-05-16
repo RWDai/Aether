@@ -290,6 +290,14 @@ fn merge_local_oauth_refresh_failure_reason(
         return Some(refresh_reason.to_string());
     }
     if current_reason.starts_with(OAUTH_EXPIRED_PREFIX) {
+        if refresh_reason.starts_with(OAUTH_REFRESH_FAILED_PREFIX)
+            && !current_reason
+                .lines()
+                .map(str::trim)
+                .any(|line| line.starts_with(OAUTH_REFRESH_FAILED_PREFIX))
+        {
+            return Some(format!("{current_reason}\n{refresh_reason}"));
+        }
         return Some(current_reason.to_string());
     }
     if oauth_invalid_reason_is_account_block(Some(current_reason)) {
@@ -1717,13 +1725,16 @@ mod tests {
     }
 
     #[test]
-    fn local_refresh_failure_does_not_replace_access_token_expired_marker() {
+    fn local_refresh_failure_is_appended_to_access_token_expired_marker() {
         assert_eq!(
             super::merge_local_oauth_refresh_failure_reason(
                 Some("[OAUTH_EXPIRED] access token invalid"),
                 "[REFRESH_FAILED] Token 续期失败 (401): refresh_token 无效",
             ),
-            Some("[OAUTH_EXPIRED] access token invalid".to_string()),
+            Some(
+                "[OAUTH_EXPIRED] access token invalid\n[REFRESH_FAILED] Token 续期失败 (401): refresh_token 无效"
+                    .to_string()
+            ),
         );
     }
 

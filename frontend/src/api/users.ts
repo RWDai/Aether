@@ -183,6 +183,10 @@ export interface UserBatchActionResponse {
   success: number
   failed: number
   failures: UserBatchActionFailure[]
+  interrupted?: boolean
+  completed_user_ids?: string[]
+  uncertain_user_ids?: string[]
+  unprocessed_user_ids?: string[]
   warnings?: UserBatchSelectionWarning[]
   action?: string
   modified_fields?: string[]

@@ -165,6 +165,18 @@ pub(super) fn management_token_may_administer_user_accounts(
     })
 }
 
+pub(super) fn management_token_may_adjust_admin_wallet_balance(
+    request_context: &crate::handlers::admin::request::AdminRequestContext<'_>,
+) -> bool {
+    request_context.decision().is_some_and(|decision| {
+        crate::control::management_token_principal_has_permission(decision, "admin:wallets:write")
+            || crate::control::management_token_principal_has_permission(
+                decision,
+                "admin:wallets:admin",
+            )
+    })
+}
+
 pub(super) fn build_admin_users_permission_denied_response(
     request_context: &crate::handlers::admin::request::AdminRequestContext<'_>,
 ) -> Response<Body> {

@@ -210,6 +210,11 @@ const targetRoleWarning = computed(() => {
 const executeButtonLabel = computed(() => legacyT(`确认${selectedActionLabel.value}（${impactCount.value}）`))
 const lastResultLabel = computed(() => {
   if (!lastResult.value) return ''
+  if (lastResult.value.interrupted) {
+    return legacyT(
+      `批量操作中断：成功 ${lastResult.value.success} 个，结果待确认 ${lastResult.value.uncertain_user_ids?.length ?? 0} 个，尚未执行 ${lastResult.value.unprocessed_user_ids?.length ?? 0} 个`,
+    )
+  }
   return legacyT(`成功 ${lastResult.value.success} 个，失败 ${lastResult.value.failed} 个`)
 })
 const lastResultFailuresLabel = computed(() => {
@@ -320,6 +325,11 @@ async function executeBatchAction(): Promise<void> {
   try {
     const result = await usersStore.batchAction(request)
     lastResult.value = result
+    if (result.interrupted) {
+      warning(`${lastResultLabel.value}；${legacyT('请核对余额后再重试，勿直接重试整批')}`)
+      emit('completed', result)
+      return
+    }
     const message = legacyT(`批量操作完成：成功 ${result.success} 个，失败 ${result.failed} 个`)
     if (result.failed > 0) {
       warning(message)

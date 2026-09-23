@@ -19,6 +19,13 @@ impl AppState {
         GatewayError,
     > {
         #[cfg(test)]
+        if self.auth_wallet_adjustment_error_for_tests.as_deref() == Some(wallet_id) {
+            return Err(GatewayError::Internal(
+                "injected test wallet adjustment failure".to_string(),
+            ));
+        }
+
+        #[cfg(test)]
         if let Some(store) = self.auth_wallet_store.as_ref() {
             let mut guard = store.lock().expect("auth wallet store should lock");
             let Some(wallet) = guard.get_mut(wallet_id) else {

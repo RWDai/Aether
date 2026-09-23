@@ -472,6 +472,14 @@ impl AppState {
         self
     }
 
+    pub(crate) fn fail_auth_wallet_adjustment_for_tests(
+        mut self,
+        wallet_id: impl Into<String>,
+    ) -> Self {
+        self.auth_wallet_adjustment_error_for_tests = Some(wallet_id.into());
+        self
+    }
+
     pub(crate) fn with_admin_wallet_payment_orders_for_tests<I>(mut self, orders: I) -> Self
     where
         I: IntoIterator<Item = crate::AdminWalletPaymentOrderRecord>,

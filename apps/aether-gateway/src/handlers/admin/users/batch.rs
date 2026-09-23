@@ -1,6 +1,7 @@
 use super::{
     build_admin_users_bad_request_response, build_admin_users_permission_denied_response,
     build_admin_users_read_only_response, disabled_user_policy_detail, disabled_user_policy_field,
+    management_token_may_adjust_admin_wallet_balance,
     management_token_may_administer_user_accounts, normalize_admin_user_role,
 };
 use crate::handlers::admin::request::{AdminAppState, AdminRequestContext};
@@ -173,6 +174,13 @@ pub(in super::super) async fn build_admin_user_batch_action_response(
             "当前为只读模式，无法批量更新用户钱包",
         ));
     }
+    if mutation.wallet_balance_adjustment.is_some()
+        && !management_token_may_adjust_admin_wallet_balance(request_context)
+    {
+        return Ok(build_admin_users_permission_denied_response(
+            request_context,
+        ));
+    }
     if mutation.wallet_balance_adjustment.is_some() && !state.has_auth_wallet_write_capability() {
         return Ok(build_admin_users_read_only_response(
             "当前为只读模式，无法批量调整用户钱包余额",
@@ -195,9 +203,29 @@ pub(in super::super) async fn build_admin_user_batch_action_response(
         .iter()
         .map(|user_id| json!({ "user_id": user_id, "reason": "用户不存在或已删除" }))
         .collect::<Vec<_>>();
+    let mut completed_user_ids = Vec::new();
+    let mut uncertain_user_ids = Vec::new();
+    let mut unprocessed_user_ids = Vec::new();
+    let mut interrupted = false;
 
-    for item in &resolved.items {
-        if state.find_user_auth_by_id(&item.user_id).await?.is_none() {
+    for (item_index, item) in resolved.items.iter().enumerate() {
+        let user = match state.find_user_auth_by_id(&item.user_id).await {
+            Ok(user) => user,
+            Err(_) => {
+                record_batch_action_interruption(
+                    &resolved.items,
+                    item_index,
+                    false,
+                    "读取用户状态失败，批次已中止，该用户未执行",
+                    &mut failures,
+                    &mut uncertain_user_ids,
+                    &mut unprocessed_user_ids,
+                );
+                interrupted = true;
+                break;
+            }
+        };
+        if user.is_none() {
             failures.push(json!({
                 "user_id": item.user_id,
                 "reason": "用户不存在或已删除",
@@ -220,34 +248,66 @@ pub(in super::super) async fn build_admin_user_batch_action_response(
         }
 
         if let Some(unlimited) = mutation.unlimited {
-            if !apply_batch_user_wallet_limit_mode(state, &item.user_id, unlimited).await? {
-                failures.push(json!({
-                    "user_id": item.user_id,
-                    "reason": "用户钱包不可用",
-                }));
-                continue;
+            match apply_batch_user_wallet_limit_mode(state, &item.user_id, unlimited).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    failures.push(json!({
+                        "user_id": item.user_id,
+                        "reason": "用户钱包不可用",
+                    }));
+                    continue;
+                }
+                Err(_) => {
+                    record_batch_action_interruption(
+                        &resolved.items,
+                        item_index,
+                        true,
+                        "用户钱包更新结果未确认，批次已中止，请核对钱包后再重试",
+                        &mut failures,
+                        &mut uncertain_user_ids,
+                        &mut unprocessed_user_ids,
+                    );
+                    interrupted = true;
+                    break;
+                }
             }
         }
 
         if let Some(adjustment) = mutation.wallet_balance_adjustment {
-            if !apply_batch_user_wallet_balance_adjustment(
+            match apply_batch_user_wallet_balance_adjustment(
                 state,
                 &item.user_id,
                 adjustment,
                 current_admin_user_id,
             )
-            .await?
+            .await
             {
-                failures.push(json!({
-                    "user_id": item.user_id,
-                    "reason": "用户钱包不可用",
-                }));
-                continue;
+                Ok(true) => {}
+                Ok(false) => {
+                    failures.push(json!({
+                        "user_id": item.user_id,
+                        "reason": "用户钱包不可用",
+                    }));
+                    continue;
+                }
+                Err(_) => {
+                    record_batch_action_interruption(
+                        &resolved.items,
+                        item_index,
+                        true,
+                        "余额调整结果未确认，批次已中止，请核对钱包后再重试",
+                        &mut failures,
+                        &mut uncertain_user_ids,
+                        &mut unprocessed_user_ids,
+                    );
+                    interrupted = true;
+                    break;
+                }
             }
         }
 
-        if mutation.has_auth_user_fields()
-            && state
+        if mutation.has_auth_user_fields() {
+            let updated_user = match state
                 .update_local_auth_user_admin_fields(
                     &item.user_id,
                     mutation.role.clone(),
@@ -261,22 +321,39 @@ pub(in super::super) async fn build_admin_user_batch_action_response(
                     None,
                     mutation.is_active,
                 )
-                .await?
-                .is_none()
-        {
-            failures.push(json!({
-                "user_id": item.user_id,
-                "reason": "用户不存在或已删除",
-            }));
-            continue;
+                .await
+            {
+                Ok(user) => user,
+                Err(_) => {
+                    record_batch_action_interruption(
+                        &resolved.items,
+                        item_index,
+                        true,
+                        "用户更新结果未确认，批次已中止，请核对后再重试",
+                        &mut failures,
+                        &mut uncertain_user_ids,
+                        &mut unprocessed_user_ids,
+                    );
+                    interrupted = true;
+                    break;
+                }
+            };
+            if updated_user.is_none() {
+                failures.push(json!({
+                    "user_id": item.user_id,
+                    "reason": "用户不存在或已删除",
+                }));
+                continue;
+            }
         }
 
         success += 1;
+        completed_user_ids.push(item.user_id.clone());
     }
 
     let failed = failures.len();
     let total = success + failed;
-    let response = Json(json!({
+    let mut response_payload = json!({
         "total": total,
         "success": success,
         "failed": failed,
@@ -284,8 +361,14 @@ pub(in super::super) async fn build_admin_user_batch_action_response(
         "warnings": resolved.warnings,
         "action": request.action.trim().to_ascii_lowercase(),
         "modified_fields": mutation.modified_fields,
-    }))
-    .into_response();
+        "interrupted": interrupted,
+    });
+    if interrupted {
+        response_payload["completed_user_ids"] = json!(completed_user_ids);
+        response_payload["uncertain_user_ids"] = json!(uncertain_user_ids);
+        response_payload["unprocessed_user_ids"] = json!(unprocessed_user_ids);
+    }
+    let response = Json(response_payload).into_response();
 
     Ok(attach_admin_audit_response(
         response,
@@ -294,6 +377,35 @@ pub(in super::super) async fn build_admin_user_batch_action_response(
         "user_batch",
         "users",
     ))
+}
+
+fn record_batch_action_interruption(
+    items: &[AdminUserSelectionItem],
+    item_index: usize,
+    current_result_uncertain: bool,
+    reason: &str,
+    failures: &mut Vec<Value>,
+    uncertain_user_ids: &mut Vec<String>,
+    unprocessed_user_ids: &mut Vec<String>,
+) {
+    let current_item = &items[item_index];
+    failures.push(json!({
+        "user_id": current_item.user_id,
+        "reason": reason,
+    }));
+    if current_result_uncertain {
+        uncertain_user_ids.push(current_item.user_id.clone());
+    } else {
+        unprocessed_user_ids.push(current_item.user_id.clone());
+    }
+
+    for item in items.iter().skip(item_index + 1) {
+        failures.push(json!({
+            "user_id": item.user_id,
+            "reason": "因前序错误未执行",
+        }));
+        unprocessed_user_ids.push(item.user_id.clone());
+    }
 }
 
 fn parse_resolve_selection_request(

@@ -466,6 +466,8 @@ impl AppState {
             #[cfg(test)]
             auth_wallet_store: Some(Arc::new(StdMutex::new(HashMap::new()))),
             #[cfg(test)]
+            auth_wallet_adjustment_error_for_tests: None,
+            #[cfg(test)]
             admin_wallet_payment_order_store: Some(Arc::new(StdMutex::new(HashMap::new()))),
             #[cfg(test)]
             admin_payment_callback_store: Some(Arc::new(StdMutex::new(HashMap::new()))),

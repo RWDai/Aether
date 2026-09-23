@@ -807,6 +807,14 @@ impl SqlxWalletRepository {
     }
 }
 
+fn effective_wallet_adjustment_amount(input: &AdjustWalletBalanceInput, before_total: f64) -> f64 {
+    if input.clamp_deduction_to_available_balance && input.amount_usd < 0.0 {
+        -(-input.amount_usd).min(before_total.max(0.0))
+    } else {
+        input.amount_usd
+    }
+}
+
 #[async_trait]
 impl WalletReadRepository for SqlxWalletRepository {
     async fn find(
@@ -4262,7 +4270,8 @@ RETURNING
     async fn adjust_wallet_balance(
         &self,
         input: AdjustWalletBalanceInput,
-    ) -> Result<Option<(StoredWalletSnapshot, StoredAdminWalletTransaction)>, DataLayerError> {
+    ) -> Result<Option<(StoredWalletSnapshot, Option<StoredAdminWalletTransaction>)>, DataLayerError>
+    {
         if !input.amount_usd.is_finite() || input.amount_usd == 0.0 {
             return Err(DataLayerError::InvalidInput(
                 "adjustment amount must be finite and non-zero".to_string(),
@@ -4285,7 +4294,8 @@ SELECT
   CAST(total_recharged AS DOUBLE PRECISION) AS total_recharged,
   CAST(total_consumed AS DOUBLE PRECISION) AS total_consumed,
   CAST(total_refunded AS DOUBLE PRECISION) AS total_refunded,
-  CAST(total_adjusted AS DOUBLE PRECISION) AS total_adjusted
+  CAST(total_adjusted AS DOUBLE PRECISION) AS total_adjusted,
+  CAST(EXTRACT(EPOCH FROM updated_at) AS BIGINT) AS updated_at_unix_secs
 FROM wallets
 WHERE id = $1
 FOR UPDATE
@@ -4312,17 +4322,21 @@ FOR UPDATE
                             "wallet balance is invalid".to_string(),
                         ));
                     }
+                    let amount_usd = effective_wallet_adjustment_amount(&input, before_total);
+                    if amount_usd == 0.0 {
+                        return Ok(Some((map_wallet_row(&row)?, None)));
+                    }
                     let mut after_recharge = before_recharge;
                     let mut after_gift = before_gift;
 
-                    if input.amount_usd > 0.0 {
+                    if amount_usd > 0.0 {
                         if input.balance_type.eq_ignore_ascii_case("gift") {
-                            after_gift += input.amount_usd;
+                            after_gift += amount_usd;
                         } else {
-                            after_recharge += input.amount_usd;
+                            after_recharge += amount_usd;
                         }
                     } else {
-                        let mut remaining = -input.amount_usd;
+                        let mut remaining = -amount_usd;
                         let consume_positive_bucket = |balance: &mut f64, to_consume: &mut f64| {
                             if *to_consume <= 0.0 {
                                 return;
@@ -4344,7 +4358,7 @@ FOR UPDATE
                         }
                     }
                     let after_total = after_recharge + after_gift;
-                    let after_total_adjusted = before_total_adjusted + input.amount_usd;
+                    let after_total_adjusted = before_total_adjusted + amount_usd;
                     if !after_recharge.is_finite()
                         || !after_gift.is_finite()
                         || !after_total.is_finite()
@@ -4383,7 +4397,7 @@ RETURNING
                     .bind(&input.wallet_id)
                     .bind(after_recharge)
                     .bind(after_gift)
-                    .bind(input.amount_usd)
+                    .bind(amount_usd)
                     .fetch_one(&mut **tx)
                     .await
                     .map_postgres_err()?;
@@ -4439,7 +4453,7 @@ VALUES (
                     )
                     .bind(&transaction_id)
                     .bind(&input.wallet_id)
-                    .bind(input.amount_usd)
+                    .bind(amount_usd)
                     .bind(before_total)
                     .bind(after_total)
                     .bind(before_recharge)
@@ -4455,12 +4469,12 @@ VALUES (
 
                     Ok(Some((
                         wallet,
-                        StoredAdminWalletTransaction {
+                        Some(StoredAdminWalletTransaction {
                             id: transaction_id,
                             wallet_id: input.wallet_id,
                             category: "adjust".to_string(),
                             reason_code: "adjust_admin".to_string(),
-                            amount: input.amount_usd,
+                            amount: amount_usd,
                             balance_before: before_total,
                             balance_after: after_total,
                             recharge_balance_before: before_recharge,
@@ -4474,7 +4488,7 @@ VALUES (
                             operator_email: None,
                             description: Some(description),
                             created_at_unix_ms: Some(created_at),
-                        },
+                        }),
                     )))
                 })
             })
@@ -8489,13 +8503,14 @@ VALUES ($1, $2, 'gift', 'gift_initial', $3, 0, $3, 0, 0, 0, $3, 'system_task', $
 #[cfg(test)]
 mod tests {
     use aether_data_contracts::repository::wallet::{
-        CreateManualWalletRechargeInput, CreditAdminPaymentOrderInput, ProcessPaymentCallbackInput,
-        ProcessPaymentCallbackOutcome, RedeemWalletCodeInput, RedeemWalletCodeOutcome,
-        WalletLookupKey, WalletMutationOutcome, WalletReadRepository, WalletWriteRepository,
+        AdjustWalletBalanceInput, CreateManualWalletRechargeInput, CreditAdminPaymentOrderInput,
+        ProcessPaymentCallbackInput, ProcessPaymentCallbackOutcome, RedeemWalletCodeInput,
+        RedeemWalletCodeOutcome, WalletLookupKey, WalletMutationOutcome, WalletReadRepository,
+        WalletWriteRepository,
     };
     use sqlx::Row;
 
-    use super::SqlxWalletRepository;
+    use super::{effective_wallet_adjustment_amount, SqlxWalletRepository};
     use crate::{PostgresPoolConfig, PostgresPoolFactory};
 
     #[test]
@@ -9218,6 +9233,117 @@ mod tests {
                 assert_eq!(count, 1, "redeeming twice must not duplicate {table}");
             }
         }
+        pool.close().await;
+    }
+
+    #[test]
+    fn bulk_adjustment_clamp_is_opt_in_and_uses_available_total() {
+        let input = AdjustWalletBalanceInput {
+            wallet_id: "wallet-1".to_string(),
+            amount_usd: -100.0,
+            balance_type: "recharge".to_string(),
+            operator_id: None,
+            description: None,
+            clamp_deduction_to_available_balance: true,
+        };
+        assert_eq!(effective_wallet_adjustment_amount(&input, 13.0), -13.0);
+        assert_eq!(effective_wallet_adjustment_amount(&input, 0.0), -0.0);
+        assert_eq!(effective_wallet_adjustment_amount(&input, -1.0), -0.0);
+
+        let legacy_input = AdjustWalletBalanceInput {
+            clamp_deduction_to_available_balance: false,
+            ..input
+        };
+        assert_eq!(
+            effective_wallet_adjustment_amount(&legacy_input, 13.0),
+            -100.0
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires AETHER_TEST_DATABASE_URL and PostgreSQL bootstrap schema"]
+    async fn live_bulk_wallet_adjustment_persists_actual_delta_and_skips_zero_ledger() {
+        let pool = isolated_wallet_test_pool().await;
+        let (wallet_id, _) = seed_wallet(&pool).await;
+        let repository = SqlxWalletRepository::new(pool.clone());
+
+        let (wallet, transaction) = repository
+            .adjust_wallet_balance(AdjustWalletBalanceInput {
+                wallet_id: wallet_id.clone(),
+                amount_usd: -100.0,
+                balance_type: "recharge".to_string(),
+                operator_id: Some("admin-user".to_string()),
+                description: Some("bulk deduction".to_string()),
+                clamp_deduction_to_available_balance: true,
+            })
+            .await
+            .expect("bulk adjustment should succeed")
+            .expect("wallet should exist");
+        let transaction =
+            transaction.expect("positive available balance should create a ledger row");
+        assert_eq!(transaction.amount, -13.0);
+        assert_eq!(transaction.balance_before, 13.0);
+        assert_eq!(transaction.balance_after, 0.0);
+        assert_eq!(wallet.balance + wallet.gift_balance, 0.0);
+        let persisted_amount: f64 =
+            sqlx::query_scalar("SELECT amount FROM wallet_transactions WHERE id = $1")
+                .bind(&transaction.id)
+                .fetch_one(&pool)
+                .await
+                .expect("ledger should store the effective deduction");
+        assert_eq!(persisted_amount, -13.0);
+
+        let (wallet, transaction) = repository
+            .adjust_wallet_balance(AdjustWalletBalanceInput {
+                wallet_id: wallet_id.clone(),
+                amount_usd: -1.0,
+                balance_type: "recharge".to_string(),
+                operator_id: Some("admin-user".to_string()),
+                description: Some("bulk deduction at zero".to_string()),
+                clamp_deduction_to_available_balance: true,
+            })
+            .await
+            .expect("zero-balance adjustment should succeed")
+            .expect("wallet should still exist");
+        assert_eq!(wallet.balance + wallet.gift_balance, 0.0);
+        assert!(
+            transaction.is_none(),
+            "zero effective delta must not create a ledger row"
+        );
+        let transaction_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM wallet_transactions WHERE wallet_id = $1")
+                .bind(&wallet_id)
+                .fetch_one(&pool)
+                .await
+                .expect("ledger row count should be readable");
+        assert_eq!(transaction_count, 1);
+
+        sqlx::query("UPDATE wallets SET balance = -2, gift_balance = 1 WHERE id = $1")
+            .bind(&wallet_id)
+            .execute(&pool)
+            .await
+            .expect("legacy negative wallet balance should be seeded");
+        let (wallet, transaction) = repository
+            .adjust_wallet_balance(AdjustWalletBalanceInput {
+                wallet_id: wallet_id.clone(),
+                amount_usd: -1.0,
+                balance_type: "recharge".to_string(),
+                operator_id: Some("admin-user".to_string()),
+                description: Some("bulk deduction from negative balance".to_string()),
+                clamp_deduction_to_available_balance: true,
+            })
+            .await
+            .expect("legacy negative wallet should remain usable")
+            .expect("wallet should still exist");
+        assert_eq!(wallet.balance + wallet.gift_balance, -1.0);
+        assert!(transaction.is_none());
+        let transaction_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM wallet_transactions WHERE wallet_id = $1")
+                .bind(&wallet_id)
+                .fetch_one(&pool)
+                .await
+                .expect("ledger row count should be readable");
+        assert_eq!(transaction_count, 1);
         pool.close().await;
     }
 

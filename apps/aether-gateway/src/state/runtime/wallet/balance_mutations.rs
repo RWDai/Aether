@@ -10,10 +10,11 @@ impl AppState {
         balance_type: &str,
         operator_id: Option<&str>,
         description: Option<&str>,
+        clamp_deduction_to_available_balance: bool,
     ) -> Result<
         Option<(
             aether_data::repository::wallet::StoredWalletSnapshot,
-            AdminWalletTransactionRecord,
+            Option<AdminWalletTransactionRecord>,
         )>,
         GatewayError,
     > {
@@ -27,6 +28,14 @@ impl AppState {
             let before_recharge = wallet.balance;
             let before_gift = wallet.gift_balance;
             let before_total = before_recharge + before_gift;
+            let amount_usd = if clamp_deduction_to_available_balance && amount_usd < 0.0 {
+                -(-amount_usd).min(before_total.max(0.0))
+            } else {
+                amount_usd
+            };
+            if amount_usd == 0.0 {
+                return Ok(Some((wallet.clone(), None)));
+            }
             let mut after_recharge = before_recharge;
             let mut after_gift = before_gift;
 
@@ -90,7 +99,7 @@ impl AppState {
             let updated_wallet = wallet.clone();
             drop(guard);
             self.invalidate_auth_context_cache();
-            return Ok(Some((updated_wallet, transaction)));
+            return Ok(Some((updated_wallet, Some(transaction))));
         }
 
         Ok(self
@@ -100,10 +109,14 @@ impl AppState {
                 balance_type: balance_type.to_string(),
                 operator_id: operator_id.map(ToOwned::to_owned),
                 description: description.map(ToOwned::to_owned),
+                clamp_deduction_to_available_balance,
             })
             .await?
             .map(|(wallet, transaction)| {
-                (wallet, stored_wallet_transaction_to_gateway(transaction))
+                (
+                    wallet,
+                    transaction.map(stored_wallet_transaction_to_gateway),
+                )
             }))
     }
 

@@ -2,7 +2,7 @@
   <Dialog
     :model-value="open"
     :title="legacyT('用户批量操作')"
-    :description="legacyT('按当前选择批量调整用户状态、角色和额度')"
+    :description="legacyT('按当前选择批量调整用户状态、角色、额度和钱包余额')"
     size="2xl"
     persistent
     @update:model-value="handleDialogUpdate"
@@ -39,6 +39,55 @@
         v-model="quotaMode"
       />
 
+      <div
+        v-if="selectedAction === 'adjust_wallet_balance'"
+        class="space-y-3 rounded-xl border border-border bg-background p-4"
+      >
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <Label for="user-batch-wallet-amount" class="text-sm font-medium">
+            {{ legacyT('调整金额 (USD)') }}
+          </Label>
+          <div class="inline-flex rounded-md border border-border p-0.5" role="group" :aria-label="legacyT('余额调整方式')">
+            <Button
+              type="button"
+              size="sm"
+              :variant="balanceOperation === 'add' ? 'default' : 'ghost'"
+              :aria-pressed="balanceOperation === 'add'"
+              @click="balanceOperation = 'add'"
+            >
+              <Plus class="mr-1.5 h-4 w-4" />
+              {{ legacyT('增加') }}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              :variant="balanceOperation === 'deduct' ? 'default' : 'ghost'"
+              :aria-pressed="balanceOperation === 'deduct'"
+              @click="balanceOperation = 'deduct'"
+            >
+              <Minus class="mr-1.5 h-4 w-4" />
+              {{ legacyT('扣减') }}
+            </Button>
+          </div>
+        </div>
+        <Input
+          id="user-batch-wallet-amount"
+          :model-value="balanceAmount"
+          type="number"
+          min="0"
+          step="any"
+          inputmode="decimal"
+          :aria-invalid="balanceAmount !== '' && balancePayload === null"
+          @update:model-value="balanceAmount = String($event)"
+        />
+        <p v-if="balanceAmount !== '' && balancePayload === null" class="text-xs text-destructive">
+          {{ legacyT('请输入大于 0 的有限金额') }}
+        </p>
+        <p class="text-xs leading-relaxed text-muted-foreground">
+          {{ legacyT('扣减超过单个用户可用余额时，该用户余额将归零。') }}
+        </p>
+      </div>
+
       <UserBatchResultSummary
         :result="lastResult"
         :label="lastResultLabel"
@@ -69,7 +118,10 @@ import { computed, ref, watch } from 'vue'
 import {
   Dialog,
   Button,
+  Input,
+  Label,
 } from '@/components/ui'
+import { Minus, Plus } from 'lucide-vue-next'
 import { useUsersStore } from '@/stores/users'
 import { useToast } from '@/composables/useToast'
 import { parseApiError } from '@/utils/errorParser'
@@ -82,11 +134,13 @@ import UserBatchRolePanel from './UserBatchRolePanel.vue'
 import UserBatchTargetSummary from './UserBatchTargetSummary.vue'
 import { USER_BATCH_ACTION_OPTIONS } from './user-management-config'
 import type { UserBatchQuotaMode } from './user-management-types'
+import { buildUserBatchBalanceAdjustmentPayload } from '@/api/users'
 import type {
   UserBatchAccessControlPayload,
   UserBatchAction,
   UserBatchActionRequest,
   UserBatchActionResponse,
+  UserBatchBalanceOperation,
   UserBatchRolePayload,
   UserBatchSelection,
   UserBatchSelectionFilters,
@@ -116,6 +170,8 @@ const { legacyT, locale } = useI18n()
 const selectedAction = ref<UserBatchAction>('enable')
 const targetRole = ref<UserRole>('user')
 const quotaMode = ref<UserBatchQuotaMode>('skip')
+const balanceOperation = ref<UserBatchBalanceOperation>('add')
+const balanceAmount = ref('')
 const selectedGroupIds = ref<string[]>([])
 const previewLoading = ref(false)
 const previewItems = ref<UserBatchSelectionItem[]>([])
@@ -125,7 +181,16 @@ const lastResult = ref<UserBatchActionResponse | null>(null)
 
 const hasAnyTarget = computed(() => props.selectedCount > 0 || selectedGroupIds.value.length > 0)
 const impactCount = computed(() => resolvedTotal.value ?? props.selectedCount)
-const canExecute = computed(() => hasAnyTarget.value && !previewLoading.value && !executing.value)
+const balancePayload = computed(() => buildUserBatchBalanceAdjustmentPayload(
+  balanceOperation.value,
+  balanceAmount.value,
+))
+const canExecute = computed(() => (
+  hasAnyTarget.value
+  && !previewLoading.value
+  && !executing.value
+  && (selectedAction.value !== 'adjust_wallet_balance' || balancePayload.value !== null)
+))
 const selectedActionLabel = computed(() => (
   USER_BATCH_ACTION_OPTIONS.find((action) => action.value === selectedAction.value)?.label ?? '批量操作'
 ))
@@ -149,7 +214,9 @@ const lastResultLabel = computed(() => {
 })
 const lastResultFailuresLabel = computed(() => {
   if (!lastResult.value || lastResult.value.failures.length === 0) return ''
-  const failures = lastResult.value.failures.slice(0, 3).map((item) => `${item.user_id} ${item.reason}`).join(locale.value === 'en-US' ? '; ' : '；')
+  const failures = lastResult.value.failures.slice(0, 3)
+    .map((item) => `${item.user_id} ${legacyT(item.reason)}`)
+    .join(locale.value === 'en-US' ? '; ' : '；')
   return locale.value === 'en-US' ? `: ${failures}` : `：${failures}`
 })
 
@@ -177,6 +244,8 @@ function resetLocalState(): void {
   selectedAction.value = 'enable'
   targetRole.value = 'user'
   quotaMode.value = 'skip'
+  balanceOperation.value = 'add'
+  balanceAmount.value = ''
   selectedGroupIds.value = []
   lastResult.value = null
 }
@@ -235,6 +304,12 @@ async function executeBatchAction(): Promise<void> {
       return
     }
     request = { selection, action: 'update_access_control', payload }
+  } else if (selectedAction.value === 'adjust_wallet_balance') {
+    if (balancePayload.value === null) {
+      warning(legacyT('请输入大于 0 的有限金额'))
+      return
+    }
+    request = { selection, action: 'adjust_wallet_balance', payload: balancePayload.value }
   } else if (selectedAction.value === 'update_role') {
     request = { selection, action: 'update_role', payload: buildRolePayload() }
   } else {
@@ -253,7 +328,7 @@ async function executeBatchAction(): Promise<void> {
     }
     emit('completed', result)
   } catch (err) {
-    error(parseApiError(err, '批量操作失败'), legacyT('批量操作失败'))
+    error(legacyT(parseApiError(err, '批量操作失败')), legacyT('批量操作失败'))
   } finally {
     executing.value = false
   }

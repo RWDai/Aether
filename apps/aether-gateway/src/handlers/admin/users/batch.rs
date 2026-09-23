@@ -88,6 +88,7 @@ struct AdminUserBatchMutation {
     role: Option<String>,
     is_active: Option<bool>,
     unlimited: Option<bool>,
+    wallet_balance_adjustment: Option<AdminUserWalletBalanceAdjustment>,
     modified_fields: Vec<&'static str>,
 }
 
@@ -95,6 +96,18 @@ impl AdminUserBatchMutation {
     fn has_auth_user_fields(&self) -> bool {
         self.role.is_some() || self.is_active.is_some()
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AdminUserWalletBalanceAdjustment {
+    operation: AdminUserWalletBalanceOperation,
+    amount: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum AdminUserWalletBalanceOperation {
+    Add,
+    Deduct,
 }
 
 pub(in super::super) async fn build_admin_resolve_user_selection_response(
@@ -160,6 +173,11 @@ pub(in super::super) async fn build_admin_user_batch_action_response(
             "当前为只读模式，无法批量更新用户钱包",
         ));
     }
+    if mutation.wallet_balance_adjustment.is_some() && !state.has_auth_wallet_write_capability() {
+        return Ok(build_admin_users_read_only_response(
+            "当前为只读模式，无法批量调整用户钱包余额",
+        ));
+    }
     let active_admin_demotions = count_active_admin_demotions(&mutation, &resolved.items);
     let active_admin_count = if active_admin_demotions > 0 {
         state.count_active_admin_users().await?
@@ -203,6 +221,23 @@ pub(in super::super) async fn build_admin_user_batch_action_response(
 
         if let Some(unlimited) = mutation.unlimited {
             if !apply_batch_user_wallet_limit_mode(state, &item.user_id, unlimited).await? {
+                failures.push(json!({
+                    "user_id": item.user_id,
+                    "reason": "用户钱包不可用",
+                }));
+                continue;
+            }
+        }
+
+        if let Some(adjustment) = mutation.wallet_balance_adjustment {
+            if !apply_batch_user_wallet_balance_adjustment(
+                state,
+                &item.user_id,
+                adjustment,
+                current_admin_user_id,
+            )
+            .await?
+            {
                 failures.push(json!({
                     "user_id": item.user_id,
                     "reason": "用户钱包不可用",
@@ -604,8 +639,35 @@ fn parse_batch_mutation(
         }),
         "update_access_control" => parse_access_control_mutation(payload),
         "update_role" => parse_role_mutation(payload),
+        "adjust_wallet_balance" => parse_wallet_balance_adjustment_mutation(payload),
         _ => Err("不支持的批量操作".to_string()),
     }
+}
+
+fn parse_wallet_balance_adjustment_mutation(
+    payload: Option<Value>,
+) -> Result<AdminUserBatchMutation, String> {
+    let Some(Value::Object(payload)) = payload else {
+        return Err("payload 必须是对象".to_string());
+    };
+    let operation = match payload.get("operation").and_then(Value::as_str) {
+        Some("add") => AdminUserWalletBalanceOperation::Add,
+        Some("deduct") => AdminUserWalletBalanceOperation::Deduct,
+        _ => return Err("operation 必须为 add 或 deduct".to_string()),
+    };
+    let amount = payload
+        .get("amount")
+        .and_then(Value::as_f64)
+        .ok_or_else(|| "amount 必须为大于 0 的有限数字".to_string())?;
+    if !amount.is_finite() || amount <= 0.0 {
+        return Err("amount 必须为大于 0 的有限数字".to_string());
+    }
+
+    Ok(AdminUserBatchMutation {
+        wallet_balance_adjustment: Some(AdminUserWalletBalanceAdjustment { operation, amount }),
+        modified_fields: vec!["wallet_balance"],
+        ..AdminUserBatchMutation::default()
+    })
 }
 
 fn parse_role_mutation(payload: Option<Value>) -> Result<AdminUserBatchMutation, String> {
@@ -722,6 +784,39 @@ async fn apply_batch_user_wallet_limit_mode(
             .await?
             .is_some()),
     }
+}
+
+async fn apply_batch_user_wallet_balance_adjustment(
+    state: &AdminAppState<'_>,
+    user_id: &str,
+    adjustment: AdminUserWalletBalanceAdjustment,
+    operator_id: Option<&str>,
+) -> Result<bool, GatewayError> {
+    // Resolve only the wallet ID; the repository clamps the deduction under its row lock.
+    let Some(wallet) = state
+        .find_wallet(aether_data::repository::wallet::WalletLookupKey::UserId(
+            user_id,
+        ))
+        .await?
+    else {
+        return Ok(false);
+    };
+    let amount = match adjustment.operation {
+        AdminUserWalletBalanceOperation::Add => adjustment.amount,
+        AdminUserWalletBalanceOperation::Deduct => -adjustment.amount,
+    };
+
+    Ok(state
+        .admin_adjust_wallet_balance(
+            &wallet.id,
+            amount,
+            "recharge",
+            operator_id,
+            Some("管理员批量调整用户余额"),
+            true,
+        )
+        .await?
+        .is_some())
 }
 
 fn build_admin_user_batch_bad_request_response(detail: String) -> Response<Body> {

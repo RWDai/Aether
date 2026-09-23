@@ -1066,7 +1066,8 @@ impl GatewayDataState {
     pub(crate) async fn adjust_wallet_balance(
         &self,
         input: AdjustWalletBalanceInput,
-    ) -> Result<Option<(StoredWalletSnapshot, StoredAdminWalletTransaction)>, DataLayerError> {
+    ) -> Result<Option<(StoredWalletSnapshot, Option<StoredAdminWalletTransaction>)>, DataLayerError>
+    {
         match &self.wallet_writer {
             Some(repository) => repository.adjust_wallet_balance(input).await,
             None => Ok(None),

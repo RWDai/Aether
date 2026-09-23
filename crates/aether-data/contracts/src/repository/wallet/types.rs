@@ -2462,6 +2462,8 @@ pub struct AdjustWalletBalanceInput {
     pub balance_type: String,
     pub operator_id: Option<String>,
     pub description: Option<String>,
+    #[serde(default)]
+    pub clamp_deduction_to_available_balance: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -2893,7 +2895,10 @@ pub trait WalletWriteRepository: Send + Sync {
     async fn adjust_wallet_balance(
         &self,
         input: AdjustWalletBalanceInput,
-    ) -> Result<Option<(StoredWalletSnapshot, StoredAdminWalletTransaction)>, crate::DataLayerError>;
+    ) -> Result<
+        Option<(StoredWalletSnapshot, Option<StoredAdminWalletTransaction>)>,
+        crate::DataLayerError,
+    >;
 
     async fn create_manual_wallet_recharge(
         &self,

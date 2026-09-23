@@ -494,6 +494,8 @@ pub struct AppState {
     #[cfg(test)]
     pub(crate) auth_wallet_adjustment_error_for_tests: Option<String>,
     #[cfg(test)]
+    pub(crate) auth_wallet_lookup_error_for_tests: Option<String>,
+    #[cfg(test)]
     pub(crate) admin_wallet_payment_order_store:
         Option<Arc<StdMutex<HashMap<String, AdminWalletPaymentOrderRecord>>>>,
     #[cfg(test)]

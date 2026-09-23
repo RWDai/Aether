@@ -176,6 +176,7 @@ async fn gateway_batches_wallet_addition_deduction_and_clamped_deduction_per_use
 async fn gateway_requires_wallet_write_permission_for_batch_balance_adjustments() {
     let users_write_token = "ae-batch-users-write-only";
     let wallet_write_token = "ae-batch-users-wallet-write";
+    let wallet_admin_token = "ae-batch-users-wallet-admin";
     let token_owner = sample_user_with_role("token-owner", "admin");
     let target_user = sample_user("user-1");
     let mut users_only = sample_management_token(
@@ -194,8 +195,16 @@ async fn gateway_requires_wallet_write_permission_for_batch_balance_adjustments(
     );
     users_and_wallets.token.allowed_ips = None;
     users_and_wallets.token.permissions = Some(json!(["admin:users:write", "admin:wallets:write"]));
+    let mut wallets_admin = sample_management_token(
+        "token-users-wallet-admin",
+        &token_owner.id,
+        &token_owner.username,
+        true,
+    );
+    wallets_admin.token.allowed_ips = None;
+    wallets_admin.token.permissions = Some(json!(["admin:users:write", "admin:wallets:admin"]));
     let token_repository = Arc::new(InMemoryManagementTokenRepository::seed_with_hashes(
-        vec![users_only, users_and_wallets],
+        vec![users_only, users_and_wallets, wallets_admin],
         vec![
             (
                 hash_management_token(users_write_token),
@@ -204,6 +213,10 @@ async fn gateway_requires_wallet_write_permission_for_batch_balance_adjustments(
             (
                 hash_management_token(wallet_write_token),
                 "token-users-and-wallet-write".to_string(),
+            ),
+            (
+                hash_management_token(wallet_admin_token),
+                "token-users-wallet-admin".to_string(),
             ),
         ],
     ));
@@ -235,6 +248,12 @@ async fn gateway_requires_wallet_write_permission_for_batch_balance_adjustments(
         .await
         .expect("users-only management token request should complete");
     assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    let denied_payload: Value = denied.json().await.expect("response should parse");
+    assert_eq!(
+        denied_payload["required_permissions"],
+        json!(["admin:wallets:write", "admin:wallets:admin"])
+    );
+    assert_eq!(denied_payload["permission_mode"], "any_of");
     assert_eq!(
         wallet_detail(&client, &gateway_url, "user-1").await["balance"],
         10.0
@@ -254,6 +273,25 @@ async fn gateway_requires_wallet_write_permission_for_batch_balance_adjustments(
     assert_eq!(
         wallet_detail(&client, &gateway_url, "user-1").await["balance"],
         15.0
+    );
+
+    let allowed_with_wallet_admin = client
+        .post(format!("{gateway_url}/api/admin/users/batch-action"))
+        .header(crate::constants::GATEWAY_HEADER, "rust-phase3b")
+        .bearer_auth(wallet_admin_token)
+        .json(&payload)
+        .send()
+        .await
+        .expect("wallet-admin management token request should complete");
+    assert_eq!(allowed_with_wallet_admin.status(), StatusCode::OK);
+    let result: Value = allowed_with_wallet_admin
+        .json()
+        .await
+        .expect("response should parse");
+    assert_eq!(result["success"], 1);
+    assert_eq!(
+        wallet_detail(&client, &gateway_url, "user-1").await["balance"],
+        20.0
     );
 
     gateway_handle.abort();
@@ -297,6 +335,56 @@ async fn gateway_reports_completed_uncertain_and_unprocessed_users_after_adjustm
     assert_eq!(result["unprocessed_user_ids"], json!(["user-3"]));
     assert_eq!(result["failures"][0]["user_id"], "user-2");
     assert_eq!(result["failures"][1]["user_id"], "user-3");
+    assert_eq!(
+        wallet_detail(&client, &gateway_url, "user-1").await["balance"],
+        15.0
+    );
+    assert_eq!(
+        wallet_detail(&client, &gateway_url, "user-2").await["balance"],
+        20.0
+    );
+    assert_eq!(
+        wallet_detail(&client, &gateway_url, "user-3").await["balance"],
+        30.0
+    );
+
+    gateway_handle.abort();
+}
+
+#[tokio::test]
+async fn gateway_reports_wallet_lookup_failure_as_unprocessed() {
+    let state = AppState::new()
+        .expect("gateway should build")
+        .with_auth_users_for_tests([
+            sample_user("user-1"),
+            sample_user("user-2"),
+            sample_user("user-3"),
+        ])
+        .with_auth_wallets_for_tests([
+            sample_wallet("user-1", 10.0, 0.0),
+            sample_wallet("user-2", 20.0, 0.0),
+            sample_wallet("user-3", 30.0, 0.0),
+        ])
+        .fail_auth_wallet_lookup_for_tests("user-2");
+    let (gateway_url, gateway_handle) = start_server(build_router_with_state(state)).await;
+    let client = Client::new();
+
+    let response = post_batch_action(
+        &client,
+        &gateway_url,
+        json!({
+            "selection": { "user_ids": ["user-1", "user-2", "user-3"] },
+            "action": "adjust_wallet_balance",
+            "payload": { "operation": "add", "amount": 5.0 }
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let result: Value = response.json().await.expect("response should parse");
+    assert_eq!(result["interrupted"], true);
+    assert_eq!(result["completed_user_ids"], json!(["user-1"]));
+    assert_eq!(result["uncertain_user_ids"], json!([]));
+    assert_eq!(result["unprocessed_user_ids"], json!(["user-2", "user-3"]));
     assert_eq!(
         wallet_detail(&client, &gateway_url, "user-1").await["balance"],
         15.0

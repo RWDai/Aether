@@ -1,6 +1,7 @@
 use super::{
     build_admin_users_bad_request_response, build_admin_users_permission_denied_response,
-    build_admin_users_read_only_response, disabled_user_policy_detail, disabled_user_policy_field,
+    build_admin_users_read_only_response, build_admin_users_wallet_permission_denied_response,
+    disabled_user_policy_detail, disabled_user_policy_field,
     management_token_may_adjust_admin_wallet_balance,
     management_token_may_administer_user_accounts, normalize_admin_user_role,
 };
@@ -111,6 +112,11 @@ enum AdminUserWalletBalanceOperation {
     Deduct,
 }
 
+enum AdminBatchWalletBalanceAdjustmentError {
+    WalletLookup,
+    BalanceAdjustment,
+}
+
 pub(in super::super) async fn build_admin_resolve_user_selection_response(
     state: &AdminAppState<'_>,
     _request_context: &AdminRequestContext<'_>,
@@ -177,7 +183,7 @@ pub(in super::super) async fn build_admin_user_batch_action_response(
     if mutation.wallet_balance_adjustment.is_some()
         && !management_token_may_adjust_admin_wallet_balance(request_context)
     {
-        return Ok(build_admin_users_permission_denied_response(
+        return Ok(build_admin_users_wallet_permission_denied_response(
             request_context,
         ));
     }
@@ -290,7 +296,20 @@ pub(in super::super) async fn build_admin_user_batch_action_response(
                     }));
                     continue;
                 }
-                Err(_) => {
+                Err(AdminBatchWalletBalanceAdjustmentError::WalletLookup) => {
+                    record_batch_action_interruption(
+                        &resolved.items,
+                        item_index,
+                        false,
+                        "读取用户钱包失败，批次已中止，该用户未执行",
+                        &mut failures,
+                        &mut uncertain_user_ids,
+                        &mut unprocessed_user_ids,
+                    );
+                    interrupted = true;
+                    break;
+                }
+                Err(AdminBatchWalletBalanceAdjustmentError::BalanceAdjustment) => {
                     record_batch_action_interruption(
                         &resolved.items,
                         item_index,
@@ -903,13 +922,14 @@ async fn apply_batch_user_wallet_balance_adjustment(
     user_id: &str,
     adjustment: AdminUserWalletBalanceAdjustment,
     operator_id: Option<&str>,
-) -> Result<bool, GatewayError> {
+) -> Result<bool, AdminBatchWalletBalanceAdjustmentError> {
     // Resolve only the wallet ID; the repository clamps the deduction under its row lock.
     let Some(wallet) = state
         .find_wallet(aether_data::repository::wallet::WalletLookupKey::UserId(
             user_id,
         ))
-        .await?
+        .await
+        .map_err(|_| AdminBatchWalletBalanceAdjustmentError::WalletLookup)?
     else {
         return Ok(false);
     };
@@ -918,7 +938,7 @@ async fn apply_batch_user_wallet_balance_adjustment(
         AdminUserWalletBalanceOperation::Deduct => -adjustment.amount,
     };
 
-    Ok(state
+    state
         .admin_adjust_wallet_balance(
             &wallet.id,
             amount,
@@ -927,8 +947,9 @@ async fn apply_batch_user_wallet_balance_adjustment(
             Some("管理员批量调整用户余额"),
             true,
         )
-        .await?
-        .is_some())
+        .await
+        .map_err(|_| AdminBatchWalletBalanceAdjustmentError::BalanceAdjustment)
+        .map(|result| result.is_some())
 }
 
 fn build_admin_user_batch_bad_request_response(detail: String) -> Response<Body> {

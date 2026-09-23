@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use aether_data::repository::management_tokens::InMemoryManagementTokenRepository;
@@ -68,6 +69,14 @@ fn sample_wallet(user_id: &str, balance: f64, gift_balance: f64) -> StoredWallet
 }
 
 async fn post_batch_action(client: &Client, gateway_url: &str, payload: Value) -> Response {
+    static NEXT_TEST_IDEMPOTENCY_KEY: AtomicU64 = AtomicU64::new(1);
+    let mut payload = payload;
+    if payload.get("action").and_then(Value::as_str) == Some("adjust_wallet_balance")
+        && payload.get("idempotency_key").is_none()
+    {
+        let sequence = NEXT_TEST_IDEMPOTENCY_KEY.fetch_add(1, Ordering::Relaxed);
+        payload["idempotency_key"] = json!(format!("test-wallet-batch-{sequence}"));
+    }
     admin_headers(client.post(format!("{gateway_url}/api/admin/users/batch-action")))
         .json(&payload)
         .send()
@@ -173,6 +182,132 @@ async fn gateway_batches_wallet_addition_deduction_and_clamped_deduction_per_use
 }
 
 #[tokio::test]
+async fn gateway_replays_wallet_batch_idempotently_and_rejects_key_reuse() {
+    let state = AppState::new()
+        .expect("gateway should build")
+        .with_auth_users_for_tests([sample_user("user-1")])
+        .with_auth_wallets_for_tests([sample_wallet("user-1", 10.0, 0.0)]);
+    let (gateway_url, gateway_handle) = start_server(build_router_with_state(state)).await;
+    let client = Client::new();
+    let request = json!({
+        "selection": { "user_ids": ["user-1"] },
+        "action": "adjust_wallet_balance",
+        "payload": { "operation": "add", "amount": 5.0 },
+        "idempotency_key": "same-wallet-batch"
+    });
+
+    let first = post_batch_action(&client, &gateway_url, request.clone()).await;
+    assert_eq!(first.status(), StatusCode::OK);
+    let first_result: Value = first.json().await.expect("response should parse");
+    assert_eq!(first_result["success"], 1);
+    assert_eq!(
+        wallet_detail(&client, &gateway_url, "user-1").await["balance"],
+        15.0
+    );
+
+    let replay = post_batch_action(&client, &gateway_url, request.clone()).await;
+    assert_eq!(replay.status(), StatusCode::OK);
+    let replay_result: Value = replay.json().await.expect("response should parse");
+    assert_eq!(replay_result["success"], 1);
+    assert_eq!(
+        wallet_detail(&client, &gateway_url, "user-1").await["balance"],
+        15.0
+    );
+
+    let changed_request = json!({
+        "selection": { "user_ids": ["user-1"] },
+        "action": "adjust_wallet_balance",
+        "payload": { "operation": "add", "amount": 50.0 },
+        "idempotency_key": "same-wallet-batch"
+    });
+    let conflict = post_batch_action(&client, &gateway_url, changed_request).await;
+    assert_eq!(conflict.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        wallet_detail(&client, &gateway_url, "user-1").await["balance"],
+        15.0
+    );
+
+    gateway_handle.abort();
+}
+
+#[tokio::test]
+async fn gateway_returns_partial_results_when_failure_recording_fails() {
+    let state = AppState::new()
+        .expect("gateway should build")
+        .with_auth_users_for_tests([sample_user("user-1"), sample_user("user-2")])
+        .with_auth_wallets_for_tests([sample_wallet("user-1", 10.0, 0.0)])
+        .fail_auth_wallet_batch_failure_record_for_tests("user-2");
+    let (gateway_url, gateway_handle) = start_server(build_router_with_state(state)).await;
+    let client = Client::new();
+    let request = json!({
+        "selection": { "user_ids": ["user-1", "user-2"] },
+        "action": "adjust_wallet_balance",
+        "payload": { "operation": "add", "amount": 5.0 },
+        "idempotency_key": "failure-record-wallet-batch"
+    });
+
+    let response = post_batch_action(&client, &gateway_url, request).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let result: Value = response.json().await.expect("response should parse");
+    assert_eq!(result["success"], 1);
+    assert_eq!(result["failed"], 1);
+    assert_eq!(result["interrupted"], true);
+    assert_eq!(result["completed_user_ids"], json!(["user-1"]));
+    assert_eq!(result["uncertain_user_ids"], json!([]));
+    assert_eq!(result["unprocessed_user_ids"], json!(["user-2"]));
+    assert_eq!(
+        wallet_detail(&client, &gateway_url, "user-1").await["balance"],
+        15.0
+    );
+
+    gateway_handle.abort();
+}
+
+#[tokio::test]
+async fn gateway_records_zero_delta_batch_for_later_replay() {
+    let state = AppState::new()
+        .expect("gateway should build")
+        .with_auth_users_for_tests([sample_user("user-1")])
+        .with_auth_wallets_for_tests([sample_wallet("user-1", 0.0, 0.0)]);
+    let (gateway_url, gateway_handle) = start_server(build_router_with_state(state)).await;
+    let client = Client::new();
+    let deduction = json!({
+        "selection": { "user_ids": ["user-1"] },
+        "action": "adjust_wallet_balance",
+        "payload": { "operation": "deduct", "amount": 5.0 },
+        "idempotency_key": "zero-delta-wallet-batch"
+    });
+    let first = post_batch_action(&client, &gateway_url, deduction.clone()).await;
+    assert_eq!(first.status(), StatusCode::OK);
+
+    let top_up = post_batch_action(
+        &client,
+        &gateway_url,
+        json!({
+            "selection": { "user_ids": ["user-1"] },
+            "action": "adjust_wallet_balance",
+            "payload": { "operation": "add", "amount": 10.0 },
+            "idempotency_key": "wallet-top-up-batch"
+        }),
+    )
+    .await;
+    assert_eq!(top_up.status(), StatusCode::OK);
+    assert_eq!(
+        wallet_detail(&client, &gateway_url, "user-1").await["balance"],
+        10.0
+    );
+
+    let replay = post_batch_action(&client, &gateway_url, deduction).await;
+    assert_eq!(replay.status(), StatusCode::OK);
+    assert_eq!(
+        wallet_detail(&client, &gateway_url, "user-1").await["balance"],
+        10.0
+    );
+
+    gateway_handle.abort();
+}
+
+#[tokio::test]
 async fn gateway_requires_wallet_write_permission_for_batch_balance_adjustments() {
     let users_write_token = "ae-batch-users-write-only";
     let wallet_write_token = "ae-batch-users-wallet-write";
@@ -236,7 +371,8 @@ async fn gateway_requires_wallet_write_permission_for_batch_balance_adjustments(
     let payload = json!({
         "selection": { "user_ids": ["user-1"] },
         "action": "adjust_wallet_balance",
-        "payload": { "operation": "add", "amount": 5.0 }
+        "payload": { "operation": "add", "amount": 5.0 },
+        "idempotency_key": "wallet-write-batch"
     });
 
     let denied = client
@@ -279,7 +415,12 @@ async fn gateway_requires_wallet_write_permission_for_batch_balance_adjustments(
         .post(format!("{gateway_url}/api/admin/users/batch-action"))
         .header(crate::constants::GATEWAY_HEADER, "rust-phase3b")
         .bearer_auth(wallet_admin_token)
-        .json(&payload)
+        .json(&json!({
+            "selection": payload["selection"],
+            "action": payload["action"],
+            "payload": payload["payload"],
+            "idempotency_key": "wallet-admin-batch"
+        }))
         .send()
         .await
         .expect("wallet-admin management token request should complete");
@@ -397,6 +538,44 @@ async fn gateway_reports_wallet_lookup_failure_as_unprocessed() {
         wallet_detail(&client, &gateway_url, "user-3").await["balance"],
         30.0
     );
+
+    gateway_handle.abort();
+}
+
+#[tokio::test]
+async fn gateway_reports_wallet_limit_lookup_failure_as_unprocessed() {
+    let state = AppState::new()
+        .expect("gateway should build")
+        .with_auth_users_for_tests([
+            sample_user("user-1"),
+            sample_user("user-2"),
+            sample_user("user-3"),
+        ])
+        .with_auth_wallets_for_tests([
+            sample_wallet("user-1", 10.0, 0.0),
+            sample_wallet("user-2", 20.0, 0.0),
+            sample_wallet("user-3", 30.0, 0.0),
+        ])
+        .fail_auth_wallet_lookup_for_tests("user-2");
+    let (gateway_url, gateway_handle) = start_server(build_router_with_state(state)).await;
+    let client = Client::new();
+
+    let response = post_batch_action(
+        &client,
+        &gateway_url,
+        json!({
+            "selection": { "user_ids": ["user-1", "user-2", "user-3"] },
+            "action": "update_access_control",
+            "payload": { "unlimited": true }
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let result: Value = response.json().await.expect("response should parse");
+    assert_eq!(result["interrupted"], true);
+    assert_eq!(result["completed_user_ids"], json!(["user-1"]));
+    assert_eq!(result["uncertain_user_ids"], json!([]));
+    assert_eq!(result["unprocessed_user_ids"], json!(["user-2", "user-3"]));
 
     gateway_handle.abort();
 }

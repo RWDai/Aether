@@ -165,6 +165,7 @@ export interface UserBatchBalanceActionRequest {
   selection: UserBatchSelection
   action: 'adjust_wallet_balance'
   payload: UserBatchBalanceAdjustmentPayload
+  idempotency_key: string
 }
 
 export type UserBatchActionRequest =

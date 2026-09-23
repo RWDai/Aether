@@ -88,6 +88,39 @@
         </p>
       </div>
 
+      <div
+        v-if="pendingWalletBatch"
+        role="alert"
+        class="space-y-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-3 text-sm text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-100"
+      >
+        <p>
+          {{ legacyT('存在未决的钱包批量调整') }}：{{ pendingWalletOperationLabel }} {{ pendingWalletBatch.request.payload.amount }} USD。{{ legacyT('结果未知或可能部分完成。请重试原请求，不要开始新的余额调整。') }}
+        </p>
+        <p
+          v-if="walletRequestMismatch"
+          class="text-xs"
+        >
+          {{ legacyT('当前表单与原请求不同；新钱包调整已禁用，请先重试原请求。') }}
+        </p>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          :disabled="executing"
+          @click="retryPendingWalletBatch"
+        >
+          <RotateCcw class="mr-1.5 h-4 w-4" />
+          {{ legacyT('重试原钱包批次') }}
+        </Button>
+      </div>
+      <p
+        v-else-if="pendingWalletReadError"
+        role="alert"
+        class="rounded-md border border-amber-300 bg-amber-50 px-3 py-2.5 text-sm text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-100"
+      >
+        {{ legacyT('无法读取未决的钱包批量请求。为避免重复扣款，钱包余额调整已禁用；请先核对余额操作结果。') }}
+      </p>
+
       <UserBatchResultSummary
         :result="lastResult"
         :label="lastResultLabel"
@@ -121,8 +154,9 @@ import {
   Input,
   Label,
 } from '@/components/ui'
-import { Minus, Plus } from 'lucide-vue-next'
+import { Minus, Plus, RotateCcw } from 'lucide-vue-next'
 import { useUsersStore } from '@/stores/users'
+import { useAuthStore } from '@/stores/auth'
 import { useToast } from '@/composables/useToast'
 import { parseApiError } from '@/utils/errorParser'
 import { useI18n } from '@/i18n'
@@ -135,6 +169,18 @@ import UserBatchTargetSummary from './UserBatchTargetSummary.vue'
 import { USER_BATCH_ACTION_OPTIONS } from './user-management-config'
 import type { UserBatchQuotaMode } from './user-management-types'
 import { buildUserBatchBalanceAdjustmentPayload } from '@/api/users'
+import {
+  createUserBatchWalletRetryCoordinator,
+  matchesPendingWalletRequest,
+  WalletIdempotencyPersistenceUnavailableError,
+  WalletIdempotencyScopeChangedError,
+  WalletIdempotencyScopeUnavailableError,
+  WalletIdempotencyUnavailableError,
+} from '../utils/userBatchWalletIdempotency'
+import type {
+  PendingUserBatchWalletRequest,
+  UserBatchWalletAdjustmentRequest,
+} from '../utils/userBatchWalletIdempotency'
 import type {
   UserBatchAccessControlPayload,
   UserBatchAction,
@@ -164,6 +210,10 @@ const emit = defineEmits<{
 }>()
 
 const usersStore = useUsersStore()
+const authStore = useAuthStore()
+const walletRetryCoordinator = createUserBatchWalletRetryCoordinator({
+  scope: () => authStore.user?.id ?? null,
+})
 const { success, warning, error } = useToast()
 const { legacyT, locale } = useI18n()
 
@@ -178,6 +228,8 @@ const previewItems = ref<UserBatchSelectionItem[]>([])
 const resolvedTotal = ref<number | null>(null)
 const executing = ref(false)
 const lastResult = ref<UserBatchActionResponse | null>(null)
+const pendingWalletBatch = ref<PendingUserBatchWalletRequest | null>(null)
+const pendingWalletReadError = ref(false)
 
 const hasAnyTarget = computed(() => props.selectedCount > 0 || selectedGroupIds.value.length > 0)
 const impactCount = computed(() => resolvedTotal.value ?? props.selectedCount)
@@ -185,11 +237,23 @@ const balancePayload = computed(() => buildUserBatchBalanceAdjustmentPayload(
   balanceOperation.value,
   balanceAmount.value,
 ))
+const walletAdjustmentRequest = computed<UserBatchWalletAdjustmentRequest | null>(() => (
+  balancePayload.value === null
+    ? null
+    : { selection: buildSelection(), action: 'adjust_wallet_balance', payload: balancePayload.value }
+))
+const walletRequestMismatch = computed(() => (
+  pendingWalletBatch.value !== null
+  && selectedAction.value === 'adjust_wallet_balance'
+  && (walletAdjustmentRequest.value === null
+    || !matchesPendingWalletRequest(pendingWalletBatch.value, walletAdjustmentRequest.value))
+))
 const canExecute = computed(() => (
   hasAnyTarget.value
   && !previewLoading.value
   && !executing.value
-  && (selectedAction.value !== 'adjust_wallet_balance' || balancePayload.value !== null)
+  && (selectedAction.value !== 'adjust_wallet_balance'
+    || (balancePayload.value !== null && !pendingWalletReadError.value && !walletRequestMismatch.value))
 ))
 const selectedActionLabel = computed(() => (
   USER_BATCH_ACTION_OPTIONS.find((action) => action.value === selectedAction.value)?.label ?? '批量操作'
@@ -208,6 +272,11 @@ const targetRoleWarning = computed(() => {
   return legacyT('提示：设置为普通用户会移除目标用户的管理员权限。')
 })
 const executeButtonLabel = computed(() => legacyT(`确认${selectedActionLabel.value}（${impactCount.value}）`))
+const pendingWalletOperationLabel = computed(() => (
+  pendingWalletBatch.value?.request.payload.operation === 'deduct'
+    ? legacyT('扣减')
+    : legacyT('增加')
+))
 const lastResultLabel = computed(() => {
   if (!lastResult.value) return ''
   if (lastResult.value.interrupted) {
@@ -230,8 +299,15 @@ watch(
   (open) => {
     if (!open) return
     resetLocalState()
+    refreshPendingWalletBatch()
     void resolvePreview()
   },
+  { immediate: true },
+)
+
+watch(
+  () => authStore.user?.id,
+  () => refreshPendingWalletBatch(),
 )
 
 watch(
@@ -253,6 +329,16 @@ function resetLocalState(): void {
   balanceAmount.value = ''
   selectedGroupIds.value = []
   lastResult.value = null
+}
+
+function refreshPendingWalletBatch(): void {
+  try {
+    pendingWalletBatch.value = walletRetryCoordinator.getPending()
+    pendingWalletReadError.value = false
+  } catch {
+    pendingWalletBatch.value = null
+    pendingWalletReadError.value = true
+  }
 }
 
 function buildSelection(): UserBatchSelection {
@@ -301,7 +387,8 @@ function buildRolePayload(): UserBatchRolePayload {
 async function executeBatchAction(): Promise<void> {
   if (!canExecute.value) return
   const selection = buildSelection()
-  let request: UserBatchActionRequest
+  let request: Exclude<UserBatchActionRequest, { action: 'adjust_wallet_balance' }> | null = null
+  let walletRequest: UserBatchWalletAdjustmentRequest | null = null
   if (selectedAction.value === 'update_access_control') {
     const payload = buildAccessControlPayload()
     if (payload === null) {
@@ -310,11 +397,11 @@ async function executeBatchAction(): Promise<void> {
     }
     request = { selection, action: 'update_access_control', payload }
   } else if (selectedAction.value === 'adjust_wallet_balance') {
-    if (balancePayload.value === null) {
+    if (walletAdjustmentRequest.value === null) {
       warning(legacyT('请输入大于 0 的有限金额'))
       return
     }
-    request = { selection, action: 'adjust_wallet_balance', payload: balancePayload.value }
+    walletRequest = walletAdjustmentRequest.value
   } else if (selectedAction.value === 'update_role') {
     request = { selection, action: 'update_role', payload: buildRolePayload() }
   } else {
@@ -323,6 +410,15 @@ async function executeBatchAction(): Promise<void> {
 
   executing.value = true
   try {
+    if (walletRequest) {
+      const result = await walletRetryCoordinator.execute(
+        walletRequest,
+        (keyedRequest) => usersStore.batchAction(keyedRequest),
+      )
+      handleWalletBatchResult(result)
+      return
+    }
+    if (request === null) return
     const result = await usersStore.batchAction(request)
     lastResult.value = result
     if (result.interrupted) {
@@ -338,9 +434,63 @@ async function executeBatchAction(): Promise<void> {
     }
     emit('completed', result)
   } catch (err) {
-    error(legacyT(parseApiError(err, '批量操作失败')), legacyT('批量操作失败'))
+    if (walletRequest) {
+      refreshPendingWalletBatch()
+      if (err instanceof WalletIdempotencyPersistenceUnavailableError) {
+        warning(legacyT('浏览器无法安全保存钱包批量请求，本次请求未发送。'))
+      } else if (
+        err instanceof WalletIdempotencyUnavailableError
+        || err instanceof WalletIdempotencyScopeUnavailableError
+        || err instanceof WalletIdempotencyScopeChangedError
+      ) {
+        warning(legacyT('无法确认管理员身份或安全生成钱包批量请求标识，请求未发送。'))
+      } else {
+        warning(legacyT('钱包批量调整结果未知或可能部分完成。请重试原请求，不要开始新的余额调整。'))
+      }
+    } else {
+      error(legacyT(parseApiError(err, '批量操作失败')), legacyT('批量操作失败'))
+    }
   } finally {
     executing.value = false
   }
+}
+
+async function retryPendingWalletBatch(): Promise<void> {
+  if (executing.value) return
+  executing.value = true
+  try {
+    const result = await walletRetryCoordinator.retry(
+      (request) => usersStore.batchAction(request),
+    )
+    if (result) handleWalletBatchResult(result)
+    else refreshPendingWalletBatch()
+  } catch (err) {
+    refreshPendingWalletBatch()
+    if (err instanceof WalletIdempotencyPersistenceUnavailableError) {
+      warning(legacyT('浏览器无法安全保存钱包批量请求，本次请求未发送。'))
+    } else if (
+      err instanceof WalletIdempotencyScopeUnavailableError
+      || err instanceof WalletIdempotencyScopeChangedError
+    ) {
+      warning(legacyT('无法确认管理员身份，请求未发送。'))
+    } else {
+      warning(legacyT('钱包批量调整结果未知或可能部分完成。请重试原请求，不要开始新的余额调整。'))
+    }
+  } finally {
+    executing.value = false
+  }
+}
+
+function handleWalletBatchResult(result: UserBatchActionResponse): void {
+  lastResult.value = result
+  refreshPendingWalletBatch()
+  if (result.interrupted) {
+    warning(`${lastResultLabel.value}；${legacyT('结果可能部分完成，请仅重试原请求，不要开始新的余额调整。')}`)
+  } else {
+    const message = legacyT(`批量操作完成：成功 ${result.success} 个，失败 ${result.failed} 个`)
+    if (result.failed > 0) warning(message)
+    else success(message)
+  }
+  emit('completed', result)
 }
 </script>
